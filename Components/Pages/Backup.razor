@@ -1,0 +1,269 @@
+@page "/backup"
+@using BlazecoinWallet.Core.Services
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject IJSRuntime JS
+
+<PageTitle>Backup - Blazecoin Wallet V2.0</PageTitle>
+
+@* Full-bleed diagonal tile grid, painted by initBackupBackground. *@
+<div class="backup-bg" id="backupTileBg"></div>
+
+@* Vault scanner beam — a diagonal gold beam sweeping across the page on top of
+   the grid. Pure CSS, no JS. *@
+<div class="bk-scanner" aria-hidden="true"></div>
+
+<div class="wallet-page">
+    @* Main header — same nested two-container banner chrome as the Import /
+       Dashboard pages, with floppy-disk emojis that 3D-flip. *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title">
+                    <span class="banner-icon">💾</span>
+                    <span class="banner-text">Backup Wallet</span>
+                    <span class="banner-icon">💾</span>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else if (_success)
+    {
+        <div class="send-form backup-success">
+            <h2><span class="tick">✓</span> Backup Complete</h2>
+            <p class="form-help">Saved to: <code>@_savedPath</code></p>
+            <button class="btn btn-primary bk-btn" @onclick="Reset">Make Another Backup</button>
+        </div>
+    }
+    else
+    {
+        <div class="send-form">
+            <h2>Backup</h2>
+            <p class="form-help">
+                Writes a binary copy of the currently-loaded wallet's <code>wallet.dat</code>
+                to a destination of your choice. Keep this file somewhere safe (encrypted USB,
+                offline storage, etc.) — anyone holding it can spend your coins.
+            </p>
+
+            <div class="form-group">
+                <label for="wallet">Wallet to back up</label>
+                @if (_loadedWallets.Count == 0)
+                {
+                    <p class="form-error-inline">No wallet is currently loaded. Load one from the Dashboard first.</p>
+                }
+                else if (_loadedWallets.Count == 1)
+                {
+                    <input id="wallet" class="form-control" value="@_loadedWallets[0]" readonly />
+                }
+                else
+                {
+                    <select id="wallet" class="form-control" @bind="_selectedWallet">
+                        @foreach (var w in _loadedWallets)
+                        {
+                            <option value="@w">@(string.IsNullOrEmpty(w) ? "(default)" : w)</option>
+                        }
+                    </select>
+                }
+            </div>
+
+            <div class="form-group">
+                <label for="bkname">Backup file name</label>
+                <input id="bkname" class="form-control" @bind="_fileName" @bind:event="oninput"
+                       placeholder="my-wallet-backup.dat" />
+                <small class="form-hint">
+                    Choose a name for the backup file. <code>.dat</code> is added automatically if you
+                    leave the extension off.
+                </small>
+            </div>
+
+            <div class="form-group">
+                <label for="folder">Destination folder</label>
+                <div class="bk-dest-row">
+                    <input id="folder" class="form-control" @bind="_folder" @bind:event="oninput"
+                           placeholder="C:\Users\You\Documents" />
+                    <button type="button" class="btn btn-secondary bk-browse" @onclick="BrowseAsync" disabled="@_busy">
+                        Browse…
+                    </button>
+                </div>
+                <small class="form-hint">
+                    Click <strong>Browse…</strong> to pick a folder, or edit the path directly. The
+                    daemon writes the file — use a path it can access.
+                </small>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_folder) && !string.IsNullOrWhiteSpace(_fileName))
+            {
+                <p class="form-hint bk-resolved">Saves to: <code>@ResolvedPath()</code></p>
+            }
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="alert alert-danger">@_error</div>
+            }
+
+            <div class="form-actions">
+                <button class="btn btn-primary bk-btn" @onclick="DoBackupAsync"
+                        disabled="@(_busy || _loadedWallets.Count == 0 || string.IsNullOrWhiteSpace(_folder) || string.IsNullOrWhiteSpace(_fileName))">
+                    @(_busy ? "Saving..." : "Save Backup")
+                </button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<string> _loadedWallets = new();
+    private string _selectedWallet = "";
+    private string _folder = "";
+    private string _fileName = "";
+    private string _savedPath = "";
+    private bool _busy;
+    private bool _success;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connError = await RpcService.CheckConnectionAsync();
+        if (_connError == null)
+        {
+            await LoadWalletsAsync();
+        }
+
+        // Non-daemon defaults run regardless of daemon state.
+        _folder = DefaultBackupFolder();
+        _fileName = BuildDefaultFileName(_selectedWallet);
+    }
+
+    private async Task LoadWalletsAsync()
+    {
+        try
+        {
+            _loadedWallets = await RpcService.ListWalletsAsync();
+            if (_loadedWallets.Count > 0)
+                _selectedWallet = _loadedWallets[0];
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not query loaded wallets: {ex.Message}";
+        }
+    }
+
+    protected override async Task OnDaemonReconnectedAsync()
+    {
+        await LoadWalletsAsync();
+        _fileName = BuildDefaultFileName(_selectedWallet);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try { await JS.InvokeVoidAsync("initBackupBackground"); }
+        catch { /* WebView not ready — background just won't appear */ }
+    }
+
+    // Default backup destination: Documents\Blazecoin_V2_Wallet. Built from the
+    // user's Documents path rather than hard-coded so it works on any account.
+    private static string DefaultBackupFolder()
+        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Blazecoin_V2_Wallet");
+
+    private static string BuildDefaultFileName(string walletName)
+    {
+        var safeName = string.IsNullOrEmpty(walletName) ? "Primary" : walletName;
+        // strip characters Windows rejects in filenames
+        foreach (var c in Path.GetInvalidFileNameChars())
+            safeName = safeName.Replace(c, '_');
+        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        return $"blazecoin-{safeName}-{stamp}.dat";
+    }
+
+    // The full path the backup is written to: chosen folder + chosen name,
+    // with a ".dat" extension added when the user left one off.
+    private string ResolvedPath()
+    {
+        var name = _fileName.Trim();
+        if (string.IsNullOrEmpty(name)) return "";
+        if (!Path.HasExtension(name)) name += ".dat";
+        return Path.Combine(_folder.Trim(), name);
+    }
+
+    // Open a native folder picker so the user never has to type a Windows path
+    // by hand. Only the destination folder is set here — the file name comes
+    // from the dedicated field the user controls.
+    private async Task BrowseAsync()
+    {
+        _error = null;
+#if WINDOWS
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FolderPicker
+            {
+                SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary,
+            };
+            picker.FileTypeFilter.Add("*");   // required, or PickSingleFolderAsync throws
+
+            // A WinUI picker needs the owning window's HWND or it never shows.
+            var window = Application.Current?.Windows.FirstOrDefault();
+            if (window?.Handler?.PlatformView is Microsoft.UI.Xaml.Window native)
+            {
+                var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(native);
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+            }
+
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder is not null)
+                _folder = folder.Path;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't open the folder picker: {ex.Message}";
+        }
+#else
+        await Task.CompletedTask;
+#endif
+    }
+
+    private async Task DoBackupAsync()
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            var destination = ResolvedPath();
+            // Create the destination folder if it doesn't exist yet (the daemon
+            // won't create missing directories, so the default
+            // Documents\Blazecoin_V2_Wallet works on first use).
+            var dir = Path.GetDirectoryName(destination);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            await RpcService.BackupWalletAsync(destination, _selectedWallet);
+            _savedPath = destination;
+            _success = true;
+        }
+        catch (RpcException ex)
+        {
+            _error = ex.Code == -18
+                ? "No wallet is loaded. Load one from the Dashboard first."
+                : $"Daemon rejected the backup: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Reset()
+    {
+        _success = false;
+        _error = null;
+        _folder = DefaultBackupFolder();
+        _fileName = BuildDefaultFileName(_selectedWallet);
+    }
+}

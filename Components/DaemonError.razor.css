@@ -1,0 +1,35 @@
+/* Shared daemon-offline panel. The .card + .status-header chrome comes from the
+   global wallet.css (banner card: 2px white border, black header bar). */
+.daemon-error-card {
+    max-width: 620px;
+    margin: 1.5rem auto;
+    /* The global .card is a translucent WHITE wash (rgba(255,255,255,0.05)) that
+       washes out over the animated page backgrounds. Override it to match the
+       Transactions "Ledger" card (.tx-table-card) — rgba(0,0,0,0.3) — a
+       semi-transparent black over the global blur. */
+    background-color: rgba(0, 0, 0, 0.3);
+}
+
+.daemon-error-body {
+    text-align: center;
+    padding: 2rem 1.5rem;
+}
+
+.daemon-error-icon {
+    font-size: 2.5rem;
+    line-height: 1;
+    margin-bottom: 0.75rem;
+}
+
+.daemon-error-msg {
+    color: #ff6b6b;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    margin: 0 auto 1.25rem;
+    max-width: 520px;
+    word-break: break-word;
+}
+
+.daemon-error-retry {
+    min-width: 8rem;
+}
