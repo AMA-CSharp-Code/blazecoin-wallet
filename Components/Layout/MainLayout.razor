@@ -1,0 +1,16 @@
+@inherits LayoutComponentBase
+
+<WalletInitializer>
+    <div class="page">
+        <NavMenu />
+        <div class="body-row">
+            <Sidebar />
+            <main>
+                <article class="content">
+                    @Body
+                </article>
+            </main>
+        </div>
+    </div>
+    <SyncStatusBar />
+</WalletInitializer>

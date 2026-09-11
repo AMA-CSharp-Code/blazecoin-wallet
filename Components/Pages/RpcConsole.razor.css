@@ -1,0 +1,293 @@
+.muted {
+    color: rgba(255, 255, 255, 0.6);
+    margin-bottom: 1rem;
+}
+
+/* Hint text panel below the header — opaque black, shrunk to fit the text
+   (centred via .wallet-page's text-align). */
+.hint-container {
+    display: inline-block;
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 0.5rem 1rem;
+    margin-bottom: 1.5rem;
+    color: white;
+}
+
+.hint-container .muted {
+    margin: 0;
+}
+
+/* Content panel below the header — translucent dark-red, matching the
+   Dashboard / Mining content containers. Padding is intentionally omitted
+   here because the V1.5 banner-card chrome (.card:has(> .status-header)
+   in wallet.css) strips the outer padding so the black "Console Window"
+   bar reaches edge-to-edge; the inner .card-body restores 1.5rem padding
+   for the actual console-output / console-input content. */
+.content-container {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    margin-bottom: 1.5rem;
+    color: white;
+}
+/* Suppress the global .card:hover lift — this panel is static, not clickable. */
+.content-container.card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* Title banner — nested red→black cards matching the Dashboard / Mining
+   colour scheme. Styles are kept in this component's own scoped file so they
+   apply reliably (cross-component scoped rules do not). */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+
+.banner-title {
+    margin: 0;
+    padding: 12px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3rem;
+    /* No explicit font-size — inherits the default h1 size, matching the
+       Dashboard / Preferences headers. */
+    font-weight: 500;
+    color: white;
+    /* Dashboard banner text-shadow (beats the global h1 red-glow rule). */
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+
+/* Flanking 1100›_1100 bits — terminal-green, monospace, pulsing glow. */
+.banner-title .bin {
+    color: #39ff14;
+    font-family: Consolas, "Courier New", monospace;
+    /* Same size as the "Console" title (inherits the banner-title font-size). */
+    text-shadow: 0 0 6px rgba(57, 255, 20, 0.8);
+    animation: binPulse 7s ease-in-out infinite;
+}
+
+@keyframes binPulse {
+    0%, 100% { opacity: 0.10; text-shadow: 0 0 2px rgba(57, 255, 20, 0.2); }
+    50%      { opacity: 1;    text-shadow: 0 0 16px rgba(57, 255, 20, 1); }
+}
+
+/* Typewriter title: text is filled in by typeConsoleBanner(); the caret hugs
+   it (no 3rem banner gap between text and caret) and blinks green. */
+.banner-title .title-wrap {
+    display: inline-flex;
+    align-items: baseline;
+    white-space: nowrap;
+}
+
+.banner-title .banner-caret {
+    display: inline-block;
+    margin-left: 2px;
+    color: #39ff14;
+    text-shadow: 0 0 6px rgba(57, 255, 20, 0.8);
+    animation: consoleCaretBlink 0.8s steps(1) infinite;
+}
+
+@keyframes consoleCaretBlink {
+    0%, 50%      { opacity: 1; }
+    50.01%, 100% { opacity: 0; }
+}
+
+.console-output {
+    background: #0a0a0a;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0;
+    padding: 0.75rem;
+    height: 55vh;
+    overflow-y: auto;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.85rem;
+    /* Override the centred inheritance from .wallet-page (global rule in
+       wallet.css). Console commands and results read better flush-left. */
+    text-align: left;
+}
+
+.console-cmd {
+    color: #fff;
+    margin: 0.4rem 0 0.2rem;
+}
+
+.console-cmd .prompt {
+    color: #ffd966;
+    margin-right: 0.3rem;
+}
+
+.console-result {
+    margin: 0 0 0.5rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #d6d6d6;
+}
+
+.console-result.err {
+    color: #ff6b6b;
+}
+
+.console-input {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.console-input .prompt {
+    color: #ffd966;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 2rem;
+    /* Blink: visible 1s, hidden 1s, repeating. */
+    animation: promptBlink 2s linear infinite;
+}
+
+@keyframes promptBlink {
+    0%, 50%      { opacity: 1; }
+    50.01%, 100% { opacity: 0; }
+}
+
+.console-input button {
+    border-radius: 0;                /* square edges, matches the surrounding containers */
+    border: 2px solid #fff;          /* white border to frame the Run button */
+    /* Match the Mining Start button's brand-red gradient (and the sidebar's
+       red tone) instead of the default .btn-primary red→orange gradient
+       inherited from wallet.css. Keeps all primary action buttons on the
+       same red. */
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+    color: white;
+}
+.console-input button:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%);
+}
+
+.console-input input {
+    flex: 1;
+    padding: 0.5rem 0.7rem;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(10, 10, 10, 0.85);
+    color: #fff;
+    font-family: Consolas, "Courier New", monospace;
+}
+
+/* =========================================================================
+   Permanent Network-skin background for the Console page. The columns are
+   rendered directly in RpcConsole.razor markup (so they carry this
+   component's scope attribute — no ::deep needed). The @keyframes
+   (scrollDown/scrollUp/glitch1-3/scanlineScroll/sweepH) are defined by the
+   Dashboard skins and resolve document-globally.
+   ========================================================================= */
+.net-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: flex;
+    column-gap: 4px;
+    background: #000;
+}
+
+.net-bg ::deep .tile-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.net-bg ::deep .tile-col img {
+    width: 100%;
+    height: 25vh;
+    object-fit: cover;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 4px;
+    filter: brightness(1.2);
+    position: relative;
+}
+
+.net-bg ::deep .tile-col:nth-child(odd)  { animation: netScrollDown 20s linear infinite; }
+.net-bg ::deep .tile-col:nth-child(even) { animation: netScrollUp   20s linear infinite; }
+
+.net-bg ::deep .tile-col:nth-child(1) img:nth-child(2) { animation: netGlitch125s ease-in-out infinite 2s; }
+.net-bg ::deep .tile-col:nth-child(2) img:nth-child(3) { animation: netGlitch230s ease-in-out infinite 8s; }
+.net-bg ::deep .tile-col:nth-child(3) img:nth-child(1) { animation: netGlitch322s ease-in-out infinite 14s; }
+.net-bg ::deep .tile-col:nth-child(4) img:nth-child(4) { animation: netGlitch128s ease-in-out infinite 5s; }
+.net-bg ::deep .tile-col:nth-child(5) img:nth-child(2) { animation: netGlitch224s ease-in-out infinite 18s; }
+.net-bg ::deep .tile-col:nth-child(6) img:nth-child(3) { animation: netGlitch330s ease-in-out infinite 10s; }
+.net-bg ::deep .tile-col:nth-child(7) img:nth-child(1) { animation: netGlitch126s ease-in-out infinite 0s; }
+.net-bg ::deep .tile-col:nth-child(8) img:nth-child(4) { animation: netGlitch222s ease-in-out infinite 12s; }
+
+/* Scanline overlay. */
+.net-bg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px);
+    animation: netScanline 0.3s linear infinite;
+}
+
+/* Green horizontal radar sweep. */
+.net-bg::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    background: linear-gradient(90deg, transparent 0%, transparent 30%, rgba(57,255,20,0.15) 42%, rgba(57,255,20,0.35) 50%, rgba(57,255,20,0.15) 58%, transparent 70%, transparent 100%);
+    background-size: 200% 100%;
+    animation: netSweep 14s ease-in-out infinite;
+}
+
+/* Keep the console content above the fixed network background. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* Network keyframes defined locally (net-prefixed) so they resolve in this
+   component's own scoped stylesheet — same self-contained approach the Mining
+   page uses — rather than depending on the Dashboard's @keyframes. */
+@keyframes netScrollDown { 0% { transform: translateY(0); }       100% { transform: translateY(-100vh); } }
+@keyframes netScrollUp   { 0% { transform: translateY(-100vh); }  100% { transform: translateY(0); } }
+
+@keyframes netGlitch1 {
+    0%, 99.4%, 99.6%, 100% { transform: translate(0, 0); clip-path: inset(0 0 0 0); filter: brightness(1.2); }
+    99.5% { transform: translate(-3px, 1px); clip-path: inset(20% 0 60% 0); filter: brightness(1.8); }
+}
+@keyframes netGlitch2 {
+    0%, 99.4%, 99.6%, 100% { transform: translate(0, 0); clip-path: inset(0 0 0 0); filter: brightness(1.2); }
+    99.5% { transform: translate(3px, -2px); clip-path: inset(40% 0 30% 0); filter: brightness(0.5); }
+}
+@keyframes netGlitch3 {
+    0%, 99.4%, 99.6%, 100% { transform: translate(0, 0); clip-path: inset(0 0 0 0); filter: brightness(1.2); }
+    99.5% { transform: translate(2px, 2px); clip-path: inset(50% 0 20% 0); filter: brightness(2.0); }
+}
+
+@keyframes netScanline { 0% { background-position: 0 0; } 100% { background-position: 0 4px; } }
+@keyframes netSweep    { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }

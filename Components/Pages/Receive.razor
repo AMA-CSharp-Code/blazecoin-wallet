@@ -1,0 +1,259 @@
+@page "/receive"
+@using QRCoder
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.AddressBook
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject IAddressBookStore AddrBook
+@inject IJSRuntime JS
+
+<PageTitle>Receive - Blazecoin Wallet V2.0</PageTitle>
+
+@* Dense coin-pile mosaic background — staggered twinkle (distinct from Send's scroll). *@
+<div class="mosaic-bg" id="receiveTileBg"></div>
+
+<div class="wallet-page">
+    @* Title banner — nested red->black cards with text-shadow, same chrome as
+       the Dashboard / Send headers. *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                @{ var titleChars = "Receive Blazecoin"; }
+                <h1 class="banner-title">
+                    <span class="banner-emoji arrow-l"><span class="ghost-in">➜</span><span class="ghost-in">➜</span>➜</span>
+                    @for (int i = 0; i < titleChars.Length; i++)
+                    {
+                        <span class="flip-letter" style="--i:@i">@(titleChars[i] == ' ' ? ' ' : titleChars[i])</span>
+                    }
+                    <span class="banner-emoji arrow-l"><span class="ghost-in">➜</span><span class="ghost-in">➜</span>➜</span>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+    @* V1.5 Overview-style card — banner header + body, same chrome as the
+       Dashboard / Send cards. The .receive-content class ports the Address
+       Book "Labels" box styling (solid dark backdrop, static — no hover lift,
+       square buttons + brand-red primary). *@
+    <div class="receive-content card">
+        <div class="status-header"><span>Receive Coins</span></div>
+        <div class="card-body">
+            <p class="muted">
+                Generate legacy P2PKH addresses to receive Blazecoin and
+                give each a label so you can tell them apart. Labels are saved to the wallet
+                (double-click a label to edit it).
+            </p>
+
+            <div class="gen-row">
+                <input class="label-input" placeholder="Label (optional)" @bind="_newLabel"
+                       @onkeydown="OnGenKey" disabled="@_busy" />
+                <button class="btn btn-primary" @onclick="GenerateAsync" disabled="@_busy">
+                    @(_busy ? "Generating…" : "Generate new address")
+                </button>
+                <button class="btn btn-secondary" @onclick="() => SyncFromWalletAsync()" disabled="@(_busy || _syncing)"
+                        title="Add every labelled receive address the wallet already owns but this list doesn't show (created by RPC, a rebuild, or another machine)">
+                    @(_syncing ? "Syncing…" : "Sync from wallet")
+                </button>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_error)) { <div class="alert alert-danger">@_error</div> }
+            @if (!string.IsNullOrEmpty(_syncNote)) { <div class="alert alert-success">@_syncNote</div> }
+            @if (_copied) { <div class="alert alert-success">Address copied to clipboard.</div> }
+
+            @if (!string.IsNullOrEmpty(_selectedAddr))
+            {
+                <div class="qr-panel">
+                    <img class="qr-img" src="data:image/png;base64,@_qr" alt="QR code" />
+                    <div class="qr-addr mono">@_selectedAddr</div>
+                    <button class="btn btn-sm qr-copy" @onclick="() => Copy(_selectedAddr!)">Copy</button>
+                </div>
+            }
+
+            @if (_addresses.Count == 0)
+            {
+                <p>No addresses yet — generate one above.</p>
+            }
+            else
+            {
+                <table class="addr-table">
+                    <thead>
+                        <tr><th>Label</th><th>Address</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var e in _addresses)
+                        {
+                            <tr class="@(e.Address == _latest ? "latest" : "")">
+                                <td>
+                                    <input class="label-input" value="@e.Label" placeholder="(no label)"
+                                           @onchange="@(ev => UpdateLabelAsync(e, ev.Value?.ToString() ?? ""))" />
+                                </td>
+                                <td class="mono">@e.Address</td>
+                                <td class="addr-actions">
+                                    <button class="btn btn-sm qr-btn" @onclick="() => ToggleQr(e.Address)">@(e.Address == _selectedAddr ? "Hide" : "QR")</button>
+                                    <button class="btn btn-sm" @onclick="() => Copy(e.Address)">Copy</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+    }
+</div>
+
+@code {
+    private List<AddressBookEntry> _addresses = new();
+    private string _newLabel = "";
+    private string? _error;
+    private bool _busy;
+    private bool _syncing;
+    private string? _syncNote;
+    private bool _copied;
+    private string? _latest;
+    private string? _selectedAddr;
+    private string? _qr;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _connError = await RpcService.CheckConnectionAsync();
+
+            _addresses = await AddrBook.GetReceiveAddressesAsync();
+            StateHasChanged();
+            // First sight of an empty list on a wallet that already has labelled addresses (a
+            // rebuilt or script-managed wallet): pull them in rather than showing "no addresses yet".
+            if (_addresses.Count == 0 && _connError == null)
+                await SyncFromWalletAsync(quiet: true);
+
+            try
+            {
+                // Paint the dense coin-pile mosaic background. Idempotent.
+                await JS.InvokeVoidAsync("initReceiveBackground");
+            }
+            catch { /* WebView not ready — background just won't appear */ }
+
+            StateHasChanged();
+        }
+    }
+
+    // No daemon load runs in the lifecycle — the address list comes from
+    // localStorage — so a reconnect needs no extra reload (base default).
+
+    private Task SaveAsync() => AddrBook.SaveReceiveAddressesAsync(_addresses);
+
+    /// <summary>Merge the wallet's own labelled receive addresses into this list — the wallet is
+    /// the source of truth for what it owns; this list only ever knew what was generated HERE.</summary>
+    private async Task SyncFromWalletAsync(bool quiet = false)
+    {
+        _error = null;
+        _syncNote = null;
+        _syncing = true;
+        StateHasChanged();
+        try
+        {
+            var fromWallet = await RpcService.ListLabelledAddressesAsync();
+            var added = await AddrBook.MergeReceiveAddressesAsync(fromWallet);
+            _addresses = await AddrBook.GetReceiveAddressesAsync();
+            if (!quiet || added > 0)
+                _syncNote = added == 0
+                    ? "Already in sync — the wallet has no labelled receive address this list doesn't show."
+                    : $"Added {added} address{(added == 1 ? "" : "es")} the wallet already owned.";
+        }
+        catch (Exception ex)
+        {
+            if (!quiet) _error = $"Sync from wallet failed: {ex.Message}";
+        }
+        finally
+        {
+            _syncing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task GenerateAsync()
+    {
+        _error = null;
+        _copied = false;
+        _busy = true;
+        StateHasChanged();
+        try
+        {
+            var label = _newLabel.Trim();
+            var addr = await RpcService.GetNewAddressAsync(label);
+            if (!string.IsNullOrEmpty(addr))
+            {
+                _addresses.Insert(0, new AddressBookEntry { Address = addr, Label = label });
+                _latest = addr;
+                _newLabel = "";
+                await SaveAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to generate address: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task UpdateLabelAsync(AddressBookEntry e, string label)
+    {
+        e.Label = label.Trim();
+        try
+        {
+            await RpcService.SetLabelAsync(e.Address, e.Label); // keep the wallet's label in sync
+            await SaveAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't save label: {ex.Message}";
+        }
+    }
+
+    private async Task Copy(string addr)
+    {
+        await Clipboard.SetTextAsync(addr);
+        _copied = true;
+        StateHasChanged();
+        await Task.Delay(2500);
+        _copied = false;
+        StateHasChanged();
+    }
+
+    private async Task OnGenKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await GenerateAsync();
+    }
+
+    private void ToggleQr(string addr)
+    {
+        if (_selectedAddr == addr)
+        {
+            _selectedAddr = null;   // clicking again hides it
+            _qr = null;
+        }
+        else
+        {
+            _selectedAddr = addr;
+            _qr = MakeQr(addr);
+        }
+    }
+
+    // Pure-managed QR PNG (no System.Drawing/SkiaSharp) → base64 for an <img>.
+    private static string MakeQr(string text)
+    {
+        using var gen = new QRCodeGenerator();
+        using var data = gen.CreateQrCode(text, QRCodeGenerator.ECCLevel.M);
+        return Convert.ToBase64String(new PngByteQRCode(data).GetGraphic(8));
+    }
+}

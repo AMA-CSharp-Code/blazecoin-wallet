@@ -1,0 +1,785 @@
+@page "/send"
+@using System.Text.Json
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.AddressBook
+@using BlazecoinWallet.Core.Services.AutoPayout
+@using BlazecoinWallet.Core.Services.Settings
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject IAutoPayoutService Ap
+@inject IAddressBookStore AddrBook
+@inject ISettingsService Settings
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>Send - Blazecoin Wallet V2.0</PageTitle>
+
+@* Tiled coin-pile background — scrolling brick rows, painted by initSendBackground. *@
+<div class="tile-bg" id="sendTileBg"></div>
+
+<div class="wallet-page">
+    @* Title banner — nested red->black cards with text-shadow, same chrome as
+       the Dashboard header. *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title"><span class="banner-emoji arrow-r"><span class="ghost-in">➜</span><span class="ghost-in">➜</span>➜</span> Send Blazecoin <span class="banner-emoji arrow-r"><span class="ghost-in">➜</span><span class="ghost-in">➜</span>➜</span></h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+    @* V1.5 Overview-style card — banner header + body, same chrome as the
+       Dashboard cards. The .send-content class ports the Address Book "Labels"
+       box styling (solid dark backdrop, static — no hover lift, square buttons
+       + brand-red primary). *@
+    <div class="send-content card">
+        <div class="status-header"><span>Send Coins</span></div>
+        <div class="card-body">
+        @if (_success)
+        {
+            <div class="alert alert-success">
+                <h3>✓ Transaction Sent Successfully!</h3>
+                <p>Transaction ID: @_txId</p>
+                <button class="btn btn-primary" @onclick="ResetForm">Send Another</button>
+            </div>
+        }
+        else if (_confirming)
+        {
+            <div class="confirm-panel">
+                <h3>Review Transaction</h3>
+                <p class="confirm-text">@(_sendMax ? "You're about to send your ENTIRE balance" : "You're about to send")</p>
+                <p class="confirm-amount">@AmountFormat.Format((_sendMax && _estimatedFee.HasValue) ? (_amount!.Value - _estimatedFee.Value) : _amount!.Value, _amtUnit, _amtDecimals)</p>
+                <p class="confirm-text">to</p>
+                <p class="confirm-addr mono">@_recipientAddress</p>
+
+                <div class="confirm-fee">
+                    @if (_estimatedFee.HasValue)
+                    {
+                        <div class="fee-row"><span>Network fee@(_sendMax ? " (from amount)" : "")</span><span>~@AmountFormat.Format(_estimatedFee.Value, _amtUnit, _amtDecimals)</span></div>
+                        <div class="fee-row fee-total"><span>@(_sendMax ? "Total debit (wallet → 0)" : "Total debit")</span><span>~@AmountFormat.Format(_sendMax ? _amount!.Value : (_amount!.Value + _estimatedFee.Value), _amtUnit, _amtDecimals)</span></div>
+                    }
+                    else
+                    {
+                        @* Exact estimate unavailable (e.g. fundrawtransaction couldn't fund a
+                           dry-run). Show a realistic flat-rate estimate in the user's unit
+                           rather than the raw per-kB rate, which read ~4x the real fee. *@
+                        <div class="fee-row"><span>Network fee (est.)</span><span>~@AmountFormat.Format(TypicalFeeBlz, _amtUnit, _amtDecimals)</span></div>
+                        <div class="fee-row fee-total"><span>Total debit (est.)</span><span>~@AmountFormat.Format(_amount!.Value + TypicalFeeBlz, _amtUnit, _amtDecimals)</span></div>
+                    }
+                </div>
+
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="alert alert-danger">@_error</div>
+                }
+
+                <div class="form-actions">
+                    <button class="btn btn-primary" @onclick="DoSend" disabled="@_sending">
+                        @(_sending ? "Sending…" : "Confirm & Send")
+                    </button>
+                    <button class="btn btn-secondary" @onclick="@(() => _confirming = false)" disabled="@_sending">Back</button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="form-group">
+                <label for="address">Recipient Address</label>
+                @* Custom Address-Book picker (styled to match the page chrome).
+                   The chevron toggles a dropdown of saved payees; picking one
+                   fills the recipient (and the label, if empty). The input is
+                   still free-text. *@
+                <div class="addr-picker">
+                    <input type="text" id="address" class="form-control" autocomplete="off"
+                           @bind="_recipientAddress" @bind:after="OnRecipientPicked"
+                           placeholder="Blazecoin Address" />
+                    @if (_addressBook.Count > 0)
+                    {
+                        <button type="button" class="addr-picker-toggle @(_showPicker ? "open" : "")"
+                                @onclick="TogglePicker" aria-label="Choose from address book"></button>
+                    }
+                    @if (_showPicker)
+                    {
+                        <div class="addr-picker-backdrop" @onclick="ClosePicker"></div>
+                        <div class="addr-picker-list">
+                            @foreach (var e in _addressBook)
+                            {
+                                <button type="button" class="addr-picker-item" @onclick="() => PickEntry(e)">
+                                    <span class="addr-picker-label">@(string.IsNullOrWhiteSpace(e.Label) ? "(no label)" : e.Label)</span>
+                                    <span class="addr-picker-addr">@e.Address</span>
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="label">Label (optional)</label>
+                <input type="text" id="label" class="form-control" @bind="_label" placeholder="Save to Address Book" />
+            </div>
+
+            <div class="form-group">
+                <label for="amount">Amount (BLZ)</label>
+                <div class="amount-wrap">
+                    <input type="number" id="amount" class="form-control" @bind="_amount" step="0.00000001" min="0" placeholder="Blazecoin Amount" />
+                    @* Custom red up/down arrows — the native spinner can't be recoloured
+                       without becoming a solid block. Shown only once a number is typed
+                       (CSS :placeholder-shown), and they step _amount on click. *@
+                    <div class="spin-buttons">
+                        <button type="button" class="spin-up" @onclick="StepUp" aria-label="Increase amount"></button>
+                        <button type="button" class="spin-down" @onclick="StepDown" aria-label="Decrease amount"></button>
+                    </div>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="alert alert-danger">@_error</div>
+            }
+
+            @* QR scan panel — opened by the "Scan QR" button below. Webcam
+               (auto-granted in WebView2) with an image-file fallback; decode
+               happens in qr-scan.js. OnQrDecoded fills the recipient (and
+               amount/label if the QR is a blazecoin: URI). The normal
+               blz1-block + validateaddress review still gate the actual send. *@
+            @if (_scanOpen)
+            {
+                <div class="qr-scan">
+                    <div class="qr-scan-head">
+                        <span>Scan a Blazecoin address QR</span>
+                        <button type="button" class="qr-scan-close" @onclick="CloseScanAsync" aria-label="Close scanner">✕</button>
+                    </div>
+                    <div class="qr-scan-body">
+                        <video id="qrVideo" class="qr-scan-video @(_cameraOk ? "" : "hidden")" muted playsinline></video>
+                        @* Off-screen decode buffer — never shown. *@
+                        <canvas id="qrCanvas" class="qr-scan-canvas"></canvas>
+                        @if (!string.IsNullOrEmpty(_scanError))
+                        {
+                            <div class="qr-scan-msg">@_scanError</div>
+                        }
+                        <div class="qr-scan-actions">
+                            <label class="btn btn-secondary qr-file-label">
+                                Choose image…
+                                <input type="file" id="qrFile" accept="image/*" class="qr-file-input" />
+                            </label>
+                        </div>
+                        <small class="qr-scan-hint">Point the camera at a QR code, or pick a saved image of one.</small>
+                    </div>
+                </div>
+            }
+
+            <div class="form-actions">
+                <button class="btn btn-primary" @onclick="Review" disabled="@_sending">
+                    @(_sending ? "Sending…" : "Send BLZ")
+                </button>
+                <button type="button" class="btn btn-primary send-max-btn" @onclick="SendMax" disabled="@_sending">Send Max</button>
+                <button class="btn btn-secondary" @onclick="Cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" @onclick="OpenScanAsync" disabled="@_scanOpen">Scan QR</button>
+            </div>
+        }
+        </div>
+    </div>
+
+    @* ----- Auto Payout — the engine lives in IAutoPayoutService; this is just its view. ----- *@
+    <div class="send-content card autopay-card">
+        <div class="status-header"><span>Auto Payout</span></div>
+        <div class="card-body">
+            @if (Ap.Live)
+            {
+                <div class="autopay-banner live">🔴 LIVE — when armed, this broadcasts <strong>REAL Blazecoin</strong> automatically once your balance crosses the threshold. One-shot (stops after a payout). Runs only while this page is open.</div>
+            }
+            else
+            {
+                <div class="autopay-banner">⚠ DRY-RUN — it logs what it <em>would</em> send; no coins are actually sent. Runs only while this page is open.</div>
+            }
+
+            <div class="ap-controls">
+                <div class="ap-buttons">
+                    <button class="btn ap-start" @onclick="Ap.StartAsync" disabled="@Ap.Enabled">Start</button>
+                    <button class="btn ap-stop" @onclick="Ap.StopAsync" disabled="@(!Ap.Enabled)">Stop</button>
+                </div>
+                <span class="ap-state @(Ap.Enabled ? "on" : "")">@(Ap.Enabled ? "● watching" : "○ stopped")</span>
+            </div>
+
+            @* Sending mode: dry-run (default) <-> live, gated by an explicit confirmation.
+               Mode can only be changed while stopped. *@
+            <div class="ap-mode-row">
+                <span class="ap-mode-badge @(Ap.Live ? "live" : "dry")">@(Ap.Live ? "● LIVE — real sends" : "○ DRY-RUN — logs only")</span>
+                @if (!Ap.Live)
+                {
+                    <button type="button" class="btn ap-mode-btn golive" @onclick="RequestLive" disabled="@Ap.Enabled">Enable live sending…</button>
+                }
+                else
+                {
+                    <button type="button" class="btn ap-mode-btn todry" @onclick="SetDryRun" disabled="@Ap.Enabled">Switch to dry-run</button>
+                }
+            </div>
+            @if (_apLiveConfirmPending)
+            {
+                <div class="ap-confirm">
+                    <p>⚠ <strong>Live mode sends REAL Blazecoin automatically.</strong> Once you press Start, the moment your spendable balance is above the threshold it broadcasts the payout (in batches) to the destination address. This <strong>cannot be undone</strong>.</p>
+                    <label class="ap-confirm-check"><input type="checkbox" @bind="_apLiveAck" /> I understand — enable live sending.</label>
+                    <div class="ap-confirm-actions">
+                        <button type="button" class="btn ap-stop" @onclick="ConfirmLive" disabled="@(!_apLiveAck)">Enable live</button>
+                        <button type="button" class="btn ap-mode-btn" @onclick="CancelLive">Cancel</button>
+                    </div>
+                </div>
+            }
+
+            <div class="form-group">
+                <label for="apThr">Threshold (spendable BLZ)</label>
+                <div class="ap-num-wrap">
+                    <input type="number" id="apThr" class="form-control" @bind="Ap.Threshold" @bind:after="Ap.SaveSettingsAsync" step="any" min="0" placeholder="e.g. 50000" />
+                    <div class="spin-buttons">
+                        <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("threshold", 1))" aria-label="Increase"></button>
+                        <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("threshold", -1))" aria-label="Decrease"></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="apAddr">Destination address</label>
+                <div class="addr-picker">
+                    <input type="text" id="apAddr" class="form-control" autocomplete="off"
+                           @bind="Ap.Address" @bind:after="Ap.SaveSettingsAsync" placeholder="Blazecoin Address (B...)" />
+                    @if (_addressBook.Count > 0)
+                    {
+                        <button type="button" class="addr-picker-toggle @(_apShowPicker ? "open" : "")"
+                                @onclick="@(() => _apShowPicker = !_apShowPicker)" aria-label="Choose from address book"></button>
+                    }
+                    @if (_apShowPicker)
+                    {
+                        <div class="addr-picker-backdrop" @onclick="@(() => _apShowPicker = false)"></div>
+                        <div class="addr-picker-list">
+                            @foreach (var e in _addressBook)
+                            {
+                                <button type="button" class="addr-picker-item" @onclick="() => ApPickEntry(e)">
+                                    <span class="addr-picker-label">@(string.IsNullOrWhiteSpace(e.Label) ? "(no label)" : e.Label)</span>
+                                    <span class="addr-picker-addr">@e.Address</span>
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="apLbl">Label (optional)</label>
+                <input type="text" id="apLbl" class="form-control" @bind="Ap.Label" @bind:after="Ap.SaveSettingsAsync" placeholder="Save to Address Book" />
+            </div>
+
+            <div class="form-group">
+                <label for="apMode">When triggered, send</label>
+                <select id="apMode" class="form-control" @bind="Ap.Mode" @bind:after="Ap.SaveSettingsAsync">
+                    <option value="above">Everything above the threshold</option>
+                    <option value="reserve">Drain down to a reserve</option>
+                </select>
+            </div>
+            @if (Ap.Mode == "reserve")
+            {
+                <div class="form-group">
+                    <label for="apRes">Reserve to keep behind (BLZ)</label>
+                    <div class="ap-num-wrap">
+                        <input type="number" id="apRes" class="form-control" @bind="Ap.Reserve" @bind:after="Ap.SaveSettingsAsync" step="any" min="0" placeholder="e.g. 1000" />
+                        <div class="spin-buttons">
+                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("reserve", 1))" aria-label="Increase"></button>
+                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("reserve", -1))" aria-label="Decrease"></button>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <div class="form-group">
+                <label for="apBatch">Batching</label>
+                <select id="apBatch" class="form-control" @bind="Ap.Batch" @bind:after="Ap.SaveSettingsAsync">
+                    <option value="single">Single transaction</option>
+                    <option value="split">Split into batches</option>
+                </select>
+            </div>
+            @if (Ap.Batch == "split")
+            {
+                <div class="form-group">
+                    <label for="apBs">Batch size (BLZ per transaction)</label>
+                    <div class="ap-num-wrap">
+                        <input type="number" id="apBs" class="form-control" @bind="Ap.BatchSize" @bind:after="Ap.SaveSettingsAsync" step="any" min="1" placeholder="30000" />
+                        <div class="spin-buttons">
+                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("batch", 1))" aria-label="Increase"></button>
+                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("batch", -1))" aria-label="Decrease"></button>
+                        </div>
+                    </div>
+                    <small class="ap-hint">Each batch is a separate transaction (+ fee). Keep ≤ ~34,000 BLZ — your UTXOs average ~51 BLZ, so a single tx can't combine enough inputs for more.</small>
+                </div>
+            }
+
+            <div class="form-group ap-row">
+                <div>
+                    <label for="apCd">Cooldown (minutes)</label>
+                    <div class="ap-num-wrap">
+                        <input type="number" id="apCd" class="form-control" @bind="Ap.CooldownMin" @bind:after="Ap.SaveSettingsAsync" min="0" />
+                        <div class="spin-buttons">
+                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("cooldown", 1))" aria-label="Increase"></button>
+                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("cooldown", -1))" aria-label="Decrease"></button>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <label for="apCap">Daily cap (BLZ, optional)</label>
+                    <div class="ap-num-wrap">
+                        <input type="number" id="apCap" class="form-control" @bind="Ap.DailyCap" @bind:after="Ap.SaveSettingsAsync" step="any" min="0" placeholder="none" />
+                        <div class="spin-buttons">
+                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("cap", 1))" aria-label="Increase"></button>
+                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("cap", -1))" aria-label="Decrease"></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="ap-status">
+                <span>Status: <strong>@(Ap.Enabled ? "watching" : "off")</strong></span>
+                <span>Spendable: @Ap.Spendable.ToString("N4") BLZ</span>
+            </div>
+            @if (Ap.Enabled && !string.IsNullOrEmpty(Ap.Reason))
+            {
+                <div class="ap-reason">@Ap.Reason</div>
+            }
+
+            @if (Ap.Log.Count > 0)
+            {
+                <div class="ap-log">
+                    @foreach (var line in Ap.Log)
+                    {
+                        <div class="ap-log-line">@line</div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+    }
+</div>
+
+@code {
+    // ============================ Manual send ============================
+    private string _recipientAddress = "";
+    private string _label = "";
+    /// <summary>Nullable so an empty input shows the "Blazecoin Amount"
+    /// placeholder rather than rendering 0.</summary>
+    private decimal? _amount;
+    private bool _sending;
+    private bool _success;
+    private string? _error;
+    private string? _txId;
+    private bool _confirmSend = true; // require a review step (Preferences)
+    // Amount-display preference (BLZ/mBLZ + decimals) so the review step's amount/fee
+    // match how they're shown everywhere else (Dashboard, Transactions). Without this
+    // the review showed raw BLZ while the ledger used the chosen unit — the same fee
+    // looked different before vs after the send.
+    private string _amtUnit = AmountFormat.DefaultUnit;
+    private int _amtDecimals = AmountFormat.DefaultDecimals;
+    // Blazecoin V2 uses a flat 0.001 BLZ/kB fee (no fee estimation); a normal
+    // 1-input/2-output send is ~0.25 kB ≈ 0.00025 BLZ. Used as the review's fee
+    // estimate when the exact fundrawtransaction dry-run can't run (e.g. the
+    // wallet can't fund the amount), so the shown fee is realistic, not the rate.
+    private const decimal TypicalFeeBlz = 0.00025m;
+    private bool _confirming;
+    private bool _sendMax;            // true while reviewing/sending a "Send Max" (whole balance, fee from amount)
+    private decimal? _estimatedFee;   // network fee shown on the review step (null = unknown)
+
+    /// <summary>Amount the custom spinner arrows add/subtract per click — 1
+    /// satoshi (the smallest BLZ unit, matching the input's step).</summary>
+    private const decimal AmountStep = 0.00000001m;
+    private void StepUp() => _amount = (_amount ?? 0m) + AmountStep;
+    private void StepDown()
+    {
+        var v = (_amount ?? 0m) - AmountStep;
+        _amount = v < 0m ? 0m : v;   // never go below the min=0
+    }
+
+    /// <summary>Saved payees loaded from the Address Book (shared
+    /// <see cref="AddressBookEntry"/> / <see cref="IAddressBookStore"/>), feeding
+    /// both the recipient field's picker and the auto-payout destination picker.</summary>
+    private List<AddressBookEntry> _addressBook = new();
+    private bool _showPicker;
+
+    private void TogglePicker() => _showPicker = !_showPicker;
+    private void ClosePicker() => _showPicker = false;
+
+    private void PickEntry(AddressBookEntry e)
+    {
+        _recipientAddress = e.Address;
+        if (string.IsNullOrWhiteSpace(_label) && !string.IsNullOrWhiteSpace(e.Label))
+            _label = e.Label;
+        _showPicker = false;
+    }
+
+    // ===================== QR scan (recipient address) =====================
+    // The decode runs in qr-scan.js (webcam or chosen image); it calls back into
+    // OnQrDecoded / OnQrError below. blzQr.attach wires the file <input>'s change
+    // handler to the same DotNet ref, so the image fallback works without a camera.
+    private bool _scanOpen;
+    private bool _cameraOk;
+    private string? _scanError;
+    private DotNetObjectReference<Send>? _qrRef;
+
+    private async Task OpenScanAsync()
+    {
+        _scanError = null;
+        _cameraOk = false;
+        _scanOpen = true;
+        StateHasChanged();
+        await Task.Yield();   // let the panel (video/canvas/file input) render before JS touches it
+
+        try
+        {
+            _qrRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("blzQr.attach", _qrRef, "qrFile");
+            var status = await JS.InvokeAsync<string>("blzQr.startCamera", "qrVideo", "qrCanvas");
+            _cameraOk = status == "ok";
+            if (!_cameraOk)
+                _scanError = status switch
+                {
+                    "no-camera"     => "No camera found — use “Choose image…” instead.",
+                    "camera-denied" => "Camera unavailable or blocked — use “Choose image…” instead.",
+                    "no-elements"   => "Scanner failed to start — use “Choose image…” instead.",
+                    _               => "Camera couldn’t start — use “Choose image…” instead.",
+                };
+        }
+        catch
+        {
+            // JS not ready / unsupported — the image fallback still works.
+            _cameraOk = false;
+            _scanError = "Camera couldn’t start — use “Choose image…” instead.";
+        }
+        StateHasChanged();
+    }
+
+    private async Task CloseScanAsync()
+    {
+        _scanOpen = false;
+        _cameraOk = false;
+        _scanError = null;
+        try { await JS.InvokeVoidAsync("blzQr.detach"); } catch { /* WebView gone — nothing to stop */ }
+        StateHasChanged();
+    }
+
+    /// <summary>Called from qr-scan.js with the decoded QR text. Fills the
+    /// recipient (and amount/label if it's a <c>blazecoin:</c>/BIP21 URI), then
+    /// closes the scanner. Validation is left to the existing Review() path.</summary>
+    [JSInvokable]
+    public async Task OnQrDecoded(string text)
+    {
+        ApplyScannedPayload(text);
+        await CloseScanAsync();
+    }
+
+    [JSInvokable]
+    public Task OnQrError(string message)
+    {
+        _scanError = message;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Parses a scanned QR. Accepts a bare address or a BIP21-style URI
+    /// (<c>blazecoin:&lt;addr&gt;?amount=..&amp;label=..</c>); fills amount/label only
+    /// when present and not already set by the user.</summary>
+    private void ApplyScannedPayload(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return;
+        var s = raw.Trim();
+        decimal? amount = null;
+        string? label = null;
+
+        var colon = s.IndexOf(':');
+        if (colon > 0)
+        {
+            var scheme = s[..colon];
+            if (scheme.Equals("blazecoin", StringComparison.OrdinalIgnoreCase)
+                || scheme.Equals("blz", StringComparison.OrdinalIgnoreCase)
+                || scheme.Equals("bitcoin", StringComparison.OrdinalIgnoreCase))
+            {
+                var rest = s[(colon + 1)..];
+                var q = rest.IndexOf('?');
+                var query = q >= 0 ? rest[(q + 1)..] : "";
+                s = (q >= 0 ? rest[..q] : rest).Trim();
+
+                foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var kv = part.Split('=', 2);
+                    if (kv.Length != 2) continue;
+                    var key = Uri.UnescapeDataString(kv[0]);
+                    var val = Uri.UnescapeDataString(kv[1]);
+                    if (key.Equals("amount", StringComparison.OrdinalIgnoreCase)
+                        && decimal.TryParse(val, System.Globalization.NumberStyles.Number,
+                            System.Globalization.CultureInfo.InvariantCulture, out var a) && a > 0)
+                        amount = a;
+                    else if (label is null && (key.Equals("label", StringComparison.OrdinalIgnoreCase)
+                        || key.Equals("message", StringComparison.OrdinalIgnoreCase)))
+                        label = val;
+                }
+            }
+        }
+
+        _recipientAddress = s;
+        if (amount.HasValue) _amount = amount;
+        if (!string.IsNullOrWhiteSpace(label) && string.IsNullOrWhiteSpace(_label)) _label = label;
+        OnRecipientPicked();   // fall back to address-book label if still empty
+        _error = null;
+    }
+
+    // ===================== Auto-payout view state =====================
+    // The engine itself is IAutoPayoutService (Ap). These are purely UI flags
+    // for this page plus the 20s pump that drives the engine while open.
+    private bool _apShowPicker;
+    private bool _apLiveConfirmPending;
+    private bool _apLiveAck;
+    private PeriodicTimer? _apPeriodic;
+    private CancellationTokenSource? _apCts;
+
+    protected override void OnInitialized()
+    {
+        // A successful LIVE payout records its payee the same way a manual send
+        // does — wire the engine's hook to this page's address-book save.
+        Ap.SavePayee = SaveToAddressBookAsync;
+        // Re-render when the engine reports progress (log lines, reason, etc.).
+        Ap.Changed += OnApChanged;
+    }
+
+    private void OnApChanged() => InvokeAsync(StateHasChanged);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _confirmSend = await Settings.GetConfirmSendAsync(); // default on for safety
+            if (await Settings.GetAmountUnitAsync() is string au) _amtUnit = au;
+            if (await Settings.GetAmountDecimalsAsync() is int dec) _amtDecimals = dec;
+
+            // Load saved payees for the recipient + auto-payout pickers.
+            _addressBook = await AddrBook.GetEntriesAsync();
+            StateHasChanged();
+
+            try
+            {
+                // Paint the scrolling coin-pile tile background. Idempotent.
+                await JS.InvokeVoidAsync("initSendBackground");
+            }
+            catch { /* WebView not ready — background just won't appear */ }
+
+            _connError = await RpcService.CheckConnectionAsync();
+            if (_connError == null)
+            {
+                // Auto Payout: restore settings + durable accounting, show current
+                // spendable, start the watcher pump.
+                await Ap.LoadAsync();
+                await Ap.RefreshSpendableAsync();
+                StartAutoPayoutLoop();
+                if (Ap.Enabled) await Ap.TickAsync(fire: false);   // immediate status refresh (don't wait 20s)
+            }
+            StateHasChanged();
+        }
+    }
+
+    // Re-run the same daemon load the first-render lifecycle does after a retry.
+    protected override async Task OnDaemonReconnectedAsync()
+    {
+        await Ap.LoadAsync();
+        await Ap.RefreshSpendableAsync();
+        StartAutoPayoutLoop();
+        if (Ap.Enabled) await Ap.TickAsync(fire: false);
+    }
+
+    /// <summary>After the recipient field changes (typed or picked from the
+    /// Address Book), if it matches a saved payee and no label is set yet,
+    /// fill the label from that payee. Never clobbers a label the user typed.</summary>
+    private void OnRecipientPicked()
+    {
+        if (!string.IsNullOrWhiteSpace(_label)) return;
+        var match = _addressBook.FirstOrDefault(e => e.Address == _recipientAddress?.Trim());
+        if (match is not null && !string.IsNullOrWhiteSpace(match.Label))
+            _label = match.Label;
+    }
+
+    // SegWit is consensus-disabled on this chain (SegwitHeight = INT_MAX), so coins
+    // sent to a bech32 (blz1...) address are unspendable / anyone-can-spend and are
+    // permanently lost. Only legacy P2PKH (B...) addresses are safe. Block them.
+    private const string SegwitAddressError =
+        "SegWit (blz1...) addresses aren't supported on this chain - funds sent there would be lost. Use a legacy address that starts with \"B\".";
+
+    private static bool IsUnsafeSegwitAddress(string? addr) =>
+        (addr ?? "").Trim().StartsWith("blz1", StringComparison.OrdinalIgnoreCase);
+
+    private async Task Review()
+    {
+        _error = null;
+        _sendMax = false;   // normal send (not a max/empty-the-wallet send)
+        if (string.IsNullOrWhiteSpace(_recipientAddress)) { _error = "Please enter a recipient address"; return; }
+        if (!_amount.HasValue || _amount.Value <= 0) { _error = "Please enter a valid amount"; return; }
+        if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
+
+        // Catch a malformed / mistyped address up front with a clear message instead
+        // of a cryptic RPC error after the user clicks Send. Best-effort: a null
+        // result (daemon busy/unreachable) doesn't block — the send path + offline
+        // panel handle real connectivity issues. (blz1 is already blocked above; this
+        // covers bad checksums, wrong-network, and typos.)
+        if (await RpcService.ValidateAddressAsync(_recipientAddress.Trim()) == false)
+        {
+            _error = "That doesn't look like a valid Blazecoin address - double-check it and try again.";
+            return;
+        }
+
+        if (_confirmSend)
+        {
+            // Estimate the fee (non-broadcasting dry-run) so the review step can
+            // show fee + total before the user confirms. Best-effort — null falls
+            // back to a flat-rate note in the markup.
+            _estimatedFee = await RpcService.EstimateSendFeeAsync(_recipientAddress.Trim(), _amount.Value);
+            _confirming = true;       // show the review step
+        }
+        else
+            await DoSend();           // send straight away
+    }
+
+    /// <summary>"Send Max" — empties the spendable balance to the recipient with the
+    /// fee taken OUT of the amount (subtractfeefromamount), so the wallet goes to 0. A
+    /// plain send of the full balance fails ("Insufficient funds") because there's no
+    /// room left for the fee. Always shows the review step (it empties the wallet).</summary>
+    private async Task SendMax()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_recipientAddress)) { _error = "Please enter a recipient address"; return; }
+        if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
+        if (Ap.PayoutInFlight) { _error = "Auto-payout is broadcasting right now — try again in a moment."; return; }
+        if (await RpcService.ValidateAddressAsync(_recipientAddress.Trim()) == false)
+        {
+            _error = "That doesn't look like a valid Blazecoin address - double-check it and try again.";
+            return;
+        }
+
+        var spendable = (await RpcService.GetBalancesAsync())?.Mine?.Trusted ?? 0m;
+        if (spendable <= 0m) { _error = "No spendable balance to send."; return; }
+
+        _amount = spendable;
+        _sendMax = true;
+        _estimatedFee = await RpcService.EstimateSendFeeAsync(_recipientAddress.Trim(), spendable, subtractFeeFromAmount: true);
+        _confirming = true;   // always review a max send — it empties the wallet
+    }
+
+    private async Task DoSend()
+    {
+        _error = null;
+        // Final safety net before the irreversible send (see IsUnsafeSegwitAddress).
+        if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
+        // Mutual exclusion with the Auto Payout engine — don't contend for the same UTXOs.
+        if (Ap.PayoutInFlight) { _error = "Auto-payout is broadcasting right now — try again in a moment."; return; }
+        _sending = true;
+        Ap.ManualSendInProgress = true;   // let the engine defer a live payout while we send
+        try
+        {
+            _txId = await RpcService.SendToAddressAsync(_recipientAddress, _amount!.Value, subtractFeeFromAmount: _sendMax);
+            if (!string.IsNullOrEmpty(_txId))
+            {
+                _success = true;
+                _confirming = false;
+
+                // Save the recipient to the address book if a label was entered.
+                // Best-effort; localStorage failures don't block the success state.
+                if (!string.IsNullOrWhiteSpace(_label))
+                    await SaveToAddressBookAsync(_recipientAddress.Trim(), _label.Trim());
+            }
+            else
+            {
+                _error = "Failed to send transaction";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            _sending = false;
+            Ap.ManualSendInProgress = false;
+        }
+    }
+
+    /// <summary>Appends an entry to the same localStorage list AddressBook.razor
+    /// reads from. Skips if the address is already saved (regardless of its
+    /// existing label) so re-sending doesn't create duplicates.</summary>
+    private Task SaveToAddressBookAsync(string address, string label)
+        => AddrBook.AddEntryIfNewAsync(new AddressBookEntry { Label = label, Address = address });
+
+    private void ResetForm()
+    {
+        _recipientAddress = "";
+        _label = "";
+        _amount = null;
+        _success = false;
+        _confirming = false;
+        _sendMax = false;
+        _txId = null;
+        _error = null;
+    }
+
+    private void Cancel()
+    {
+        // Navigate back to dashboard
+    }
+
+    // ----- Auto-payout UI handlers (delegate to the engine) -----
+    private async Task ApPickEntry(AddressBookEntry e)
+    {
+        Ap.Address = e.Address;
+        if (string.IsNullOrWhiteSpace(Ap.Label) && !string.IsNullOrWhiteSpace(e.Label)) Ap.Label = e.Label;
+        _apShowPicker = false;
+        await Ap.SaveSettingsAsync();
+    }
+
+    // Live-mode switch (dry-run <-> live) with explicit confirmation.
+    private void RequestLive() { _apLiveConfirmPending = true; _apLiveAck = false; }
+    private void CancelLive()  { _apLiveConfirmPending = false; _apLiveAck = false; }
+    private void ConfirmLive() { Ap.Live = true; _apLiveConfirmPending = false; _apLiveAck = false; }
+    private void SetDryRun()   { Ap.Live = false; _apLiveConfirmPending = false; _apLiveAck = false; }
+
+    // The engine has no timer of its own — this page drives a 20s pump on the UI
+    // thread and stops it on Dispose, so auto-payout "runs only while this page is
+    // open" (and a navigate-away can never leave a live watcher running).
+    private void StartAutoPayoutLoop()
+    {
+        if (_apCts != null) return;
+        _apCts = new CancellationTokenSource();
+        _apPeriodic = new PeriodicTimer(TimeSpan.FromSeconds(20));
+        _ = AutoPayoutLoop(_apCts.Token);
+    }
+
+    private async Task AutoPayoutLoop(CancellationToken ct)
+    {
+        // Each tick runs on the UI thread (InvokeAsync) and is gated by the engine's
+        // atomic guard, so it can neither race nor double-fire.
+        try { while (await _apPeriodic!.WaitForNextTickAsync(ct)) await InvokeAsync(() => Ap.TickAsync(true)); }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        Ap.Changed -= OnApChanged;
+        _apCts?.Cancel();
+        _apPeriodic?.Dispose();
+        _apCts?.Dispose();
+
+        // Stop the camera / unwire the file handler if the scanner was open when we
+        // navigated away. Fire-and-forget — Dispose can't await, and the WebView may
+        // already be tearing down.
+        if (_qrRef is not null)
+        {
+            try { _ = JS.InvokeVoidAsync("blzQr.detach"); } catch { /* WebView gone */ }
+            _qrRef.Dispose();
+            _qrRef = null;
+        }
+    }
+}

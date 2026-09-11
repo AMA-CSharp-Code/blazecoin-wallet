@@ -1,0 +1,663 @@
+/* =========================================================================
+   Provenance page. The background is the PIXELATED COINS skin — painted into
+   #provenanceTileBg by initProvenanceBackground, styled by the global
+   .skin-pixelated-coins rules in wallet.css (global, so nothing is needed
+   here). The page's containers reuse the Dashboard chrome: the global
+   .card:has(> .status-header) banner-card rules plus .status-header /
+   .card-body, so this page matches the Dashboard's cards exactly.
+   ========================================================================= */
+
+/* Keep page content above the drifting coin grid. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* =========================================================================
+   Title banner — the Dashboard's nested-card construction, copied here
+   because those rules live in Dashboard.razor.css and Blazor scopes them to
+   that component (they do NOT reach this page). Outer dark-red card wraps a
+   BLACK inner card, which wraps the double-bordered Headers11 block.
+   ========================================================================= */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+
+.banner-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3rem;
+    margin: 0;
+    padding: 12px 0;
+    /* Explicit colour/shadow/weight: wallet.css has a global h1 rule (red +
+       glow) that would otherwise win the cascade over .Headers11. */
+    color: white;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    font-weight: 500;
+}
+
+/* Keeps the title one flex item, so the 3rem gap always sits between the marks
+   and the text. (No typing caret here — this banner counts, it doesn't type.) */
+.banner-text-wrap {
+    display: inline-flex;
+    align-items: baseline;
+    white-space: nowrap;
+}
+
+/* Only while the odometer runs: monospaced, tabular figures so digits swapping
+   at 60fps don't jitter the string's width. Dropped the moment the title lands,
+   which keeps the banner font untouched the rest of the time. */
+.banner-text.banner-counting {
+    font-family: Consolas, "Courier New", monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em;
+}
+
+/* The handover from height to title. inline-block so transform and filter
+   apply at all; both are visual-only, so the marks either side never move. */
+.banner-text {
+    display: inline-block;
+}
+
+/* Digits dissolve out... */
+.banner-text.banner-fading {
+    opacity: 0;
+    filter: blur(3px);
+    transition: opacity 0.3s ease, filter 0.3s ease;
+}
+
+/* ...and the title resolves in, drifting back from slightly too large and out
+   of focus, as though it were being brought into view. */
+.banner-text.banner-arrive {
+    animation: banner-arrive 0.95s cubic-bezier(0.16, 0.9, 0.3, 1) both;
+}
+
+@keyframes banner-arrive {
+    from { opacity: 0; transform: scale(1.14); filter: blur(5px); }
+    60%  { opacity: 1; }
+    to   { opacity: 1; transform: scale(1); filter: blur(0); }
+}
+
+/* The flanking marks: the same coin-with-an-age-ring the sidebar uses for this
+   page, in the sidebar's red (#e02424 via currentColor), at the size the
+   Dashboard's header coins occupied. Static — nothing to keep in phase. */
+.prov-header-mark {
+    width: 48px;
+    height: 48px;
+    display: inline-block;
+    vertical-align: middle;
+    color: #e02424;
+}
+
+/* =========================================================================
+   GHOST TRAIL — the Send page's arrow treatment, applied to the marks and
+   running on a permanent loop.
+
+   Send's recipe: copies of the glyph absolutely stacked on the real one,
+   sliding away and fading, staggered so one is always leaving. Peak opacity
+   0.55 at 20% is Send's, but the cycle is 7s rather than 2.5s and the
+   ghosts leave on all EIGHT points of the compass — the four cardinals from
+   the mark itself, four diagonals picked up further out and thrown further
+   still. One departure every 0.875s, walking round the circle.
+
+   Vertical travel is shorter than horizontal (20px vs 28px on the cardinals):
+   the banner is a bordered card and there's far less room above and below the
+   mark than beside it, so an equal throw carried a still-visible ghost across
+   the white border.
+
+   The wrapper is position:relative and the ghosts absolute, so no ghost ever
+   contributes layout size — the marks stay exactly where they were.
+   ========================================================================= */
+.prov-mark {
+    position: relative;
+    display: inline-block;
+    line-height: 0;         /* no descender gap under the svg */
+}
+
+.prov-mark .mark-ghost {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    animation: markGhost 7s linear infinite;
+}
+
+/* Eight ghosts, an eighth of a cycle apart, so the emission walks steadily
+   round the compass: cardinals from the mark itself, diagonals PICKED UP
+   further out and thrown further still, fainter, so there's a second wave
+   beyond the first. The two sets interleave, near-far-near-far.
+   Delays are cycle/8 — keep them in step if the 7s ever changes. */
+.prov-mark .g-right { --gx:  28px; --gy:    0px; animation-delay: 0s;      }
+.prov-mark .g-dr    { --gx:  42px; --gy:   26px; animation-delay: 0.875s;  }
+.prov-mark .g-down  { --gx:   0px; --gy:   20px; animation-delay: 1.75s;   }
+.prov-mark .g-dl    { --gx: -42px; --gy:   26px; animation-delay: 2.625s;  }
+.prov-mark .g-left  { --gx: -28px; --gy:    0px; animation-delay: 3.5s;    }
+.prov-mark .g-ul    { --gx: -42px; --gy:  -26px; animation-delay: 4.375s;  }
+.prov-mark .g-up    { --gx:   0px; --gy:  -20px; animation-delay: 5.25s;   }
+.prov-mark .g-ur    { --gx:  42px; --gy:  -26px; animation-delay: 6.125s;  }
+
+.prov-mark .mark-ghost.far {
+    animation-name: markGhostFar;
+}
+
+@keyframes markGhost {
+    0%   { transform: translate(0, 0);                                          opacity: 0;    }
+    20%  { transform: translate(calc(var(--gx) * 0.2), calc(var(--gy) * 0.2));  opacity: 0.55; }
+    100% { transform: translate(var(--gx), var(--gy));                          opacity: 0;    }
+}
+
+/* The far wave never touches the mark: it fades up already a third of the way
+   out and is dimmer throughout, so it reads as distance rather than as a
+   second identical trail. */
+@keyframes markGhostFar {
+    0%   { transform: translate(calc(var(--gx) * 0.34), calc(var(--gy) * 0.34)); opacity: 0;   }
+    28%  { transform: translate(calc(var(--gx) * 0.5),  calc(var(--gy) * 0.5));  opacity: 0.3; }
+    100% { transform: translate(var(--gx), var(--gy));                           opacity: 0;   }
+}
+
+/* =========================================================================
+   Containers — the Dashboard's card scheme: translucent black, 2px white
+   border, WHITE text (the global .card sets no colour, which is what left
+   this page's body copy unreadably dark), and the edge-to-edge black
+   status-header bar kept square.
+   ========================================================================= */
+.card {
+    background-color: rgba(0, 0, 0, 0.65);
+    border: 2px solid white;
+    border-radius: 6px;
+    color: white;
+    padding: 1.5rem;
+}
+
+.card:has(> .status-header) {
+    padding: 0;
+    overflow: hidden;
+    border: 2px solid white;
+    border-radius: 0;
+}
+
+/* Read-only panel — suppress the global hover lift. */
+.card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* Each catalogue is its own card INSIDE Mint Ancestry — the Dashboard's
+   nested-card construction. A heading and its table then read as one object
+   instead of as a caption floating above a long scroll. The chrome comes free
+   from .card / .card:has(> .status-header) above; only the spacing is set here. */
+.prov-panel {
+    margin: 1.4rem 0;
+}
+
+.prov-panel .card-body {
+    padding: 1.1rem 1.25rem;
+}
+
+/* Last thing in a panel shouldn't push the panel's own padding open. */
+.prov-panel .card-body > :last-child {
+    margin-bottom: 0;
+}
+
+/* Not defined globally; each page supplies its own (see Receive.razor.css). */
+.muted {
+    color: rgba(255, 255, 255, 0.6);
+    margin-bottom: 1rem;
+    text-align: left;
+}
+
+/* =========================================================================
+   Buttons — the Active Wallet card's treatment (Dashboard.razor.css
+   .active-wallet-load): brand-red gradient, thin white border, square
+   corners, brightening on hover and fading when disabled.
+   ========================================================================= */
+.btn {
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border: 1px solid #fff;
+    border-radius: 0;
+    padding: 0.45rem 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #cf2013, #8b0000);
+    color: #fff;
+    border: 1px solid #fff;
+    border-radius: 0;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a, #cf2013);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* space-between puts the "attested to block N" note on the right; align-items
+   stays CENTER so the title sits mid-height in the 32px black bar (baseline
+   here pushed it to the top). */
+.prov-content .status-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+/* "attested to block N" — the chain height the numbers were true at. */
+.prov-attested {
+    font-family: Consolas, monospace;
+    font-size: 0.78rem;
+    opacity: 0.75;
+    font-weight: 400;
+}
+
+.prov-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.9rem;
+    margin: 0.9rem 0;
+}
+
+.prov-progress {
+    font-family: Consolas, monospace;
+    font-size: 0.82rem;
+    opacity: 0.8;
+}
+
+.prov-error {
+    color: #ff6a5e;
+    margin: 0.5rem 0 0;
+}
+
+.prov-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.6rem;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(0, 0, 0, 0.35);
+    font-size: 0.9rem;
+}
+
+/* Unproven lineage is a fact worth showing, not an error — the tracer
+   deliberately under-claims rather than guessing. */
+.prov-partial { opacity: 0.75; font-style: italic; }
+
+/* The two accounting models — a plain segmented switch, since the numbers below
+   change meaning entirely depending on which is selected. */
+.prov-models {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+}
+
+.prov-model {
+    background: rgba(0, 0, 0, 0.4);
+    color: #ddd;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    padding: 0.25rem 0.7rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+/* Pedigree is the primary view — a white border marks it out from the
+   reconciling Proportional one, selected or not. 1px to match the buttons
+   (.btn) rather than sitting heavier than them. */
+.prov-model-primary { border: 1px solid #fff; }
+
+.prov-model.on {
+    background: #cf2013;
+    border-color: #cf2013;
+    color: #fff;
+    font-weight: 700;
+}
+
+/* …but keep the white edge on Pedigree even when it's the active red button. */
+.prov-model-primary.on { border-color: #fff; }
+
+.prov-model-note {
+    flex: 1 1 16rem;
+    font-size: 0.78rem;
+    opacity: 0.75;
+}
+
+.prov-outpoint { font-size: 0.78rem; opacity: 0.85; }
+
+/* ── vintage coin control ── */
+.prov-send {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(0, 0, 0, 0.35);
+    padding: 0.8rem 0.9rem;
+}
+
+.prov-send-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.55rem;
+}
+
+/* FIXED width, not min-width: the label text changes with the mode ("Amount
+   (sats)" → "How many outputs" → "Block height") and a min-width let the longest
+   one shove the input box sideways. Wide enough for the longest label, so every
+   box on the panel starts at the same place. */
+.prov-send-row label {
+    font-size: 0.8rem;
+    opacity: 0.8;
+    width: 10rem;
+    min-width: 10rem;
+    flex: none;
+}
+
+/* The amount box means something different in each mode, so its label is
+   colour-coded: green for a plain satoshi amount, pink for a count of outputs,
+   blue for a block height. Full opacity so the colours read true. */
+.prov-send-row label.lbl-amount { color: #06d6a0; opacity: 1; font-weight: 600; }
+.prov-send-row label.lbl-outputs { color: #d63384; opacity: 1; font-weight: 600; }
+.prov-send-row label.lbl-block { color: #1e90ff; opacity: 1; font-weight: 600; }
+
+/* The collector modes get their own boxed block — gold-edged, because these are
+   the options that move coins intact and they must not read as fine print. */
+.prov-collector {
+    border: 1px solid rgba(255, 215, 0, 0.45);
+    background: rgba(255, 215, 0, 0.06);
+    padding: 0.6rem 0.8rem;
+    margin: 0.2rem 0 0.7rem;
+}
+
+/* Explains what an OUTPUT is before the toggles use the word. */
+.prov-collector-intro {
+    font-size: 0.78rem;
+    opacity: 0.85;
+    margin: 0 0 0.6rem;
+    line-height: 1.5;
+}
+
+.prov-collector-intro strong { color: #ffd700; }
+
+.prov-collector-head {
+    font-family: 'Bebas Neue', system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    font-size: 1rem;
+    color: #ffd700;
+    margin-bottom: 0.45rem;
+}
+
+/* Each toggle reads as a sentence, so it isn't width-locked like a field label. */
+.prov-whole-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    min-width: auto;
+    margin-bottom: 0.35rem;
+    font-size: 0.84rem;
+    opacity: 1;
+    cursor: pointer;
+}
+
+.prov-whole-label input { margin-top: 0.15rem; }
+.prov-whole-label strong { color: #ffd700; }
+
+/* The coin-size picker sits inside the collector panel, so it keeps the panel's
+   spacing rather than the form row's. */
+.prov-coin-pick { margin: 0.4rem 0 0.2rem; }
+/* 10rem less the panel's own left padding, so these boxes land on the same
+   vertical line as the ones outside the panel. */
+.prov-coin-pick label { width: 9.2rem; min-width: 9.2rem; }
+
+.prov-collector-note {
+    font-size: 0.78rem;
+    opacity: 0.8;
+    margin-top: 0.35rem;
+    padding-left: 1.4rem;
+}
+/* The fee label trails its own box on the same row, so it shrinks to its text
+   instead of taking the column width. */
+.prov-send-row .prov-fee-label { width: auto; min-width: auto; margin-left: 0.6rem; }
+
+.prov-send-row input,
+.prov-send-row select {
+    background: rgba(0, 0, 0, 0.55);
+    color: #eee;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    padding: 0.28rem 0.5rem;
+    font-family: Consolas, monospace;
+    font-size: 0.85rem;
+    min-width: 10rem;
+}
+
+.prov-send-row input:first-of-type { flex: 1 1 18rem; }
+
+/* Set apart from Plan send — the irreversible button shouldn't sit a stray
+   click away from the harmless one. */
+.prov-broadcast { margin-left: 1.6rem; }
+
+.prov-plan { margin-top: 0.8rem; }
+
+/* The FIFO re-check result — the thing to read before broadcasting. */
+.prov-plan-verdict {
+    padding: 0.45rem 0.7rem;
+    margin-bottom: 0.6rem;
+    font-size: 0.87rem;
+    border-left: 4px solid;
+}
+
+.prov-plan-verdict.ok { border-color: #2ecc71; background: rgba(46, 204, 113, 0.1); }
+.prov-plan-verdict.bad { border-color: #ff3a1f; background: rgba(207, 32, 19, 0.15); }
+
+.prov-warn { color: #ffb347; font-size: 0.82rem; margin: 0.25rem 0 0; }
+.prov-sent { color: #2ecc71; font-size: 0.87rem; word-break: break-all; }
+.prov-order-note { font-size: 0.78rem; margin-top: 0.5rem; }
+
+.prov-h {
+    font-family: 'Bebas Neue', system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    font-size: 1.25rem;
+    margin: 1.4rem 0 0.5rem;
+}
+
+/* Catalogue tables — the Dashboard's Recent Transactions treatment: every cell
+   CENTRED (so data sits squarely under its header), brand-red headings over a
+   dark-red rule, and zebra striping. */
+/* table-layout: fixed + the shared <colgroup> widths below means the header row
+   and every data row share EXACTLY the same column boundaries (auto layout was
+   sizing columns to content and leaving them ragged) — and because the widths
+   are defined ONCE here rather than per table, every table on the page lines up
+   with the others, column for column, down the page. */
+.prov-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.9rem;
+}
+
+/* The shared five-column grid: label · sub-label · count · satoshis · BLZ.
+   Widths track how much text each column actually holds. The first three carry
+   short strings ("2026", "September", "412") and the last two carry the long
+   figures, so the original 24/18/22 front-loading left the short labels adrift
+   in the middle of wide columns — read as a gap down the left-hand side, since
+   every cell is centred. Weight moved to where the digits are. */
+.prov-table col:nth-child(1) { width: 18%; }
+.prov-table col:nth-child(2) { width: 16%; }
+.prov-table col:nth-child(3) { width: 16%; }
+.prov-table col:nth-child(4) { width: 26%; }
+.prov-table col:nth-child(5) { width: 24%; }
+
+.prov-table th,
+.prov-table td {
+    overflow-wrap: anywhere;
+}
+
+.prov-table th,
+.prov-table td {
+    text-align: center;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.prov-table thead th {
+    color: #ff4d3a;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(158, 0, 15, 0.6);
+}
+
+.prov-table tbody tr:nth-child(even) { background: rgba(0, 0, 0, 0.55); }
+
+/* Year totals lead; their month rows sit under them, dimmer and lighter, so the
+   year reads as the heading and the months as its breakdown. */
+.prov-table .prov-year-row td { font-weight: 700; border-top: 1px solid rgba(255, 255, 255, 0.18); }
+.prov-table .prov-month-row td { font-weight: 400; opacity: 0.8; font-size: 0.85rem; }
+.prov-table tbody tr:hover { background: rgba(255, 255, 255, 0.06); }
+
+/* .num predates the centred layout — kept so existing markup stays valid. */
+.prov-table .num { text-align: center; }
+.prov-table .mono { font-family: Consolas, monospace; }
+
+/* Year-vintage figures in the Dashboard's success green (--blz-success, the
+   colour the balance amount uses). */
+.prov-table .prov-figure { color: #06d6a0; }
+
+/* Pure coins — gold, because these are the collector's items. */
+.prov-table .prov-gold { color: #ffd700; }
+
+/* Mint dates in the Dashboard transactions table's hot pink (the Immature
+   colour, #d63384). */
+.prov-table .prov-pink { color: #d63384; }
+
+/* Elapsed time while a trace runs — proof it's still working on a wallet
+   with tens of thousands of outputs. */
+.prov-elapsed {
+    font-family: Consolas, monospace;
+    font-size: 0.82rem;
+    color: #06d6a0;
+}
+
+/* =========================================================================
+   Send-A-Vintage guide — a small window in the wallet's own chrome: dimmed
+   page behind, the page's card construction (black card, 2px white border,
+   black status-header bar) in front. The chrome comes free from .card /
+   .card:has(> .status-header) above; this block only sizes and places it.
+   ========================================================================= */
+
+/* Sits beside the vintage dropdown, sized to the row's inputs rather than
+   the chunkier action buttons below. */
+.prov-guide-btn {
+    padding: 0.28rem 0.9rem;
+    font-size: 0.82rem;
+}
+
+.prov-guide-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+}
+
+/* Near-opaque, unlike the page's translucent cards — this floats over text,
+   and the coin grid bleeding through made the body copy shimmer. The shadow
+   is repeated under :hover because the page's read-only .card:hover rule
+   (box-shadow: none) would otherwise strip it the moment the pointer entered. */
+.prov-guide,
+.prov-guide:hover {
+    width: min(640px, 100%);
+    max-height: min(44rem, 88vh);
+    display: flex;
+    flex-direction: column;
+    background: rgba(12, 2, 2, 0.94);
+    box-shadow: 0 0 44px rgba(0, 0, 0, 0.85);
+}
+
+.prov-guide {
+    animation: guide-arrive 0.32s cubic-bezier(0.16, 0.9, 0.3, 1) both;
+}
+
+@keyframes guide-arrive {
+    from { opacity: 0; transform: translateY(14px) scale(0.98); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* The modal lives OUTSIDE .prov-content (see the razor comment on why), so the
+   page's .prov-content .status-header flex rule doesn't reach it — restated
+   here to put the ✕ on the right of the black bar. */
+.prov-guide .status-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+/* The card's overflow:hidden (the header-bar trick) would clip a scrollbar on
+   the card itself, so the BODY is the scroll container. */
+.prov-guide-body {
+    overflow-y: auto;
+    padding: 1.1rem 1.3rem;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    text-align: left;
+}
+
+/* Section headings in the collector gold — the guide is mostly about the
+   collector features, and gold is their colour everywhere on this page. */
+.prov-guide-body h4 {
+    font-family: 'Bebas Neue', system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    font-size: 1.05rem;
+    color: #ffd700;
+    margin: 1rem 0 0.35rem;
+}
+
+.prov-guide-body h4:first-child { margin-top: 0; }
+.prov-guide-body p { margin: 0 0 0.55rem; }
+.prov-guide-body strong { color: #ffd700; font-weight: 600; }
+
+.prov-guide-close {
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.15rem;
+}
+
+.prov-guide-close:hover { color: #ff4d3a; }

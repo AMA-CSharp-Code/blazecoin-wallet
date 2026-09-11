@@ -1,0 +1,293 @@
+@page "/mining"
+@using BlazecoinWallet.Core.Services.Mining
+@using BlazecoinWallet.Core.Services.Settings
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IMiningService Miner
+@inject IBlazecoindRpcService Rpc
+@inject ISettingsService Settings
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>Solo Mining - Blazecoin Wallet V2.0</PageTitle>
+
+@* Pulsing brick-pattern tile background — alternating rows scroll left/right. *@
+<div class="tile-bg" id="tileBg"></div>
+
+<div class="mining-page">
+
+    @* Title banner — matches MVC Mining page: nested red→black cards with
+       slide-in icons flanking a fade-in title. *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title">
+                    <span class="slide-in-left">⛏️🔥💎</span>
+                    <span class="fade-in-center">&nbsp;&nbsp;&nbsp;Solo Mining&nbsp;&nbsp;&nbsp;</span>
+                    <span class="slide-in-right">💎🔥⛏️</span>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+    @* V1.5 banner-card chrome from wallet.css: .card containing a
+       .status-header gets the edge-to-edge black header bar, with the
+       inner padding provided by .card-body. *@
+    <div class="content-container card">
+        <div class="status-header"><span>Mining Configuration</span></div>
+        <div class="card-body">
+
+        <div class="warning-card">
+            <strong>⚠ Heat &amp; power notice.</strong>
+            Mining pegs the cores you assign at 100% (minus throttle). On a
+            machine with many cores this generates real heat and draws real
+            watts. Start small, watch your temperatures, and back off if your
+            cooling can't keep up.
+        </div>
+
+        <div class="controls-grid">
+            <div class="control">
+                <label for="threads">Worker Threads</label>
+                <div class="slider-row">
+                    <input id="threads" type="range" min="1" max="@_maxAllowed" step="1"
+                           @bind="_threads" @bind:event="oninput" disabled="@_status.IsRunning" />
+                    <span class="slider-value">@_threads</span>
+                </div>
+                <div class="hint">
+                    Hard cap @_maxAllowed (CPU cores − 4). Default suggestion @_defaultThreads
+                    (1 ⁄ 8 of cores) — conservative for big machines.
+                </div>
+            </div>
+
+            <div class="control">
+                <label for="throttle">Throttle</label>
+                <div class="slider-row">
+                    <input id="throttle" type="range" min="0" max="90" step="5"
+                           @bind="_throttle" @bind:event="oninput" disabled="@_status.IsRunning" />
+                    <span class="slider-value">@_throttle%</span>
+                </div>
+                <div class="hint">
+                    0 % = full speed. Higher values insert sleeps between hashes,
+                    trading hashrate for lower temps and quieter fans.
+                </div>
+            </div>
+
+            <div class="control wide">
+                <label>Payout Address</label>
+                <div class="payout-address">
+                    @if (string.IsNullOrEmpty(_payoutAddress))
+                    {
+                        <span class="muted">Auto-generated on start (legacy P2PKH from the loaded wallet).</span>
+                    }
+                    else
+                    {
+                        <code>@_payoutAddress</code>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="action-row">
+            @if (!_status.IsRunning)
+            {
+                <button class="btn-start" @onclick="StartAsync" disabled="@_busy">
+                    @(_busy ? "Starting…" : "Start Mining")
+                </button>
+            }
+            else
+            {
+                <button class="btn-stop" @onclick="StopAsync" disabled="@_busy">
+                    @(_busy ? "Stopping…" : "Stop Mining")
+                </button>
+            }
+        </div>
+
+        @if (!string.IsNullOrEmpty(_startError))
+        {
+            <div class="error-card">
+                <strong>Couldn't start:</strong> @_startError
+            </div>
+        }
+
+        <div class="stats-grid">
+            <div class="stat">
+                <div class="stat-label">State</div>
+                <div class="stat-value @(_status.IsRunning ? "running" : "idle")">
+                    @(_status.IsRunning ? "Mining" : "Idle")
+                </div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Hashrate</div>
+                <div class="stat-value">@FormatRate(_status.HashesPerSecond)</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Active threads</div>
+                <div class="stat-value">@_status.ActiveThreads / @_status.ConfiguredThreads</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Total hashes</div>
+                <div class="stat-value">@_status.TotalHashes.ToString("N0")</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Runtime</div>
+                <div class="stat-value">@FormatElapsed(_status.Elapsed)</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Blocks found</div>
+                <div class="stat-value @(_status.BlocksFound > 0 ? "highlight" : "")">@_status.BlocksFound</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Mining for block</div>
+                <div class="stat-value">@(_status.CurrentBlockHeight?.ToString("N0") ?? "—")</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Last error</div>
+                <div class="stat-value muted small">@(_status.LastError ?? "—")</div>
+            </div>
+        </div>
+
+        </div>
+    </div>
+    }
+</div>
+
+@code {
+    private int _threads;
+    private int _throttle = 50;
+    private int _maxAllowed;
+    private int _defaultThreads;
+    private string? _payoutAddress;
+    private string? _startError;
+    private bool _busy;
+    private MiningStatus _status = new();
+
+    protected override void OnInitialized()
+    {
+        _maxAllowed = Miner.MaxAllowedThreads;
+        _defaultThreads = Miner.DefaultThreadCount;
+        _threads = _defaultThreads;
+        _status = Miner.GetStatus();
+        _payoutAddress = _status.PayoutAddress;
+        Miner.StatusChanged += OnStatusChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Populate the tile grid. The JS function is idempotent — safe to
+            // call again if the page rerenders.
+            try
+            {
+                await JS.InvokeVoidAsync("initMiningBackground");
+            }
+            catch
+            {
+                // If the WebView isn't ready yet, the background just won't appear —
+                // not worth breaking the page over.
+            }
+
+            // Apply the saved mining defaults from the Preferences page, unless a
+            // run is already in progress (don't disturb a live miner).
+            if (!_status.IsRunning)
+            {
+                try
+                {
+                    if (await Settings.GetMiningThreadsAsync() is int threads)
+                        _threads = Math.Clamp(threads, 1, _maxAllowed);
+                    if (await Settings.GetMiningThrottleAsync() is int throttle)
+                        _throttle = throttle;
+                    StateHasChanged();
+                }
+                catch { /* saved defaults just won't apply */ }
+            }
+
+            // Check the daemon is reachable. Mining stats flow from the local
+            // Miner service (event-driven), but they're meaningless without a
+            // reachable daemon — so show the shared offline panel instead.
+            _connError = await Rpc.CheckConnectionAsync();
+            StateHasChanged();
+        }
+    }
+
+    // Re-sync the live mining status so the stats cards repopulate after a retry.
+    protected override Task OnDaemonReconnectedAsync()
+    {
+        _status = Miner.GetStatus();
+        _payoutAddress = _status.PayoutAddress ?? _payoutAddress;
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        Miner.StatusChanged -= OnStatusChanged;
+    }
+
+    private void OnStatusChanged(MiningStatus s)
+    {
+        _status = s;
+        _payoutAddress = s.PayoutAddress ?? _payoutAddress;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task StartAsync()
+    {
+        _busy = true;
+        _startError = null;
+        StateHasChanged();
+        try
+        {
+            await Miner.StartAsync(new MiningOptions
+            {
+                ThreadCount = _threads,
+                ThrottlePercent = _throttle,
+                PayoutAddress = _payoutAddress,
+            });
+        }
+        catch (Exception ex)
+        {
+            _startError = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+            _status = Miner.GetStatus();
+        }
+    }
+
+    private async Task StopAsync()
+    {
+        _busy = true;
+        StateHasChanged();
+        try
+        {
+            await Miner.StopAsync();
+        }
+        finally
+        {
+            _busy = false;
+            _status = Miner.GetStatus();
+        }
+    }
+
+    private static string FormatRate(double hps)
+    {
+        if (hps <= 0) return "—";
+        if (hps >= 1_000_000) return $"{hps / 1_000_000:F2} MH/s";
+        if (hps >= 1_000)     return $"{hps / 1_000:F2} kH/s";
+        return $"{hps:F1} H/s";
+    }
+
+    private static string FormatElapsed(TimeSpan t)
+    {
+        if (t == TimeSpan.Zero) return "—";
+        if (t.TotalHours >= 1) return $"{(int)t.TotalHours}h {t.Minutes}m {t.Seconds}s";
+        if (t.TotalMinutes >= 1) return $"{t.Minutes}m {t.Seconds}s";
+        return $"{t.Seconds}s";
+    }
+}

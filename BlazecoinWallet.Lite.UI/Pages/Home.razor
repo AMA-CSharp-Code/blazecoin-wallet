@@ -1,0 +1,201 @@
+@page "/"
+@layout LiteLayout
+@inject LiteWalletService Wallet
+@inject NavigationManager Nav
+@inject IUnitSettings Units
+@inject IExplorerSettings Explorer
+@inject ILabelStore Labels
+@inject CometPulse Comet
+@implements IDisposable
+@using BlazecoinWallet.Lite.Data
+
+@* Dashboard: spendable balance + recent history, straight off the Indexer via the gateway.
+   No local chain, no sync bar — the "sync" is one HTTP round trip. *@
+@if (!_ready)
+{
+    <div class="lite-card"><p class="lite-sub">Opening wallet…</p></div>
+}
+else
+{
+    @if (!_backupVerified)
+    {
+        @* The unverified-backup warning: shown from the instant a created wallet exists
+           until the quiz is passed (or the wallet was restored — possession is proof).
+           This is what makes the setup ceremony's Skip honest, and closes the
+           kill-the-app-mid-quiz escape. *@
+        <div class="lite-toast lite-toast-pending lite-backup-chip" role="button"
+             @onclick="@(() => Nav.NavigateTo("verify-backup"))">
+            <span>⚠️ <b>Back up your wallet</b> — recovery phrase not verified. Tap to fix.</span>
+        </div>
+    }
+
+    <div class="lite-card lite-card-balance lite-card-comet @CometClass">
+        <h2>Balance</h2>
+        <div class="lite-balance">@AmountText(_spendable) <small>@_sym</small></div>
+        @* The on-chain vs spendable gap has three distinct causes — name the right one
+           instead of blaming maturity for everything (an in-flight send used to read
+           as "freshly mined coins wait 30 blocks", which was simply wrong). *@
+        @if (_breakdown is { } bd && _summary != null)
+        {
+            var inFlight = Math.Max(0, _summary.Balance - bd.Spendable - bd.ImmatureCoinbase);
+            @if (bd.ImmatureCoinbase > 0)
+            {
+                <div class="lite-sub">@AmountText(bd.ImmatureCoinbase) @_sym maturing — freshly mined coins wait 30 blocks.</div>
+            }
+            @if (inFlight > 0)
+            {
+                <div class="lite-sub">@AmountText(inFlight) @_sym leaving in an unconfirmed send — settles when it's mined.</div>
+            }
+            @if (bd.UnconfirmedIncoming > 0)
+            {
+                <div class="lite-sub">@AmountText(bd.UnconfirmedIncoming) @_sym incoming — waiting for a confirmation.</div>
+            }
+        }
+        <div class="lite-sub" style="margin-top:6px">@Short(_address)</div>
+    </div>
+
+    @if (_spendable > 0)
+    {
+        @* Provenance entry — only when there are confirmed coins to trace (an empty
+           wallet has no lineage, so the chip would be a dead end). Permanent home is
+           Settings → More; this is the discoverable front door. *@
+        <div class="lite-prov-chip" role="button"
+             @onclick="@(() => Nav.NavigateTo("provenance"))">
+            <span>🪙 <b>Coin Provenance</b> — trace which blocks minted your coins ›</span>
+        </div>
+    }
+
+    <div class="lite-card lite-card-activity">
+        <h2>Recent Activity</h2>
+        @if (!Wallet.SupportsHistory)
+        {
+            @* Personal-node mode: a bare daemon has no address index — say "unsupported
+               here", never a misleading "no activity" (audit F2). *@
+            <p class="lite-sub">Your own node doesn't index transaction history — balances and
+                sending work fully; history needs the Blazecoin gateway.</p>
+        }
+        else if (_history.Count == 0)
+        {
+            <p class="lite-sub">Nothing yet. Share your address from the Receive tab — or go swing a pick on the pool.</p>
+        }
+        else
+        {
+            <ul class="lite-history">
+                @foreach (var h in _history)
+                {
+                    <li class="lite-history-row" @onclick="() => OpenTx(h.TxId)">
+                        <span class="@(h.Type == "received" ? "in" : "out")">
+                            @(h.Type == "received" ? "▼" : "▲") @AmountText(Math.Abs(h.Amount)) @_sym
+                            @{ var label = Labels.Get(h.TxId); }
+                            @if (!string.IsNullOrEmpty(label))
+                            {
+                                <span class="lite-sub"> · @label</span>
+                            }
+                        </span>
+                        <span class="lite-txid">
+                            @Short(h.TxId) · @h.Timestamp.ToLocalTime().ToString("dd MMM HH:mm") ›
+                        </span>
+                    </li>
+                }
+            </ul>
+        }
+        <div style="height:8px"></div>
+        <button class="lite-btn lite-btn-ghost" @onclick="RefreshAsync" disabled="@_refreshing">↻ Refresh</button>
+    </div>
+}
+
+@code {
+    private bool _ready;
+    private bool _refreshing;
+    private bool _backupVerified = true;
+    private string _address = string.Empty;
+    private long _spendable;
+    private LiteBalanceBreakdown? _breakdown;
+    private LiteAddressSummary? _summary;
+    private IReadOnlyList<LiteHistoryEntry> _history = [];
+    private string _sym => LiteUnits.Symbol(Units.Unit);
+
+    // Transient event recolour of the balance-card comet (green = received, orange = sent).
+    // The pulse lives in a shared service so a send raised on the Send page is still visible
+    // when the user lands back here inside the window.
+    private string CometClass => Comet.Kind switch
+    {
+        CometPulseKind.Received => "comet-received",
+        CometPulseKind.Sent => "comet-sent",
+        _ => string.Empty,
+    };
+
+    private void OnCometChanged() => _ = InvokeAsync(async () =>
+    {
+        // Any comet transition means money moved recently, so refresh the figures too —
+        // otherwise the balance sits stale until the manual ↻ even though the toast and
+        // comet already announced the payment. The EXPIRY transition refreshes as well:
+        // spendable excludes 0-conf coins by design, and a payment detected unconfirmed
+        // has often confirmed by the time the pulse lapses.
+        if (_ready) await RefreshAsync();
+        StateHasChanged();
+    });
+
+    // Everything behind this dashboard is poll-based and the watcher announces each
+    // payment ONCE — a coin seen at 0-conf gains its confirmation (and so enters the
+    // spendable balance) with no further event, which left the figures stale until the
+    // manual ↻ whenever a block took longer than the pulse window. Re-pull on a steady
+    // cadence while the page is on screen; the timer dies with the page.
+    private readonly CancellationTokenSource _pageGone = new();
+
+    private async Task PeriodicRefreshAsync()
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+            while (await timer.WaitForNextTickAsync(_pageGone.Token))
+            {
+                if (!_ready) continue;
+                await InvokeAsync(async () => { await RefreshAsync(); StateHasChanged(); });
+            }
+        }
+        catch (OperationCanceledException) { /* page disposed */ }
+    }
+
+    public void Dispose()
+    {
+        Comet.Changed -= OnCometChanged;
+        _pageGone.Cancel();
+        _pageGone.Dispose();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Comet.Changed += OnCometChanged;
+        if (!await Wallet.UnlockAsync())
+        {
+            Nav.NavigateTo("setup");
+            return;
+        }
+        _address = Wallet.Address;
+        _backupVerified = await Wallet.IsBackupVerifiedAsync();
+        _ready = true;
+        await RefreshAsync();
+        _ = PeriodicRefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_refreshing) return;   // pulse + timer + ↻ can overlap — one pull at a time
+        _refreshing = true;
+        try
+        {
+            _summary = await Wallet.GetSummaryAsync();
+            // One sweep serves both the headline figure and the why-it-differs lines.
+            _breakdown = await Wallet.GetBalanceBreakdownAsync();
+            _spendable = _breakdown.Spendable;
+            _history = await Wallet.GetHistoryAsync();
+            _backupVerified = await Wallet.IsBackupVerifiedAsync();
+        }
+        finally { _refreshing = false; }
+    }
+
+    private void OpenTx(string txId) => Nav.NavigateTo($"tx/{txId}");
+    private string AmountText(long sats) => LiteUnits.Format(sats, Units.Unit);
+    private static string Short(string s) => s.Length <= 16 ? s : $"{s[..8]}…{s[^6..]}";
+}
