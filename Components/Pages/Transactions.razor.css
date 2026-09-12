@@ -1,0 +1,619 @@
+/* Title banner — copied verbatim from Send.razor.css so Transactions shares
+   the same chrome: nested red→black cards, red ➜ arrow flanks with 4-ghost
+   trails (outgoing ::before/::after + incoming .ghost-in spans), and the
+   ember flame-flicker on the title text. Scoped @keyframes get a per-file
+   Blazor suffix so reusing the names `arrowGhost` / `arrowGhostIn` /
+   `emberFlicker` from Send.razor.css doesn't collide. */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+.banner-title {
+    margin: 0;
+    padding: 12px 0;
+    text-align: center;
+    font-weight: 500;
+    color: #fff;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    white-space: nowrap;
+    animation: slideInFromLeft 5s ease-out infinite;
+}
+
+/* Slide the whole title (text + flanking arrows; the parent transform
+   composes with each .banner-emoji's own rotation) in from off-screen left,
+   hold visible for the middle of the cycle, fade out in place, then snap
+   back to the off-screen start while invisible — invisible reset so the
+   loop wrap has no visible jump. The arrow ghost animations on the
+   .banner-emoji children continue independently. */
+@keyframes slideInFromLeft {
+    0%   { transform: translateX(-100%); opacity: 0; }
+    20%  { transform: translateX(0);     opacity: 1; }
+    85%  { transform: translateX(0);     opacity: 1; }
+    95%  { transform: translateX(0);     opacity: 0; }
+    100% { transform: translateX(-100%); opacity: 0; }
+}
+
+.banner-emoji {
+    text-shadow: none;
+    margin: 0 5rem;
+    display: inline-block;
+    transform: translateY(-2px);
+}
+
+.banner-emoji.arrow-r {
+    color: #d10000;
+    position: relative;
+    /* Rotate the flank via a custom property so a co-class (.arrow-sw) can
+       just override --rot. translateY(-2px) stays leftmost so the baseline
+       nudge is in screen space; the rotation comes after so it also rotates
+       the inner coordinate system. The ghost keyframes (translateX) inside
+       this rotated frame then naturally travel along the rotated X axis. */
+    --rot: -45deg;          /* default: northeast */
+    transform: translateY(-2px) rotate(var(--rot));
+}
+/* Second-arrow variant pointing southwest — same chrome and ghost rules, just
+   different angle. Used alongside .arrow-r in the same span; --rot wins by
+   source order. */
+.banner-emoji.arrow-r.arrow-sw { --rot: 135deg; }
+
+/* The second arrow in each NE+SW cluster gets pulled toward the first so the
+   pair reads as one tight unit rather than two widely-spaced glyphs. Marked
+   explicitly with .pair-buddy because the `+ .banner-emoji` adjacent-sibling
+   selector ignores text nodes — it would otherwise also match the right NE
+   arrow (its previous element sibling is the LEFT NE, with "Transactions"
+   between them treated as a non-element) and pull the right flank into the
+   title area. Default 5rem L+R margins = 10rem gap; this brings the in-pair
+   gap down to ~2rem. */
+.banner-emoji.pair-buddy { margin-left: -4.5rem; }
+.banner-emoji.arrow-r::before,
+.banner-emoji.arrow-r::after {
+    content: "➜";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: inherit;
+    pointer-events: none;
+    animation: arrowGhost 2.5s linear infinite;
+}
+.banner-emoji.arrow-r::after { animation-delay: 1.25s; }
+
+@keyframes arrowGhost {
+    0%   { transform: translateX(0);    opacity: 0;    }
+    20%  { transform: translateX(10px); opacity: 0.55; }
+    100% { transform: translateX(60px); opacity: 0;    }
+}
+
+.banner-emoji.arrow-r .ghost-in {
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: inherit;
+    pointer-events: none;
+    animation: arrowGhostIn 2.5s linear infinite;
+}
+.banner-emoji.arrow-r .ghost-in:nth-of-type(2) { animation-delay: 1.25s; }
+
+@keyframes arrowGhostIn {
+    0%   { transform: translateX(-60px); opacity: 0;    }
+    80%  { transform: translateX(-10px); opacity: 0.55; }
+    100% { transform: translateX(0);     opacity: 0;    }
+}
+
+.tx-toolbar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.tx-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 0.5rem 0.75rem;
+    width: 100%;
+}
+
+/* Full-width zero-height spacer that forces a wrap in the flex row, so the
+   controls after it (Mined / Quick range / Search) start on a new line. */
+.filt-break {
+    flex-basis: 100%;
+    height: 0;
+}
+
+/* Each filter = small uppercase caption above its control. */
+.filt {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.filt select,
+.filt input {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.5rem;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.filt input[type="number"] { width: 6.5rem; }
+.filt input[type="date"]   { width: 9.5rem; }
+.filt-search input         { width: 14rem; }
+
+.filt select option { background: #1a1a1a; color: #fff; }
+
+.filt select:focus,
+.filt input:focus {
+    outline: none;
+    border-color: #ff4d3a;
+    box-shadow: 0 0 0 2px rgba(255, 77, 58, 0.25);
+}
+
+/* Make the date-picker indicator visible on the dark control. */
+.filt input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+    cursor: pointer;
+}
+
+/* Exclude-Mined checkbox — reset the generic .filt input box styling. */
+.filt-check .chk {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    color: #fff;
+    text-transform: none;
+    letter-spacing: normal;
+    padding: 0.35rem 0.5rem;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.filt-check input[type="checkbox"] {
+    width: auto;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    border-radius: 0;
+    accent-color: #ff4d3a;
+    cursor: pointer;
+}
+
+/* Date quick-range presets. */
+.date-presets .preset-row {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.preset-btn {
+    font-size: 0.78rem;
+    padding: 0.3rem 0.5rem;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.preset-btn:hover {
+    border-color: #ff4d3a;
+    background: rgba(255, 77, 58, 0.18);
+}
+
+/* Type multi-select — a custom dropdown of checkboxes (a single <select> can't
+   pick several). The toggle mimics the other .filt controls. */
+.type-dd { position: relative; }
+.type-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    min-width: 7.5rem;
+    font-size: 0.85rem;
+    padding: 0.35rem 0.5rem;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: normal;
+}
+.type-toggle.open,
+.type-toggle:hover { border-color: #ff4d3a; }
+/* Match the native <select> arrow on Status/Direction: a thin white CHEVRON
+   (two strokes), not a filled triangle. A square with right+bottom borders
+   rotated 45° points down. */
+.type-chev {
+    width: 8px;
+    height: 8px;
+    border-right: 1.5px solid #fff;
+    border-bottom: 1.5px solid #fff;
+    transform: translateY(-2px) rotate(45deg);
+    flex: none;
+}
+
+.type-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+}
+.type-menu {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    z-index: 11;
+    min-width: 100%;
+    background: #1a1a1a;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 0.25rem;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.type-opt {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.85rem;
+    color: #fff;
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.type-opt:hover { background: rgba(255, 77, 58, 0.18); }
+.type-opt input[type="checkbox"] {
+    accent-color: #ff4d3a;
+    cursor: pointer;
+}
+
+/* Export dropdown — reuses .type-menu/.type-backdrop but opens UPWARD (the actions
+   row sits at the bottom of the filter card, which clips overflow). */
+.export-dd { position: relative; display: inline-block; }
+.export-menu {
+    top: auto;
+    bottom: calc(100% + 2px);
+    min-width: 9rem;
+}
+.export-opt {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.85rem;
+    color: #fff;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.export-opt:hover:not(:disabled) { background: rgba(255, 77, 58, 0.18); }
+.export-opt:disabled { opacity: 0.5; cursor: default; }
+.export-msg {
+    text-align: center;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.78);
+    margin-top: 0.5rem;
+    word-break: break-all;
+}
+
+.tx-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    width: 100%;
+}
+
+/* Match the Dashboard cards' darker fill: the global .card uses a light
+   translucent wash (rgba(255,255,255,0.05)); Dashboard overrides it to
+   rgba(0,0,0,0.65). Same backdrop blur(10px) from the global .card is kept. */
+.tx-filter-card,
+.tx-table-card {
+    background-color: rgba(0, 0, 0, 0.3);
+}
+
+/* Gap between the Search & Filter card and the Results card. */
+.tx-filter-card {
+    margin-bottom: 1.5rem;
+}
+
+/* These are static panels, not clickable — kill the global .card:hover
+   lift + glow (wallet.css), like the Dashboard does for its cards. */
+.tx-filter-card:hover,
+.tx-table-card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* Count lives at the right of the black header bar; title left, count right. */
+.tx-filter-header {
+    justify-content: space-between;
+}
+
+.tx-count {
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.65);
+    font-weight: 400;            /* keep its lighter look vs the bold .status-header span */
+    white-space: nowrap;
+}
+
+.tx-nomatch {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+    font-style: italic;
+    padding: 1rem !important;
+}
+
+/* Totals bar above the Ledger table — a running tally of the filtered set. */
+.tx-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    width: fit-content;          /* shrink-wrap to the totals... */
+    max-width: 100%;             /* ...but wrap instead of overflowing */
+    margin: 0 auto 1rem;         /* centered under the header */
+    background: #000;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+    padding: 0.55rem 1rem;
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.75);
+}
+.tx-summary > span + span::before {
+    content: "·";
+    margin: 0 0.6rem;
+    color: rgba(255, 255, 255, 0.4);   /* neutral dots regardless of segment colour */
+}
+/* Category counts reuse the table's colour scheme (TxDisplay.ColourClass). */
+.tx-summary .send-cell     { color: #ff6b6b; }
+.tx-summary .receive-cell  { color: var(--blz-success); }
+.tx-summary .mined-cell    { color: #1e90ff; }
+.tx-summary .immature-cell { color: #d63384; }
+.tx-summary .sum-pos  { color: var(--blz-success); }  /* net positive — green */
+.tx-summary .sum-neg  { color: #ff6b6b; }             /* net negative — red */
+.tx-summary .sum-zero { color: #fff; }                /* net exactly 0 — white */
+
+/* =========================================================================
+   Ledger — a CSS-grid "table" so <Virtualize> can window the rows (only the
+   visible ~30 render) for smooth infinite scroll over the full history. The
+   grid columns are shared by the sticky header and every data row so they line
+   up; .tx-grid-body is the scroll container Virtualize measures.
+   ========================================================================= */
+.tx-grid {
+    font-size: 0.9rem;
+    display: flex;
+    overflow-x: auto;               /* horizontal scroll when the columns exceed the card */
+}
+/* The table's natural width: header + body live inside this, so they move together
+   horizontally. flex:none keeps it at content width; margin-inline:auto on a FLEX
+   item centres it when it fits but collapses to 0 (start, fully scrollable) when it
+   overflows — unlike block margin:auto / justify-content:center, which clip. */
+.tx-grid-inner {
+    flex: none;
+    width: max-content;
+    margin-inline: auto;
+}
+/* Themed horizontal scrollbar to match the vertical one. */
+.tx-grid::-webkit-scrollbar { height: 10px; }
+.tx-grid::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
+.tx-grid::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 5px;
+}
+.tx-grid::-webkit-scrollbar-thumb:hover { background: rgba(255, 77, 58, 0.55); }
+
+.tx-grid-body {
+    max-height: 55vh;
+    overflow-y: auto;
+    scrollbar-gutter: stable;   /* always reserve the gutter so columns stay aligned */
+}
+
+/* Themed scrollbar — the default grey/white one looks out of place on the dark card. */
+.tx-grid-body::-webkit-scrollbar { width: 10px; }
+.tx-grid-body::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
+.tx-grid-body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 5px;
+}
+.tx-grid-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 77, 58, 0.55); }
+
+.tx-grid-head,
+.tx-row {
+    display: grid;
+    grid-template-columns: var(--tx-cols);   /* set per visible columns on .tx-grid */
+    justify-content: center;                 /* centre the fixed columns in the card */
+    align-items: center;
+}
+
+/* Column visibility toggles — their own black container at the top of the Ledger
+   card (matches the totals bar: centred, shrink-to-fit). */
+.col-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem 0.9rem;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto 1rem;
+    background: #000;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+    padding: 0.55rem 1rem;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.78);
+}
+.col-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    cursor: pointer;
+    white-space: nowrap;
+    color: #cf2013;          /* brand primary (--blz-primary), matches the nav bar */
+    font-weight: 600;
+}
+.col-toggle input[type="checkbox"] {
+    accent-color: #cf2013;   /* brand primary (--blz-primary) */
+    cursor: pointer;
+}
+
+/* Header sits ABOVE the scroll body now (so it's always visible without needing
+   an opaque background). No black fill — just the red underline. The 10px
+   padding-right matches the body's reserved scrollbar gutter so columns line up. */
+.tx-grid-head {
+    padding-right: 10px;
+    border-bottom: 2px solid rgba(158, 0, 15, 0.6);
+}
+.tx-grid-head .th {
+    text-align: center;
+    padding: 0.5rem 0.75rem;
+    color: #ff4d3a;
+    font-weight: 600;
+}
+.tx-grid-head .th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+.tx-grid-head .th.sortable:hover { color: #ff6b5a; }
+.tx-grid-head .th .sort-arrow {
+    font-size: 0.7rem;
+    color: #ff4d3a;
+    opacity: 0.35;          /* dimmed = sortable but not the active column */
+}
+.tx-grid-head .th.sorted .sort-arrow { opacity: 1; }
+
+.tx-row .td {
+    text-align: center;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* Zebra striping by ABSOLUTE row index (.row-alt set from _rowIndex) so it
+   stays stable as Virtualize recycles rows — nth-child would flicker on scroll. */
+.tx-row.row-alt { background: rgba(0, 0, 0, 0.55); }
+.tx-row:hover   { background: rgba(255, 255, 255, 0.04); }
+
+.tx-grid .num { font-variant-numeric: tabular-nums; }
+
+/* Address: monospace, single line + ellipsis (keeps rows a fixed height for
+   virtualization); the full address shows on hover via the cell's title. */
+.tx-grid .mono {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Saved Address Book label names — violet (the "—" placeholder keeps .white-col). */
+.tx-row .td.label-col { color: #b388ff; }
+
+/* Soft-white non-category columns (Date / Address / Conf.); address link too. */
+.tx-row .td.white-col,
+.tx-row .td.white-col a.explorer-link { color: rgba(255, 255, 255, 0.7); }
+
+/* (Search-match highlight `.search-hl` lives in global wallet.css — it's rendered
+   from a MarkupString so it has no scope attribute, and its blink @keyframes must be
+   global too.) */
+
+/* Category colour-coding (Type / Amount / Fee). Orphan/unknown left default. */
+.tx-grid .tx-type { text-transform: capitalize; }
+.tx-grid .send-cell     { color: #ff6b6b; }             /* send — red */
+.tx-grid .receive-cell  { color: var(--blz-success); }  /* receive — green */
+.tx-grid .mined-cell    { color: #1e90ff; }             /* generate ("Mined") — azure */
+.tx-grid .immature-cell { color: #d63384; }             /* immature — hot pink */
+.tx-grid .orphan-cell   { color: #c0c0c0; }             /* orphan — light grey (was the dark default) */
+
+/* =========================================================================
+   Diagonal-drift coin-pile background — a tiled grid (2x the viewport) whose
+   image pattern repeats every viewport, scrolling diagonally and looping
+   seamlessly (translates by exactly one viewport-block; the repeat hides the
+   wrap). Distinct from Send's horizontal scroll and Receive's in-place twinkle.
+   The .diag-grid + img children are created by initTransactionsBackground in
+   mining-background.js (need ::deep); the keyframe is local (scoped @keyframes
+   don't cross components). Grid tracks and the per-loop shift (--diag-x/y) are
+   set inline from JS.
+   ========================================================================= */
+.coincol-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.coincol-bg ::deep .diag-grid {
+    display: grid;
+    width: max-content;
+    will-change: transform;
+    animation: coinDiag 60s linear infinite;
+}
+
+.coincol-bg ::deep .diag-grid img {
+    width: 100%;
+    height: auto;
+    display: block;
+    animation: txPulse 6s ease-in-out infinite;  /* per-tile breathing, like Send/Receive */
+}
+
+@keyframes coinDiag {
+    from { transform: translate(calc(-1 * var(--diag-x)), calc(-1 * var(--diag-y))); }
+    to   { transform: translate(0, 0); }
+}
+
+/* Gentle opacity + scale breathing on each tile — same family as Send's
+   tilePulse and Receive's twinkle/zoom. Per-tile delay is set inline (periodic
+   per block, so it stays seamless across the diagonal wrap). */
+@keyframes txPulse {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50%      { opacity: 1;    transform: scale(1.05); }
+}
+
+/* Keep the table readable above the background; the coin field still shows in
+   the side margins and (dimly) behind. Tune the alpha to taste. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(207, 32, 19, 0.3);
+    border-radius: 12px;
+}

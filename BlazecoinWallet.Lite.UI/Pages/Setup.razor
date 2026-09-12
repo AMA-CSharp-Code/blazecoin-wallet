@@ -1,0 +1,193 @@
+@page "/setup"
+@layout LiteLayout
+@inject LiteWalletService Wallet
+@inject NavigationManager Nav
+
+@* First-run ceremony: create (mnemonic shown ONCE, confirmed with a word quiz) or restore.
+   An optional passphrase ("25th word") adds a factor beyond the paper seed. The mnemonic
+   (+ passphrase, if set) IS the wallet — there is no other backup on a phone. *@
+<div class="lite-card">
+    <h2 class="lite-title-center">Set Up Your Wallet</h2>
+
+    @if (_freshMnemonic == null)
+    {
+        <p class="lite-sub">
+            Your wallet lives on this device, guarded by a 12-word recovery phrase.
+            The phrase is the ONLY way back in if the phone is lost — treat it like the coins themselves.
+        </p>
+
+        <button class="lite-btn lite-btn-ghost" @onclick="() => _showPassphrase = !_showPassphrase">
+            @(_showPassphrase ? "Hide passphrase option" : "Advanced: add a passphrase")
+        </button>
+        @if (_showPassphrase)
+        {
+            <div class="lite-error" style="margin-top:8px">
+                Optional extra secret. If you set one, you'll need BOTH the phrase AND this passphrase
+                to recover — lose it and the coins are gone. Leave blank if unsure.
+            </div>
+            @* Masked field + a typo = coins on a derivation nobody can reproduce — require a
+               confirming re-entry (audit round-3 C3). *@
+            <input class="lite-input" type="password" placeholder="Passphrase (optional)" @bind="_createPassphrase" />
+            <input class="lite-input" type="password" placeholder="Confirm passphrase" @bind="_createPassphraseConfirm" />
+        }
+
+        <div style="height:10px"></div>
+        <button class="lite-btn" @onclick="CreateAsync" disabled="@_busy">Create a New Wallet</button>
+        <div style="height:10px"></div>
+        <button class="lite-btn lite-btn-ghost" @onclick="() => _showRestore = !_showRestore">
+            @(_showRestore ? "Hide Recovery Phrase" : "Restore from Recovery Phrase")
+        </button>
+
+        @if (_showRestore)
+        {
+            <div style="margin-top:12px">
+                <textarea class="lite-input" placeholder="Enter your 12 or 24 words, separated by spaces"
+                          @bind="_restoreWords"></textarea>
+                @* Restore keeps its OWN passphrase state — a value typed under the create
+                   panel's "Advanced" must never silently apply here (audit round-3 C3). *@
+                <input class="lite-input" type="password" placeholder="Passphrase (only if you set one)" @bind="_restorePassphrase" />
+                <button class="lite-btn" @onclick="RestoreAsync" disabled="@_busy">Restore Wallet</button>
+            </div>
+        }
+    }
+    else if (!_quiz)
+    {
+        <p class="lite-sub"><strong>Write these @_words.Length words down, in order, on paper.</strong>
+            Anyone with the phrase controls the coins; without it a lost phone means lost coins.</p>
+        <div class="lite-mnemonic">
+            @for (var i = 0; i < _words.Length; i++)
+            {
+                <span class="lite-word"><b>@(i + 1)</b>@_words[i]</span>
+            }
+        </div>
+        <label class="lite-sub" style="display:block;margin-bottom:10px">
+            <input type="checkbox" @bind="_confirmedBackup" /> I have written the phrase down and stored it safely.
+        </label>
+        <button class="lite-btn" @onclick="StartQuiz" disabled="@(!_confirmedBackup)">Continue</button>
+    }
+    else
+    {
+        <p class="lite-sub">Quick check — from your <strong>written copy</strong> (not the screen), enter these words:</p>
+        @foreach (var idx in _quizIndices)
+        {
+            <label class="lite-sub">Word #@(idx + 1)</label>
+            <input class="lite-input" value="@_quizAnswers[idx]"
+                   @onchange="e => _quizAnswers[idx] = e.Value?.ToString() ?? string.Empty" />
+        }
+        <button class="lite-btn" @onclick="FinishQuizAsync">Open My Wallet</button>
+        <div style="height:8px"></div>
+        @* Escape hatch for someone who ticked the box without really writing the words
+           down. Safe against rubber-stamping: re-entering the quiz draws FRESH random
+           indices, so passing still requires the whole written phrase — you can't note
+           the two asked words, peek, and type them back. *@
+        <button class="lite-btn lite-btn-ghost" @onclick="() => _quiz = false">Show my words again</button>
+        <div style="height:8px"></div>
+        <button class="lite-btn lite-btn-ghost" @onclick="() => _showSkipWarning = true">Skip for now</button>
+        @if (_quizError != null) { <div class="lite-error">@_quizError</div> }
+
+        @* Skipping is allowed but never silent: an explicit are-you-sure with the safe
+           action as the primary button. In-app modal, not a native dialog. *@
+        @if (_showSkipWarning)
+        {
+            <div class="lite-modal">
+                <div class="lite-card lite-modal-card">
+                    <h2>⚠️ Skip the backup check?</h2>
+                    <p class="lite-sub">
+                        Your recovery phrase is the ONLY way back into this wallet. If this phone is
+                        lost or broken before the phrase is written down, the coins are gone forever —
+                        nobody can recover them.
+                    </p>
+                    <button class="lite-btn" @onclick="() => _showSkipWarning = false">Go back — I'll write it down</button>
+                    <div style="height:8px"></div>
+                    <button class="lite-btn lite-btn-ghost" @onclick="SkipToWallet">I accept the risk — skip</button>
+                </div>
+            </div>
+        }
+    }
+
+    @if (_error != null) { <div class="lite-error">@_error</div> }
+</div>
+
+@code {
+    private bool _busy;
+    private bool _showRestore;
+    private bool _showPassphrase;
+    private bool _confirmedBackup;
+    private string? _freshMnemonic;
+    private string[] _words = [];
+    private string _restoreWords = string.Empty;
+    private string _createPassphrase = string.Empty;
+    private string _createPassphraseConfirm = string.Empty;
+    private string _restorePassphrase = string.Empty;
+    private string? _error;
+
+    // Backup quiz — two random words, no peek-back once it starts (audit round-3 C4).
+    private bool _quiz;
+    private bool _showSkipWarning;
+    private int[] _quizIndices = [];
+    private Dictionary<int, string> _quizAnswers = new();
+    private string? _quizError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (await Wallet.UnlockAsync()) Nav.NavigateTo("");
+    }
+
+    private async Task CreateAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            if (_createPassphrase != _createPassphraseConfirm)
+            {
+                _error = "The passphrases don't match — re-enter them.";
+                return;
+            }
+            _freshMnemonic = await Wallet.CreateNewWalletAsync(passphrase: _createPassphrase);
+            _words = _freshMnemonic.Split(' ');
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task RestoreAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            await Wallet.RestoreWalletAsync(_restoreWords, _restorePassphrase);
+            Nav.NavigateTo("");
+        }
+        catch (FormatException ex) { _error = ex.Message; }
+        catch (Exception) { _error = "That phrase could not be restored — check the words and try again."; }
+        finally { _busy = false; }
+    }
+
+    private void SkipToWallet() => Nav.NavigateTo("");
+
+    private void StartQuiz()
+    {
+        // Two distinct random words (min of 2 and the phrase length), sorted for a tidy prompt.
+        var count = Math.Min(2, _words.Length);
+        _quizIndices = Enumerable.Range(0, _words.Length)
+            .OrderBy(_ => Random.Shared.Next()).Take(count).OrderBy(i => i).ToArray();
+        _quizAnswers = _quizIndices.ToDictionary(i => i, _ => string.Empty);
+        _quizError = null;
+        _quiz = true;
+    }
+
+    private async Task FinishQuizAsync()
+    {
+        foreach (var idx in _quizIndices)
+        {
+            if (!string.Equals(_quizAnswers[idx].Trim(), _words[idx], StringComparison.OrdinalIgnoreCase))
+            {
+                _quizError = "One or more words don't match — check your written copy.";
+                return;
+            }
+        }
+        // A passed quiz PROVES the written backup — clears the Home warning chip.
+        await Wallet.MarkBackupVerifiedAsync();
+        Nav.NavigateTo("");
+    }
+}

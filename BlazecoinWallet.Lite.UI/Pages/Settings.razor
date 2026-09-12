@@ -1,0 +1,497 @@
+@page "/settings"
+@layout LiteLayout
+@implements IDisposable
+@using BlazecoinWallet.Lite.Data
+@inject IGatewaySettings Gateways
+@inject IPersonalNodeSettings Node
+@inject IP2PNodeSettings P2PNodes
+@inject IUnitSettings Units
+@inject IExplorerSettings Explorer
+@inject ISkinSettings Skin
+@inject IJSRuntime Js
+@inject NavigationManager Nav
+@inject HeaderChainSync HeaderSync
+@inject IAutoLockSettings AutoLock
+
+@* Advanced settings — reachable from the header gear, NOT the main nav. Normal users never
+   come here; the wallet ships pointed at the official gateway. The gateway edit is gated
+   behind a warning + an "Advanced" reveal so it isn't a casual footgun. *@
+<div class="lite-card">
+    <h2>Display Units</h2>
+    <p class="lite-sub">How amounts are shown throughout the wallet. This is display only — it never changes what you send.</p>
+    <select class="lite-input" value="@Units.Unit" @onchange="OnUnitChanged">
+        <option value="@LiteUnit.Blz">BLZ (1 = 100,000,000 sat)</option>
+        <option value="@LiteUnit.MilliBlz">mBLZ (1 = 100,000 sat)</option>
+        <option value="@LiteUnit.Sat">Satoshis (base unit)</option>
+    </select>
+</div>
+
+<div class="lite-card">
+    <h2>Appearance</h2>
+    <p class="lite-sub">The animated background — Digital Fire Fighters (the default), coins
+        from the V2.0 desktop wallet, or the axe pattern from the website account page. Purely
+        cosmetic — it pauses when the app is
+        in the background and turns itself off if your device is set to reduce motion.</p>
+    <select id="skin-select" class="lite-input" value="@_skinChoice" @onchange="OnSkinChanged">
+        <option value="@LiteSkin.Random">Random (new skin each launch)</option>
+        <option value="@LiteSkin.PixelatedCoins">Pixelated Coins</option>
+        <option value="@LiteSkin.AxePattern">Axe Pattern</option>
+        <option value="@LiteSkin.DigitalFireFighters">Digital Fire Fighters</option>
+        <option value="@LiteSkin.None">Off</option>
+    </select>
+</div>
+
+<PinCard />
+
+@if (AutoLock.Supported)
+{
+    @* Web head only (Android/iOS re-lock on backgrounding instead). Idle ⇒ the keys are dropped
+       and the wallet password is asked again; the header 🔒 does the same on demand. *@
+    <div class="lite-card">
+        <h2>Auto-Lock</h2>
+        <p class="lite-sub">Lock the wallet after a period of no activity in this browser tab
+            (a hidden tab counts as idle). Locking forgets the keys until you enter the wallet
+            password again — the 🔒 button in the header locks immediately.</p>
+        <select id="autolock-select" class="lite-input" value="@_autoLockMinutes" @onchange="OnAutoLockChanged">
+            <option value="0">Never</option>
+            <option value="1">After 1 minute</option>
+            <option value="5">After 5 minutes</option>
+            <option value="15">After 15 minutes</option>
+            <option value="30">After 30 minutes</option>
+            <option value="60">After 1 hour</option>
+        </select>
+    </div>
+}
+
+<div class="lite-card">
+    <h2>Recovery Phrase</h2>
+    <p class="lite-sub">View your recovery phrase and prove your written backup — the phrase
+        is the only way back into this wallet if the @(IsBrowser ? "browser data is cleared" : "phone is lost").</p>
+    <button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("verify-backup"))">View &amp; Verify Backup</button>
+    @if (IsBrowser)
+    {
+        @* Web head only. The vault lives in this browser's localStorage, which is scoped to
+           the ORIGIN — so a wallet created on gw.blazecoin.co.uk does not exist on
+           gw2.blazecoin.co.uk (or the sslip.io names): the user lands on a fresh setup screen
+           there and must restore from the phrase. Coins are never at risk (they are on-chain),
+           but people reasonably expect "the same wallet" on the second site — say so before
+           they find out by surprise. Android/iOS have one app, one store, so no note there. *@
+        <div class="lite-toast lite-toast-pending" style="margin-top:.75rem">
+            <span>🔒 <b>This wallet lives in this browser, on this site only.</b>
+                It is saved for <b>@SiteHost</b> — open the wallet on another Blazecoin
+                site (or another browser, or after clearing site data) and it will
+                <b>not</b> be there: you will see the setup screen and must
+                <b>restore from your recovery phrase</b>. Your coins are on the blockchain,
+                not in the browser, so nothing is lost — but the phrase is the only
+                thing that carries the wallet across.</span>
+        </div>
+    }
+</div>
+
+<div class="lite-card">
+    <h2>More</h2>
+    <button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("provenance"))">🪙 Coin Provenance</button>
+    <div style="height:8px"></div>
+    <button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("tools"))">🖊️ Sign / Verify a Message</button>
+    <div style="height:8px"></div>
+    <button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("addressbook"))">📇 Address Book</button>
+    <div style="height:8px"></div>
+    <button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("watch"))">👁️ Watch an Address</button>
+</div>
+
+<div class="lite-card">
+    <h2>Connection</h2>
+    <p class="lite-sub">Your wallet reads balances and broadcasts payments through a Blazecoin gateway.</p>
+
+    <label class="lite-sub">Gateway@(Gateways.Current.Count > 1 ? "s" : "")</label>
+    <div class="lite-address" style="text-align:left">
+        @foreach (var g in Gateways.Current)
+        {
+            <div>@g</div>
+        }
+    </div>
+    @if (Gateways.IsCustom)
+    {
+        <p class="lite-sub">⚠️ Using a custom gateway (not the official default).</p>
+    }
+    @if (IsBrowser)
+    {
+        @* The list shows several site names, which invites "so I can just open the other one".
+           The API fails over between them automatically for THIS page; the wallet itself does
+           not travel — see the Recovery Phrase card. *@
+        <p class="lite-sub">These are API failover addresses — the wallet you have open here
+            switches between them automatically if one is unreachable. Opening the wallet
+            <em>as a website</em> on a different name is a different site: it will not show
+            this wallet until you restore it from your recovery phrase.</p>
+    }
+
+    <button class="lite-btn lite-btn-ghost" @onclick="() => _advanced = !_advanced">
+        @(_advanced ? "Hide advanced" : "Advanced…")
+    </button>
+
+    @if (_advanced)
+    {
+        <div style="margin-top:14px">
+            <div class="lite-error">
+                Only change this if you run your own node or trust a specific gateway operator.
+                A malicious gateway can show wrong balances or refuse to send. It cannot steal
+                your coins (your keys never leave this device), and non-https gateways are refused.
+            </div>
+            <label class="lite-sub">Gateway URLs (one per line, tried in order)</label>
+            <textarea class="lite-input" rows="3" @bind="_editText" placeholder="https://gateway.example/"></textarea>
+
+            <button class="lite-btn" @onclick="Save" disabled="@_busy">Save</button>
+            <div style="height:8px"></div>
+            <button class="lite-btn lite-btn-ghost" @onclick="ResetToDefault" disabled="@_busy">Reset to official default</button>
+
+            @if (_error != null)
+            {
+                <div class="lite-error">@_error</div>
+            }
+            @if (_saved)
+            {
+                <div class="lite-success" style="text-align:center; word-break:normal;">Saved. Restart the wallet to connect through the new gateway.</div>
+            }
+        </div>
+    }
+</div>
+
+@if (_advanced)
+{
+    <div class="lite-card">
+        <h2>Your Own Node</h2>
+        <p class="lite-sub">
+            Connect through a Blazecoin daemon <strong>you</strong> run instead of the gateway —
+            balances come from your node's own chain data, trusting no one. History isn't
+            available in this mode (a bare daemon has no address index).
+        </p>
+
+        <label class="lite-sub" style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" checked="@_nodeEnabled" @onchange="OnToggleNode" />
+            Connect via my own node
+        </label>
+
+        @if (_nodeEnabled)
+        {
+            <label class="lite-sub">RPC URL</label>
+            <input class="lite-input" @bind="_rpcUrl" placeholder="http://127.0.0.1:55413/" />
+            <label class="lite-sub">RPC username</label>
+            <input class="lite-input" @bind="_rpcUser" placeholder="rpcauth user" />
+            <label class="lite-sub">RPC password</label>
+            <input class="lite-input" type="password" @bind="_rpcPassword" placeholder="rpcauth password" />
+
+            <button class="lite-btn" @onclick="SaveNode" disabled="@_busy">Save node connection</button>
+        }
+        else if (Node.Enabled)
+        {
+            <button class="lite-btn lite-btn-ghost" @onclick="DisableNode">Switch back to the gateway</button>
+        }
+
+        @if (_nodeError != null)
+        {
+            <div class="lite-error">@_nodeError</div>
+        }
+        @if (_nodeSaved)
+        {
+            <div class="lite-success" style="text-align:center; word-break:normal;">Saved. Restart the wallet to connect through your node.</div>
+        }
+    </div>
+
+    <div class="lite-card">
+        <h2>Broadcast Peers</h2>
+        <p class="lite-sub">
+            If every gateway is unreachable, the wallet sends your signed transaction directly
+            to these full nodes (host:port). You rarely need to change these.
+        </p>
+        @if (P2PNodes.IsCustom)
+        {
+            <p class="lite-sub">⚠️ Using a custom node list.</p>
+        }
+        <label class="lite-sub">Nodes (one per line, tried in order)</label>
+        <textarea class="lite-input" rows="3" @bind="_p2pText" placeholder="85.15.179.171:55414"></textarea>
+
+        <button class="lite-btn" @onclick="SaveP2P" disabled="@_busy">Save peers</button>
+        <div style="height:8px"></div>
+        <button class="lite-btn lite-btn-ghost" @onclick="ResetP2P" disabled="@_busy">Reset to default peers</button>
+
+        @if (_p2pError != null)
+        {
+            <div class="lite-error">@_p2pError</div>
+        }
+        @if (_p2pSaved)
+        {
+            <div class="lite-success" style="text-align:center; word-break:normal;">Saved. Restart the wallet to use the new peers.</div>
+        }
+    </div>
+}
+
+<div class="lite-card">
+    <h2>Block Explorer</h2>
+    <p class="lite-sub">
+        Transactions and addresses are tappable links on the Blazecoin explorer by default.
+        Point it at another explorer's permalink root, or leave it empty for no links.
+    </p>
+    <label class="lite-sub">Explorer URL</label>
+    <input class="lite-input" @bind="_explorerText" placeholder="@LiteExplorer.DefaultBaseUrl (the default explorer)" />
+    <button class="lite-btn" @onclick="SaveExplorer" disabled="@_busy">Save explorer</button>
+    @if (_explorerError != null)
+    {
+        <div class="lite-error">@_explorerError</div>
+    }
+    @if (_explorerSaved)
+    {
+        <div class="lite-success" style="text-align:center; word-break:normal;">Saved — links use the new explorer right away.</div>
+    }
+</div>
+
+@if (HeaderSync.Available)
+{
+    <div class="lite-card">
+        <h2>Chain Verification</h2>
+        <p class="lite-sub">
+            This wallet independently checks block headers — their scrypt proof-of-work and
+            difficulty — so coin maturity and confirmations aren't taken on the gateway's word.
+            A gateway can't make coins look more confirmed than the real chain supports.
+        </p>
+        <div class="lite-address" style="text-align:left">
+            Verified to block <strong>@(_verifiedHeight > 0 ? _verifiedHeight.ToString("N0") : "checking…")</strong>
+        </div>
+    </div>
+}
+
+<div class="lite-card">
+    <h2>About</h2>
+    <div class="bz-details" style="max-width:none;">
+        <p class="lite-sub" style="margin:0 0 10px;">
+            A lite Blazecoin wallet — your keys live on this device; balances and broadcasts go
+            through a Blazecoin gateway (or your own node). Legacy scrypt UTXO chain, est. 2014.
+        </p>
+        <div class="lite-sub"><strong>App</strong> · Blazecoin Wallet (Lite)</div>
+        <div class="lite-sub"><strong>Version</strong> · @AppVersion</div>
+        <div class="lite-sub"><strong>Network</strong> · Mainnet (P2P port @BlazecoinChain.P2PPort)</div>
+        <div class="lite-sub"><strong>Address type</strong> · Legacy P2PKH (B…)</div>
+    </div>
+</div>
+
+@code {
+    // Web head only (Blazor WebAssembly): true in the browser, false on Android/iOS and the
+    // Blazor Server dev host. Gates the "this wallet lives on this site" notes above.
+    private static bool IsBrowser => OperatingSystem.IsBrowser();
+    private string SiteHost => new Uri(Nav.BaseUri).Host;
+
+    private bool _advanced;
+    private bool _busy;
+    private bool _saved;
+    private string? _error;
+    private string _editText = string.Empty;
+
+    // Personal-node section.
+    private bool _nodeEnabled;
+    private bool _nodeSaved;
+    private string? _nodeError;
+    private string _rpcUrl = "http://127.0.0.1:55413/";
+    private string _rpcUser = string.Empty;
+    private string _rpcPassword = string.Empty;
+
+    // P2P broadcast-peers section.
+    private bool _p2pSaved;
+    private string? _p2pError;
+    private string _p2pText = string.Empty;
+
+    // Explorer section.
+    private bool _explorerSaved;
+    private string? _explorerError;
+    private string _explorerText = string.Empty;
+
+    // Appearance section.
+    private LiteSkin _skinChoice;
+
+    // Auto-lock card (web head).
+    private int _autoLockMinutes;
+
+    private void OnAutoLockChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var m)) { AutoLock.SetIdleMinutes(m); _autoLockMinutes = m; }
+    }
+
+    // Chain-verification card.
+    private long _verifiedHeight;
+
+    /// <summary>Kick a header sync so the "verified to block N" line reflects the latest
+    /// PoW-checked tip when this page is opened directly (Home already syncs on balance reads).
+    /// Also subscribe to <see cref="HeaderChainSync.TipAdvanced"/> so the line updates live even
+    /// when an ALREADY-RUNNING background sync (which our skip-if-busy SyncAsync returns behind)
+    /// is what moves the tip.</summary>
+    protected override async Task OnInitializedAsync()
+    {
+        if (!HeaderSync.Available) return;
+        HeaderSync.TipAdvanced += OnTipAdvanced;
+        _verifiedHeight = HeaderSync.VerifiedTipHeight;
+        // Fire-and-forget (2026-08-23): awaiting here held the WHOLE page behind a full header
+        // catch-up (minutes on a fresh browser install). The TipAdvanced subscription keeps the
+        // number live, so nothing is lost by not waiting.
+        _ = HeaderSync.SyncAsync();
+        await Task.CompletedTask;
+    }
+
+    private void OnTipAdvanced() => _ = InvokeAsync(() =>
+    {
+        _verifiedHeight = HeaderSync.VerifiedTipHeight;
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        if (HeaderSync.Available) HeaderSync.TipAdvanced -= OnTipAdvanced;
+    }
+
+    protected override void OnInitialized()
+    {
+        _skinChoice = Skin.Skin;
+        _autoLockMinutes = AutoLock.IdleMinutes;
+        _editText = string.Join('\n', Gateways.Current);
+        _p2pText = string.Join('\n', P2PNodes.Current);
+        _explorerText = Explorer.BaseUrl;
+        _nodeEnabled = Node.Enabled;
+        if (Node.Config is { } cfg)
+        {
+            _rpcUrl = cfg.RpcUrl;
+            _rpcUser = cfg.RpcUser ?? string.Empty;
+            // The stored password is intentionally not shown; re-enter to change it.
+        }
+    }
+
+    /// <summary>Persist the choice and apply it live — the layout's skin host is always
+    /// present, and the skin JS modules are shared cached modules, so stopping both and
+    /// starting the chosen one takes effect immediately.</summary>
+    private async Task OnSkinChanged(ChangeEventArgs e)
+    {
+        if (!Enum.TryParse<LiteSkin>(e.Value?.ToString(), out var choice)) return;
+        _skinChoice = choice;
+        Skin.SetSkin(choice);
+        try
+        {
+            var coins = await Js.InvokeAsync<IJSObjectReference>("import", "./_content/BlazecoinWallet.Lite.UI/js/coin-skin.js");
+            var axes = await Js.InvokeAsync<IJSObjectReference>("import", "./_content/BlazecoinWallet.Lite.UI/js/axe-skin.js");
+            var ff = await Js.InvokeAsync<IJSObjectReference>("import", "./_content/BlazecoinWallet.Lite.UI/js/firefighter-skin.js");
+            await coins.InvokeVoidAsync("stop");
+            await axes.InvokeVoidAsync("stop");
+            await ff.InvokeVoidAsync("stop");
+            // Random resolves to a concrete skin right now (the persisted choice stays Random,
+            // so the next launch rolls again).
+            var active = LiteSkinResolver.Resolve(choice) switch
+            {
+                LiteSkin.PixelatedCoins => coins,
+                LiteSkin.AxePattern => axes,
+                LiteSkin.DigitalFireFighters => ff,
+                _ => null,
+            };
+            if (active is not null) await active.InvokeVoidAsync("start", "lite-skin-host");
+        }
+        catch { /* JS not available (unlikely in a WebView) — the choice still persists for next launch */ }
+    }
+
+    private void SaveP2P()
+    {
+        _p2pError = null; _p2pSaved = false;
+        var nodes = _p2pText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        try
+        {
+            var normalised = LiteP2PNodes.NormalizeList(nodes);
+            P2PNodes.Save(normalised);
+            _p2pText = string.Join('\n', normalised);
+            _p2pSaved = true;
+        }
+        catch (ArgumentException ex)
+        {
+            _p2pError = ex.Message;
+        }
+    }
+
+    private void ResetP2P()
+    {
+        P2PNodes.ResetToDefault();
+        _p2pText = string.Join('\n', P2PNodes.Current);
+        _p2pSaved = true;
+        _p2pError = null;
+    }
+
+    private void OnUnitChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<LiteUnit>(e.Value?.ToString(), out var unit))
+            Units.Set(unit); // display-only, applies immediately (no restart needed)
+    }
+
+    private void SaveExplorer()
+    {
+        _explorerError = null; _explorerSaved = false;
+        try
+        {
+            var normalised = LiteExplorer.NormalizeBaseUrl(_explorerText); // https/empty guard
+            Explorer.Save(normalised);
+            _explorerText = normalised;
+            _explorerSaved = true;
+        }
+        catch (ArgumentException ex)
+        {
+            _explorerError = ex.Message;
+        }
+    }
+
+    // Assembly version of the shared UI library — the wallet's build version.
+    private static string AppVersion =>
+        typeof(Settings).Assembly.GetName().Version?.ToString(3) ?? "dev";
+
+    private void OnToggleNode(ChangeEventArgs e) => _nodeEnabled = (bool)(e.Value ?? false);
+
+    private void SaveNode()
+    {
+        _nodeError = null; _nodeSaved = false;
+        try
+        {
+            LitePersonalNode.NormalizeRpcUrl(_rpcUrl); // https/loopback guard before persisting
+            Node.Enable(new PersonalNodeOptions(
+                RpcUrl: _rpcUrl.Trim(),
+                RpcUser: string.IsNullOrWhiteSpace(_rpcUser) ? null : _rpcUser.Trim(),
+                RpcPassword: string.IsNullOrEmpty(_rpcPassword) ? null : _rpcPassword));
+            _nodeSaved = true;
+        }
+        catch (ArgumentException ex)
+        {
+            _nodeError = ex.Message;
+        }
+    }
+
+    private void DisableNode()
+    {
+        Node.Disable();
+        _nodeEnabled = false;
+        _nodeSaved = true;
+    }
+
+    private void Save()
+    {
+        _error = null; _saved = false;
+        var urls = _editText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        try
+        {
+            // Validate every entry (https/loopback) BEFORE persisting — reuse the same rule
+            // the failover handler enforces, so a bad URL can never be saved.
+            LiteGatewayUrls.NormalizeList(urls);
+            Gateways.Save(urls);
+            _saved = true;
+        }
+        catch (ArgumentException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void ResetToDefault()
+    {
+        Gateways.ResetToDefault();
+        _editText = string.Join('\n', Gateways.Current);
+        _saved = true;
+        _error = null;
+    }
+}

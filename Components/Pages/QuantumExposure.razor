@@ -1,0 +1,293 @@
+@page "/quantum"
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.Provenance
+@using BlazecoinWallet.Core.Services.Quantum
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject IExposureRpc ExposureRpc
+@inject IVintageSendRpc SendRpc
+
+<PageTitle>Quantum Exposure - Blazecoin Wallet V2.0</PageTitle>
+
+<div class="wallet-page">
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title">Quantum Exposure</h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+        <div class="qx-content card">
+            <div class="status-header"><span>Which of this wallet's keys the chain has already seen</span></div>
+            <div class="card-body">
+                <p>
+                    A Blazecoin address is a <em>hash</em> of a public key. The key itself only goes on-chain the first
+                    time the address <strong>spends</strong>: it sits in that transaction's signature script for ever.
+                    A large enough quantum computer could turn a public key into its private key; it can do nothing
+                    with a hash. So coins on an address that has <strong>never spent</strong> are safe until the day it
+                    signs, and coins on an address that <strong>has</strong> spent are exposed. The fix is the one lever
+                    that needs no change to the chain: move exposed coins to a fresh address and never reuse it.
+                </p>
+                <p class="muted">
+                    Reads this wallet's own transactions only — every input this wallet ever signed. A key proved to
+                    someone off-chain (a website address verification uses <code>signmessage</code>, whose signature
+                    reveals the key to whoever holds it) is not visible here.
+                </p>
+
+                <div class="qx-actions">
+                    <button class="btn btn-primary" @onclick="ScanAsync" disabled="@_scanning">
+                        @(_scanning ? "Scanning…" : (_report is null ? "Scan this wallet" : "Rescan"))
+                    </button>
+                    @if (_scanning)
+                    {
+                        <span class="muted mono">@_progressText</span>
+                        <button class="btn btn-secondary" @onclick="CancelScan">Cancel</button>
+                    }
+                </div>
+                @if (_error is not null) { <div class="alert alert-danger">@_error</div> }
+            </div>
+        </div>
+
+        @if (_report is not null)
+        {
+            <div class="qx-content card">
+                <div class="status-header"><span>Result — @_report.ScannedAtUtc.ToLocalTime().ToString("HH:mm:ss")</span></div>
+                <div class="card-body">
+                    <div class="qx-totals">
+                        <div class="qx-total qx-exposed">
+                            <div class="qx-total-label">Exposed</div>
+                            <div class="qx-total-value mono">@Blz(_report.ExposedSatoshis) BLZ</div>
+                            <div class="muted">@_report.ExposedAddressCount funded address(es) whose key is public</div>
+                        </div>
+                        <div class="qx-total qx-safe">
+                            <div class="qx-total-label">Unexposed</div>
+                            <div class="qx-total-value mono">@Blz(_report.UnexposedSatoshis) BLZ</div>
+                            <div class="muted">@_report.UnexposedAddressCount funded address(es) that have never signed</div>
+                        </div>
+                        <div class="qx-total">
+                            <div class="qx-total-label">Scanned</div>
+                            <div class="qx-total-value mono">@_report.TransactionsScanned.ToString("N0") sends</div>
+                            <div class="muted">@_report.ExposedKeyCount key(s) found on-chain in total, funded or not</div>
+                        </div>
+                    </div>
+
+                    @if (_report.Addresses.Count == 0)
+                    {
+                        <p class="muted">This wallet holds no spendable coins.</p>
+                    }
+                    else
+                    {
+                        <table class="qx-table">
+                            <thead>
+                                <tr><th>Status</th><th>Address</th><th>Label</th><th class="num">Outputs</th><th class="num">BLZ</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var a in _report.Addresses)
+                                {
+                                    <tr class="@(a.Status == ExposureStatus.Exposed ? "qx-row-exposed" : "")">
+                                        <td>
+                                            @if (a.Status == ExposureStatus.Exposed)
+                                            {
+                                                <span class="qx-badge qx-badge-exposed" title="@("Key revealed by " + a.ExposingTxId)">EXPOSED</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="qx-badge qx-badge-safe">unexposed</span>
+                                            }
+                                            @if (a.IsReused) { <span class="qx-badge qx-badge-reused" title="This address received more than once">reused</span> }
+                                        </td>
+                                        <td class="mono">@a.Address</td>
+                                        <td>@LabelOf(a.Address)</td>
+                                        <td class="num mono">@a.OutputCount.ToString("N0")</td>
+                                        <td class="num mono">@Blz(a.Satoshis)</td>
+                                        <td>
+                                            @if (a.Status == ExposureStatus.Exposed)
+                                            {
+                                                <button class="btn btn-secondary qx-btn-small" @onclick="() => SelectForSweepAsync(a)" disabled="@_sending">Sweep</button>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (_selected is not null)
+        {
+            <div class="qx-content card">
+                <div class="status-header"><span>Sweep @_selected.Address to a fresh address</span></div>
+                <div class="card-body">
+                    <p class="muted">
+                        Every confirmed output on this address goes to one brand-new legacy address from this wallet,
+                        in batches of up to @QuantumSweepPlanner.DefaultMaxInputsPerTx inputs. The old address ends
+                        empty; the new one's key stays unexposed until it spends, so spend from it once, all at once.
+                    </p>
+                    <div class="qx-form">
+                        <label>Destination (fresh, never used)
+                            <input class="mono" @bind="_destination" @bind:after="ClearPlan" />
+                        </label>
+                        <label>Fee rate (satoshis per kB — the chain relays at 0; 100,000 = the legacy 0.001 BLZ/kB)
+                            <input class="mono" @bind="_feeRate" @bind:after="ClearPlan" />
+                        </label>
+                        <div class="qx-actions">
+                            <button class="btn btn-secondary" @onclick="NewDestinationAsync" disabled="@_sending">New fresh address</button>
+                            <button class="btn btn-primary" @onclick="PlanSweep" disabled="@_sending">Plan</button>
+                            <button class="btn btn-secondary" @onclick="() => { _selected = null; ClearPlan(); }" disabled="@_sending">Close</button>
+                        </div>
+                    </div>
+
+                    @if (_planProblem is not null) { <div class="alert alert-danger">@_planProblem</div> }
+
+                    @if (_plan is not null)
+                    {
+                        <div class="qx-plan">
+                            <div><span class="muted">Inputs</span> <span class="mono">@_plan.InputCount.ToString("N0")</span> in <span class="mono">@_plan.Transactions.Count</span> transaction(s)</div>
+                            <div><span class="muted">Moves</span> <span class="mono">@Blz(_plan.OutputSatoshis) BLZ</span> to <span class="mono">@_destination</span></div>
+                            <div><span class="muted">Fee</span> <span class="mono">@Blz(_plan.FeeSatoshis) BLZ</span> (@_plan.FeeSatoshis.ToString("N0") sats)</div>
+                            @foreach (var w in _plan.Warnings) { <div class="qx-warn">⚠ @w</div> }
+                            <label class="qx-ack">
+                                <input type="checkbox" @bind="_ack" />
+                                I understand this moves real coins on-chain and cannot be undone.
+                            </label>
+                            <button class="btn btn-primary" @onclick="BroadcastAsync" disabled="@(!_ack || !_plan.Balances || _sending)">
+                                @(_sending ? "Sending…" : "Broadcast sweep")
+                            </button>
+                        </div>
+                    }
+
+                    @if (_results.Count > 0)
+                    {
+                        <div class="alert alert-success">
+                            Sent @_results.Count transaction(s):
+                            @foreach (var t in _results) { <div class="mono">@t</div> }
+                            Rescan to see the new picture.
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private ExposureReport? _report;
+    private bool _scanning;
+    private string _progressText = "";
+    private string? _error;
+    private CancellationTokenSource? _scanCts;
+    private Dictionary<string, string> _labels = new(StringComparer.Ordinal);
+
+    private AddressExposure? _selected;
+    private string _destination = "";
+    private string _feeRate = QuantumSweepPlanner.DefaultFeeRateSatPerKb.ToString();
+    private SweepPlan? _plan;
+    private string? _planProblem;
+    private bool _ack;
+    private bool _sending;
+    private readonly List<string> _results = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        await CheckDaemonAsync();
+        StateHasChanged();
+    }
+
+    private async Task ScanAsync()
+    {
+        _error = null; _report = null; _selected = null; ClearPlan();
+        _scanning = true; _progressText = "listing…";
+        _scanCts = new CancellationTokenSource();
+        var lastUi = DateTime.MinValue;
+        var progress = new Progress<ExposureProgress>(p =>
+        {
+            _progressText = $"{p.TransactionsDone:N0} / {p.TransactionsTotal:N0} sends read · {p.ExposedKeysFound:N0} keys seen";
+            if ((DateTime.UtcNow - lastUi).TotalMilliseconds > 250) { lastUi = DateTime.UtcNow; InvokeAsync(StateHasChanged); }
+        });
+        try
+        {
+            var labelsTask = RpcService.ListLabelledAddressesAsync();
+            var scanner = new QuantumExposureScanner(ExposureRpc);
+            _report = await scanner.ScanAsync(progress: progress, ct: _scanCts.Token);
+            try
+            {
+                _labels = (await labelsTask)
+                    .Where(e => !string.IsNullOrEmpty(e.Address))
+                    .GroupBy(e => e.Address, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.First().Label ?? "", StringComparer.Ordinal);
+            }
+            catch { /* labels are decoration */ }
+        }
+        catch (OperationCanceledException) { _error = "Scan cancelled."; }
+        catch (Exception ex) { _error = $"Scan failed: {ex.Message}"; }
+        finally { _scanning = false; _scanCts = null; StateHasChanged(); }
+    }
+
+    private void CancelScan() => _scanCts?.Cancel();
+
+    private string LabelOf(string address) => _labels.TryGetValue(address, out var l) ? l : "";
+
+    private async Task SelectForSweepAsync(AddressExposure a)
+    {
+        _selected = a; _results.Clear(); ClearPlan();
+        if (string.IsNullOrWhiteSpace(_destination)) await NewDestinationAsync();
+    }
+
+    private async Task NewDestinationAsync()
+    {
+        ClearPlan();
+        try { _destination = await RpcService.GetNewAddressAsync("quantum-sweep") ?? ""; }
+        catch (Exception ex) { _planProblem = $"Couldn't get a fresh address: {ex.Message}"; }
+    }
+
+    private void PlanSweep()
+    {
+        ClearPlan();
+        if (_selected is null) return;
+        if (!long.TryParse(_feeRate, out var rate)) { _planProblem = "Enter the fee rate in satoshis per kB."; return; }
+        var result = QuantumSweepPlanner.Plan(_selected.Outputs, _destination, rate);
+        if (result.Plan is null) { _planProblem = result.Problem; return; }
+        _plan = result.Plan;
+    }
+
+    private void ClearPlan() { _plan = null; _planProblem = null; _ack = false; }
+
+    /// <summary>Builds, signs and broadcasts each planned batch in order; stops at the first failure.</summary>
+    private async Task BroadcastAsync()
+    {
+        if (_plan is null || !_plan.Balances) { _planProblem = "The plan doesn't balance — nothing was sent."; return; }
+        _sending = true; _planProblem = null; _results.Clear();
+        StateHasChanged();
+        try
+        {
+            foreach (var tx in _plan.Transactions)
+            {
+                var raw = await SendRpc.CreateRawTransactionAsync(
+                    tx.Inputs.Select(i => (i.TxId, i.Vout)).ToList(),
+                    new[] { (tx.Destination, tx.OutputSatoshis) });
+                if (raw is null) { _planProblem = "The daemon couldn't build the transaction."; break; }
+                var signed = await SendRpc.SignRawTransactionAsync(raw);
+                if (signed is null) { _planProblem = "Signing failed or was incomplete (is the wallet unlocked?)."; break; }
+                var txid = await SendRpc.SendRawTransactionAsync(signed);
+                if (txid is null) { _planProblem = "The network rejected the transaction."; break; }
+                _results.Add(txid);
+            }
+            if (_planProblem is null) { _plan = null; _ack = false; }
+            else if (_results.Count > 0) _planProblem += $" {_results.Count} batch(es) had already been sent — rescan before retrying.";
+        }
+        catch (Exception ex) { _planProblem = $"Send failed: {ex.Message}"; }
+        finally { _sending = false; StateHasChanged(); }
+    }
+
+    private static string Blz(long sats) => (sats / 100_000_000m).ToString("0.########");
+}

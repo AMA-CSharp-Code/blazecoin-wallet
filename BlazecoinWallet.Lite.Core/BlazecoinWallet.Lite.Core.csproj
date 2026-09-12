@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Blazecoin Lite Core: the "wallet brain" the lite (no-local-node) heads need and the
+       desktop full-node wallet never did — key management (BIP39 mnemonic + BIP32 HD,
+       legacy-P2PKH prefix 26 / WIF 154), client-side transaction building + signing, and
+       the Indexer-backed IWalletDataService implementation. Consumed by the Android head
+       (BlazecoinWallet.App.Droid) and, later, the iOS/web heads. Platform-free on purpose:
+       anything touching Android Keystore/Keychain lives in the app heads, not here. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazecoinWallet.Lite</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlazecoinWallet.Core\BlazecoinWallet.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NBitcoin" Version="10.0.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Lets the test suite drive internals deterministically (e.g. the payment watcher's
+         poll cycle) without exposing them to consumers. -->
+    <InternalsVisibleTo Include="BlazecoinWallet.Lite.Core.Tests" />
+    <InternalsVisibleTo Include="BlazecoinWallet.Lite.UI.Tests" />
+  </ItemGroup>
+
+</Project>

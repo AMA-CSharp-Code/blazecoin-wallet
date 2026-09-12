@@ -1,0 +1,1715 @@
+/* Blazecoin Wallet Styles — red/black palette matching the MVC site
+   (linear-gradient 135deg #cf2013 → black, per Views/Shared/_Layout.cshtml). */
+:root {
+    --blz-primary: #cf2013;
+    --blz-primary-dark: #8b0000;
+    --blz-accent: #ff4d3a;     /* lighter red for hover/highlight */
+    --blz-secondary: #1a1a1a;
+    --blz-success: #06d6a0;
+    --blz-danger: #ef476f;
+    --blz-dark: #0a0a0a;
+    --blz-light: #f5f5f5;
+    --blz-gradient: linear-gradient(135deg, #cf2013 0%, #0a0a0a 100%);
+    --blz-gradient-soft: linear-gradient(135deg, #1a0608 0%, #0a0a0a 100%);
+}
+
+body {
+    background: var(--blz-gradient-soft);
+    color: #fff;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* Red rule along the bottom edge of the native MAUI title bar, so the
+   black title bar is framed in #cf2013 on all four sides (top/left/right
+   come from the window's DWM border; this supplies the bottom). The web
+   content starts immediately below the title bar, so a fixed line at
+   top:0 sits exactly on that seam. Above the sticky nav, non-interactive. */
+body::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* 1px to match the window's DWM border (measured at exactly 1
+       physical pixel on the outside edges). */
+    height: 1px;
+    background: #cf2013;
+    z-index: 100001;
+    pointer-events: none;
+}
+
+/* Hide the page scrollbar (the Dashboard's taller content otherwise
+   shows one on the right; other pages don't overflow). Still scrollable
+   via wheel/touch. The skin-picker popover keeps its own styled bar via
+   a more specific rule. */
+html,
+body {
+    scrollbar-width: none;        /* Firefox */
+    -ms-overflow-style: none;     /* legacy Edge */
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+.wallet-dashboard, .wallet-page {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+h1 {
+    color: var(--blz-primary);
+    margin-bottom: 2rem;
+    font-weight: bold;
+    text-shadow: 0 0 12px rgba(207, 32, 19, 0.4);
+}
+
+/* Dashboard Grid */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(207, 32, 19, 0.25);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* V1.5 Overview-style banner card — any .card containing a .status-header
+   div gets its outer padding stripped (so the black banner bar reaches
+   edge-to-edge), a 2px white border, and square corners. The .card-body
+   wrapper restores the inner content padding. Mirrors
+   Blazecoin_Core_V1.5/src/qt/forms/overviewpage.ui (#wStateHeader). */
+.card:has(> .status-header) {
+    padding: 0;
+    overflow: hidden;
+    border: 2px solid white;
+    border-radius: 0;
+}
+.card-body {
+    padding: 1.5rem;
+}
+.status-header {
+    background-color: #000;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    padding: 0 13px;          /* matches V1.5 label x=13 */
+}
+.status-header span {
+    color: #fff;
+    font-size: 11pt;
+    font-weight: 600;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(207, 32, 19, 0.35);
+}
+
+.card h2 {
+    color: var(--blz-primary);
+    font-size: 1.2rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+}
+
+.balance-amount {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: var(--blz-success);
+    margin: 1rem 0;
+}
+
+.balance-details small {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.network-info p, .blockchain-info p {
+    margin: 0.5rem 0;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.sync-status {
+    color: var(--blz-primary);
+    font-weight: bold;
+}
+
+.sync-status.synced {
+    color: var(--blz-success);
+}
+
+/* `.blockchain-info p` (0,1,1) was beating `.sync-status` (0,1,0), so the
+   "Syncing: NN%" line rendered white. These higher-specificity rules make
+   the syncing line clearly red and keep the synced line green. */
+.blockchain-info p.sync-status {
+    color: var(--blz-accent);
+}
+
+.blockchain-info p.sync-status.synced {
+    color: var(--blz-success);
+}
+
+/* 1s-on / 1s-off blink for the "Syncing: NN%" line while syncing. */
+.blink-1s {
+    animation: blzBlink 2s linear infinite;
+}
+
+@keyframes blzBlink {
+    0%, 49.999% { opacity: 1; }
+    50%, 100%   { opacity: 0; }
+}
+
+/* Action Buttons */
+.action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.action-buttons .btn {
+    min-width: 220px;
+}
+
+.btn {
+    padding: 0.75rem 1.5rem;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-align: center;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--blz-primary), #ff4d3a);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #ff4d3a, var(--blz-primary));
+    transform: scale(1.05);
+}
+
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border: 1px solid rgba(207, 32, 19, 0.3);
+}
+
+.btn-secondary:hover {
+    background: rgba(207, 32, 19, 0.2);
+}
+
+/* Transactions Table */
+.recent-transactions {
+    margin-top: 2rem;
+}
+
+.recent-transactions h2 {
+    color: var(--blz-primary);
+    margin-bottom: 1rem;
+}
+
+.transactions-table {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 0;
+    overflow: hidden;
+    border-collapse: collapse;
+}
+
+.transactions-table th {
+    padding: 1rem;
+    text-align: left;
+    color: var(--blz-primary);
+    font-weight: 600;
+}
+
+.transactions-table td {
+    padding: 1rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tx-receive {
+    background: rgba(6, 214, 160, 0.1);
+}
+
+.tx-send {
+    background: rgba(239, 71, 111, 0.1);
+}
+
+.tx-generate {
+    background: rgba(207, 32, 19, 0.1);
+}
+
+.txid {
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* Confirmed / Pending badge (Transactions + Dashboard). Threshold is set on
+   the Preferences page (conf_threshold, default 30). */
+.conf-badge {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.conf-badge.confirmed {
+    background: rgba(6, 214, 160, 0.18);
+    color: #06d6a0;
+    border: 1px solid rgba(6, 214, 160, 0.5);
+}
+
+.conf-badge.pending {
+    background: rgba(255, 193, 7, 0.15);
+    color: #ffc107;
+    border: 1px solid rgba(255, 193, 7, 0.5);
+}
+
+/* Search-match highlight (Transactions Ledger Address/Label cells): a gold border
+   around the matched substring that blinks. Global (not scoped) because the span is
+   rendered from a MarkupString, which carries no scoped attribute. The border stays
+   1px (transparent on the off-beat) so the text never shifts. */
+.search-hl {
+    border: 1px solid #9E000F;   /* nav bar deep crimson */
+    border-radius: 3px;
+    padding: 0 2px;
+    animation: search-blink 1.5s infinite;   /* blink speed */
+}
+@keyframes search-blink {
+    0%, 49.9% { border-color: #9E000F; }
+    50%, 100% { border-color: transparent; }
+}
+
+/* Clickable txid/address that opens the configured block explorer. */
+.explorer-link {
+    color: #4ea1ff;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.explorer-link:hover {
+    color: #7dbbff;
+}
+
+/* Forms */
+.send-form, .receive-container {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2rem;
+    border-radius: 12px;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--blz-primary);
+    font-weight: 600;
+}
+
+.form-hint {
+    display: block;
+    margin-top: 0.5rem;
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 0.85rem;
+    text-align: left;
+}
+
+.form-help {
+    color: rgba(255, 255, 255, 0.8);
+    margin-bottom: 1.25rem;
+    text-align: left;
+}
+
+.form-error-inline {
+    color: var(--blz-danger);
+    margin: 0;
+}
+
+.form-control {
+    width: 100%;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(207, 32, 19, 0.3);
+    border-radius: 8px;
+    color: white;
+    font-size: 1rem;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: var(--blz-primary);
+    background: rgba(255, 255, 255, 0.15);
+    /* Bootstrap's .form-control:focus sets a dark color (--bs-body-color),
+       which outranks the base white rule and makes text go dark-on-dark once
+       the field is focused. Keep it white. */
+    color: #fff;
+}
+
+.form-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    justify-content: center;
+}
+
+/* Address Display */
+.address-display {
+    text-align: center;
+}
+
+.address-box {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 1.5rem;
+    border-radius: 8px;
+    margin: 1.5rem 0;
+    border: 2px dashed var(--blz-primary);
+}
+
+.address-box code {
+    color: var(--blz-success);
+    font-size: 1.1rem;
+    word-break: break-all;
+}
+
+.address-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 1rem;
+}
+
+/* Alerts */
+.alert {
+    padding: 1rem;
+    border-radius: 8px;
+    margin: 1rem 0;
+}
+
+.alert-success {
+    background: rgba(6, 214, 160, 0.2);
+    border: 1px solid var(--blz-success);
+    color: var(--blz-success);
+}
+
+.alert-danger {
+    background: rgba(239, 71, 111, 0.2);
+    border: 1px solid var(--blz-danger);
+    color: var(--blz-danger);
+}
+
+.loading, .error {
+    text-align: center;
+    padding: 3rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .wallet-dashboard, .wallet-page {
+        padding: 1rem;
+    }
+    
+    .balance-amount {
+        font-size: 2rem;
+    }
+}
+
+/* =========================================================================
+   Network background for the Console page. Global (not component-scoped) so
+   it reliably styles the JS-painted #consoleBackground host, which gets the
+   classes "skin-network console-network" from initNetworkBackground(). The
+   @keyframes (scrollDown/scrollUp/glitch1-3/scanlineScroll/sweepH) live in
+   the scoped bundle but resolve document-globally.
+   ========================================================================= */
+.console-network {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: flex;
+    column-gap: 4px;
+    background: #000;
+}
+
+.console-network .tile-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.console-network .tile-col img {
+    width: 100%;
+    height: 25vh;
+    object-fit: cover;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 4px;
+    filter: brightness(1.2);
+    position: relative;
+}
+
+.console-network .tile-col:nth-child(odd)  { animation: scrollDown 20s linear infinite; }
+.console-network .tile-col:nth-child(even) { animation: scrollUp   20s linear infinite; }
+
+.console-network .tile-col:nth-child(1) img:nth-child(2) { animation: glitch1 25s ease-in-out infinite 2s; }
+.console-network .tile-col:nth-child(2) img:nth-child(3) { animation: glitch2 30s ease-in-out infinite 8s; }
+.console-network .tile-col:nth-child(3) img:nth-child(1) { animation: glitch3 22s ease-in-out infinite 14s; }
+.console-network .tile-col:nth-child(4) img:nth-child(4) { animation: glitch1 28s ease-in-out infinite 5s; }
+.console-network .tile-col:nth-child(5) img:nth-child(2) { animation: glitch2 24s ease-in-out infinite 18s; }
+.console-network .tile-col:nth-child(6) img:nth-child(3) { animation: glitch3 30s ease-in-out infinite 10s; }
+.console-network .tile-col:nth-child(7) img:nth-child(1) { animation: glitch1 26s ease-in-out infinite 0s; }
+.console-network .tile-col:nth-child(8) img:nth-child(4) { animation: glitch2 22s ease-in-out infinite 12s; }
+
+.console-network::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px);
+    animation: scanlineScroll 0.3s linear infinite;
+}
+
+.console-network::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    background: linear-gradient(90deg, transparent 0%, transparent 30%, rgba(57,255,20,0.15) 42%, rgba(57,255,20,0.35) 50%, rgba(57,255,20,0.15) 58%, transparent 70%, transparent 100%);
+    background-size: 200% 100%;
+    animation: sweepH 14s ease-in-out infinite;
+}
+
+
+/* =========================================================================
+   Dashboard skins (moved here from Dashboard.razor.css so they are GLOBAL and
+   render on any page that has a skin host: Dashboard #dashboardBackground and
+   Preferences #prefBackground). ::deep was removed (global CSS is unscoped).
+   ========================================================================= */
+/* =========================================================================
+   Skin: Pixelated Coins — 10x10 grid of coin canvases drifting diagonally
+   and flipping on a staggered 12s loop. Ported from MVC
+   Views/Wallet/Index.cshtml. Active when #dashboardBackground has class
+   `skin-pixelated-coins` (applied by DashboardSkins.pixelated-coins.init
+   in mining-background.js). Children are JS-created so descendant rules
+   use to break out of Blazor's component-scoping attribute.
+   ========================================================================= */
+.skin-pixelated-coins {
+    position: fixed;
+    top: -40%;
+    left: -40%;
+    width: 180%;
+    height: 180%;
+    z-index: 0;
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    grid-template-rows: repeat(10, 1fr);
+    pointer-events: none;
+    background-color: #000000;
+    place-items: center;
+    animation: drift-diagonal 18s linear infinite;
+}
+
+@keyframes drift-diagonal {
+    from { transform: translate(0, 0); }
+    to   { transform: translate(-20%, 20%); }
+}
+
+.skin-pixelated-coins .coin-cell {
+    width: 50%;
+    aspect-ratio: 1;
+}
+
+.skin-pixelated-coins .coin-cell.stagger {
+    transform: translateX(100%);
+}
+
+.skin-pixelated-coins .coin-cell canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    filter: sepia(1) saturate(2) brightness(1.1) hue-rotate(5deg);
+    animation: coin-flip 12s ease-in-out infinite;
+    clip-path: polygon(
+        33% 0%, 67% 0%,
+        67% 17%, 83% 17%,
+        83% 33%, 100% 33%,
+        100% 67%, 83% 67%,
+        83% 83%, 67% 83%,
+        67% 100%, 33% 100%,
+        33% 83%, 17% 83%,
+        17% 67%, 0% 67%,
+        0% 33%, 17% 33%,
+        17% 17%, 33% 17%
+    );
+}
+
+.skin-pixelated-coins .coin-cell.flip canvas {
+    animation-delay: -6s;
+}
+
+@keyframes coin-flip {
+    0%   { transform: rotateY(0deg); }
+    50%  { transform: rotateY(360deg); }
+    100% { transform: rotateY(360deg); }
+}
+
+/* =========================================================================
+   Skin: Mining Pools — 9x9 grid of pool images that start pixelated and
+   progressively render to full resolution over ~20s, while the whole grid
+   drifts diagonally on a 60s loop. Ported from MVC Views/Miningpool/Index.cshtml.
+   ========================================================================= */
+.skin-mining-pools {
+    position: fixed;
+    inset: -100%;
+    width: 300%;
+    height: 300%;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    grid-template-rows: repeat(9, 1fr);
+    gap: 1px;
+    padding: 1px;
+    background-color: #000;
+    animation: diagScroll 60s linear infinite;
+}
+
+@keyframes diagScroll {
+    0%   { transform: translate(0, 0); }
+    100% { transform: translate(-33.33%, -33.33%); }
+}
+
+.skin-mining-pools .kb-cell {
+    overflow: hidden;
+    border-radius: 0;
+}
+
+.skin-mining-pools canvas,
+.skin-mining-pools img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* =========================================================================
+   Skin: 413 — brick-pattern of the 413 Vert tile, alternating row scroll
+   direction with a 12s tile-pulse breathing on each tile. Bigger tiles
+   than the Mining page (50vw each, 6 per row). Ported from MVC
+   Views/Supply/Index.cshtml. Keyframes are suffixed -413 to avoid
+   colliding with the Mining page's tilePulse/scrollLeft/scrollRight
+   (Blazor scoped CSS does not isolate @keyframes names).
+   ========================================================================= */
+.skin-413 {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.skin-413 .tile-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    margin-bottom: 4px;
+    animation: scrollRight413 35s linear infinite;
+}
+
+.skin-413 .tile-row:nth-child(even) {
+    margin-left: -25vw;
+    animation: scrollLeft413 35s linear infinite;
+}
+
+.skin-413 .tile-row img {
+    width: calc(50vw - 2px);
+    height: auto;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 4px;
+    animation: tilePulse413 12s ease-in-out infinite;
+}
+
+.skin-413 .tile-row:nth-child(even) img             { animation-delay: -3s; }
+.skin-413 .tile-row img:nth-child(2)                { animation-delay: -2s; }
+.skin-413 .tile-row img:nth-child(3)                { animation-delay: -4s; }
+.skin-413 .tile-row:nth-child(even) img:nth-child(2){ animation-delay: -5s; }
+.skin-413 .tile-row:nth-child(even) img:nth-child(3){ animation-delay: -1s; }
+
+@keyframes tilePulse413 {
+    0%, 100% { opacity: 0.3; transform: scale(1);    filter: brightness(0.6); }
+    50%      { opacity: 0.9; transform: scale(1.03); filter: brightness(1.1); }
+}
+
+@keyframes scrollRight413 { 0% { transform: translateX(-50vw); } 100% { transform: translateX(0); } }
+@keyframes scrollLeft413  { 0% { transform: translateX(0); }     100% { transform: translateX(-50vw); } }
+
+/* =========================================================================
+   Skin: Shield — brick-pattern of the BlazeCoin shield emblem
+   (wwwroot/shield-tile.png, the splash image with the wordmark cropped
+   off, with the L/R black margins trimmed so shields sit closer). Tiles
+   are 18vw; the shield emblem is the same on-screen size as the old 25vw
+   tiles, just with less horizontal gap. The scroll uses its own shield-
+   scoped @keyframes (scrollRightShield/scrollLeftShield) that translate
+   one tile pitch (18vw tile + 2vw gap = 20vw) — loop stays seamless —
+   over 14s.
+   A randomised ~1-in-4 of the tiles also do an occasional 3D flip
+   (see .shield-tile.flip / @keyframes shieldFlip).
+   ========================================================================= */
+.skin-shield {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: #000;
+}
+
+.skin-shield .tile-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 2vw;
+    margin-bottom: 4px;
+    /* Each row holds two identical clone sets (see paintShieldTiles) and scrolls
+       by one full set (160vw). 112s keeps the original ~1.43vw/s speed
+       (160vw ÷ (20vw/14s)). */
+    animation: scrollRightShield 112s linear infinite;
+}
+
+.skin-shield .tile-row:nth-child(even) {
+    margin-left: -10vw;
+    animation: scrollLeftShield 112s linear infinite;
+}
+
+.skin-shield .shield-tile {
+    /* Exactly 18vw so tile (18vw) + row gap (2vw) = 20vw pitch. The scroll
+       translates 8 pitches (160vw) to swap in the clone set, so the pitch must
+       be exact — a -2px fudge here would misalign clones and break the seam. */
+    width: 18vw;
+    flex-shrink: 0;
+}
+
+.skin-shield .shield-tile img {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 4px;
+    opacity: 0.9;
+    filter: brightness(1.25);
+    animation: shieldPulse 12s ease-in-out infinite;
+}
+
+/* Tiles JS tags with .flip do an occasional 3D coin-spin (rotateY 360).
+   Most of the 16s cycle is idle; the flip is a ~2s window, and JS gives
+   each flipping tile a random negative delay so they fire sporadically.
+   The pulse stays on the inner <img> and the flip on the wrapper, so
+   their transforms don't fight. */
+.skin-shield .shield-tile.flip {
+    animation: shieldFlip 16s ease-in-out infinite;
+}
+
+/* Pulse stagger so neighbouring shields don't breathe in lockstep. */
+.skin-shield .tile-row:nth-child(even) .shield-tile img { animation-delay: -3s; }
+.skin-shield .shield-tile:nth-child(2) img             { animation-delay: -2s; }
+.skin-shield .shield-tile:nth-child(3) img             { animation-delay: -4s; }
+.skin-shield .shield-tile:nth-child(4) img             { animation-delay: -6s; }
+.skin-shield .shield-tile:nth-child(5) img             { animation-delay: -1s; }
+
+/* Translate one full clone set: 160vw = cols(8) × 20vw pitch. Must stay in sync
+   with `cols` in paintShieldTiles and the 18vw tile / 2vw gap (20vw pitch). */
+@keyframes scrollRightShield { 0% { transform: translateX(-160vw); } 100% { transform: translateX(0); } }
+@keyframes scrollLeftShield  { 0% { transform: translateX(0); }      100% { transform: translateX(-160vw); } }
+
+@keyframes shieldFlip {
+    0%, 60% { transform: perspective(800px) rotateY(0deg); }
+    90%     { transform: perspective(800px) rotateY(360deg); }
+    100%    { transform: perspective(800px) rotateY(360deg); }
+}
+
+/* Default tiles: gentle scale breathing only, no fade — the inner <img> holds
+   a constant opacity/brightness. (The ~1-in-5 tiles JS tags .opulse override
+   this with an opacity fade — see below.) */
+@keyframes shieldPulse {
+    0%, 100% { transform: scale(1);    }
+    50%      { transform: scale(1.03); }
+}
+
+/* Opacity-pulse tiles (JS-tagged .opulse): slowly fade the shield out and back
+   on an ~18s breathe (≈9s each way) with a random per-tile phase. PURE opacity,
+   no transform — a transform here promotes the <img> to its own layer and makes
+   it snap a sub-pixel when the fade engages (a visible jump at the start of the
+   fade). Higher specificity than .shield-tile img, so it replaces the scale-only
+   shieldPulse for these tiles. */
+.skin-shield .shield-tile.opulse img {
+    animation: shieldOpacityPulse 18s ease-in-out infinite;
+}
+
+@keyframes shieldOpacityPulse {
+    0%, 100% { opacity: 1;    }
+    50%      { opacity: 0.15; }
+}
+
+/* =========================================================================
+   Skin: Pheonix — 8x8 grid of BlazecoinBird images cascading diagonally
+   into view, holding, then cascading out (8s loop with stagger from
+   row+col). Each image also shimmers brightness/saturate on a 6s loop
+   with per-tile delay. Ported from MVC Views/Home/About.cshtml.
+   ========================================================================= */
+.skin-phoenix {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    pointer-events: none;
+    background-color: #000;
+}
+
+.skin-phoenix .bg-img {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    opacity: 0;
+    transform: scale(0.85);
+    animation: tilePulseCascade 8s ease-in-out infinite;
+}
+
+.skin-phoenix .bg-img img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: brightness(80%) saturate(1);
+    border: 2px solid rgba(0, 0, 0, 0.5);
+    box-sizing: border-box;
+    animation: tileShimmerPhoenix 6s ease-in-out infinite;
+    animation-delay: var(--shimmer-delay, 0s);
+}
+
+@keyframes tilePulseCascade {
+    0%   { opacity: 0; transform: scale(0.85); }
+    15%  { opacity: 1; transform: scale(1); }
+    70%  { opacity: 1; transform: scale(1); }
+    85%  { opacity: 0; transform: scale(0.85); }
+    100% { opacity: 0; transform: scale(0.85); }
+}
+
+@keyframes tileShimmerPhoenix {
+    0%, 100% { filter: brightness(80%) saturate(1); }
+    50%      { filter: brightness(80%) saturate(1); }
+}
+
+/* =========================================================================
+   Skin: Blockchain — 6 quadrants (3x2), each with a static under-image
+   (dimmed) and a rotating over-image on a 60s linear loop. The over-images
+   are staggered -0s..-50s so the six quadrants are at different rotation
+   angles at any moment. Ported from MVC Views/BlazecoinExplorer/Index.cshtml.
+   ========================================================================= */
+.skin-blockchain {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.skin-blockchain .explorer-bg-quadrant {
+    position: absolute;
+    width: 33.33%;
+    height: 50%;
+    overflow: hidden;
+}
+
+.skin-blockchain .explorer-bg-static {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: brightness(0.6);
+}
+
+.skin-blockchain .explorer-bg-image {
+    position: absolute;
+    top: -10%;
+    left: -10%;
+    width: 120%;
+    height: 120%;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    animation: bgSlowRotate 60s linear infinite;
+}
+
+@keyframes bgSlowRotate {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* =========================================================================
+   Skin: Network — 8 vertical columns of NetworkImages, alternating
+   scroll direction (20s linear). Tiles have rare per-column glitch
+   blinks; the container has a scanline overlay and a green horizontal
+   radar sweep. Ported from MVC Views/Network/Index.cshtml.
+   ========================================================================= */
+.skin-network {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: flex;
+    column-gap: 4px;
+    background: #000;
+}
+
+.skin-network .tile-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.skin-network .tile-col img {
+    width: 100%;
+    height: 25vh;
+    object-fit: cover;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 4px;
+    filter: brightness(1.2);
+    position: relative;
+}
+
+.skin-network .tile-col:nth-child(odd)  { animation: scrollDown 20s linear infinite; }
+.skin-network .tile-col:nth-child(even) { animation: scrollUp   20s linear infinite; }
+
+@keyframes scrollDown {
+    0%   { transform: translateY(0); }
+    100% { transform: translateY(-100vh); }
+}
+
+@keyframes scrollUp {
+    0%   { transform: translateY(-100vh); }
+    100% { transform: translateY(0); }
+}
+
+/* Glitch jitter: rare single-frame blink on specific tiles per column. */
+.skin-network .tile-col:nth-child(1) img:nth-child(2)  { animation: glitch1 25s ease-in-out infinite 2s; }
+.skin-network .tile-col:nth-child(2) img:nth-child(3)  { animation: glitch2 30s ease-in-out infinite 8s; }
+.skin-network .tile-col:nth-child(3) img:nth-child(1)  { animation: glitch3 22s ease-in-out infinite 14s; }
+.skin-network .tile-col:nth-child(4) img:nth-child(4)  { animation: glitch1 28s ease-in-out infinite 5s; }
+.skin-network .tile-col:nth-child(5) img:nth-child(2)  { animation: glitch2 24s ease-in-out infinite 18s; }
+.skin-network .tile-col:nth-child(6) img:nth-child(3)  { animation: glitch3 30s ease-in-out infinite 10s; }
+.skin-network .tile-col:nth-child(7) img:nth-child(1)  { animation: glitch1 26s ease-in-out infinite 0s; }
+.skin-network .tile-col:nth-child(8) img:nth-child(4)  { animation: glitch2 22s ease-in-out infinite 12s; }
+
+@keyframes glitch1 {
+    0%, 99.4%, 99.6%, 100% { transform: translate(0, 0); clip-path: inset(0 0 0 0); filter: brightness(1.2); }
+    99.5% { transform: translate(-3px, 1px); clip-path: inset(20% 0 60% 0); filter: brightness(1.8); }
+}
+
+@keyframes glitch2 {
+    0%, 99.4%, 99.6%, 100% { transform: translate(0, 0); clip-path: inset(0 0 0 0); filter: brightness(1.2); }
+    99.5% { transform: translate(3px, -2px); clip-path: inset(40% 0 30% 0); filter: brightness(0.5); }
+}
+
+@keyframes glitch3 {
+    0%, 99.4%, 99.6%, 100% { transform: translate(0, 0); clip-path: inset(0 0 0 0); filter: brightness(1.2); }
+    99.5% { transform: translate(2px, 2px); clip-path: inset(50% 0 20% 0); filter: brightness(2.0); }
+}
+
+/* Scanline overlay on the whole tile grid. */
+.skin-network::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.15) 2px,
+        rgba(0, 0, 0, 0.15) 4px
+    );
+    z-index: 1;
+    animation: scanlineScroll 0.3s linear infinite;
+}
+
+@keyframes scanlineScroll {
+    0%   { background-position: 0 0; }
+    100% { background-position: 0 4px; }
+}
+
+/* Horizontal "radar" sweep — green band drifts across the grid. */
+.skin-network::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        transparent 30%,
+        rgba(57, 255, 20, 0.15) 42%,
+        rgba(57, 255, 20, 0.35) 50%,
+        rgba(57, 255, 20, 0.15) 58%,
+        transparent 70%,
+        transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: sweepH 14s ease-in-out infinite;
+}
+
+@keyframes sweepH {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* =========================================================================
+   Skin: HODL Waves — 4x3 grid of 12 image tiles with a VHS-style intro.
+   Each tile has a cyan neon glow that pulses ~9 times then fades out over
+   36s, horizontal scanlines that fade simultaneously, and a tracking
+   glitch line sliding down on a 12s loop (also fading over 36s). After
+   ~36s the effects settle and you're left with a clean image grid.
+   The whole grid has a fast flicker for the first 36s. Ported from MVC
+   Views/Hodl/Index.cshtml.
+   ========================================================================= */
+.skin-hodl-waves {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-rows: repeat(3, 1fr);
+    gap: 4px;
+    background: #000;
+    animation: vhsFlicker 0.15s 240;
+}
+
+@keyframes vhsFlicker {
+    0%   { opacity: 0.97; }
+    50%  { opacity: 1; }
+    100% { opacity: 0.98; }
+}
+
+.skin-hodl-waves .vhs-tile {
+    position: relative;
+    overflow: hidden;
+    box-shadow:
+        0 0 6px rgba(0, 255, 255, 0.6),
+        0 0 18px rgba(0, 255, 255, 0.3),
+        inset 0 0 6px rgba(0, 255, 255, 0.3);
+    border: 1px solid rgba(0, 255, 255, 0.5);
+    animation: neonPulse 4s ease-in-out 9,
+               neonFadeOut 36s ease-out forwards;
+}
+
+@keyframes neonPulse {
+    0%, 100% {
+        box-shadow:
+            0 0 6px rgba(0, 255, 255, 0.6),
+            0 0 18px rgba(0, 255, 255, 0.3),
+            inset 0 0 6px rgba(0, 255, 255, 0.3);
+    }
+    50% {
+        box-shadow:
+            0 0 10px rgba(0, 255, 255, 0.9),
+            0 0 30px rgba(0, 255, 255, 0.5),
+            0 0 50px rgba(0, 255, 255, 0.15),
+            inset 0 0 10px rgba(0, 255, 255, 0.4);
+    }
+}
+
+@keyframes neonFadeOut {
+    0%   {
+        box-shadow:
+            0 0 6px rgba(0, 255, 255, 0.6),
+            0 0 18px rgba(0, 255, 255, 0.3),
+            inset 0 0 6px rgba(0, 255, 255, 0.3);
+        border-color: rgba(0, 255, 255, 0.5);
+    }
+    100% {
+        box-shadow:
+            0 0 0 rgba(0, 255, 255, 0),
+            0 0 0 rgba(0, 255, 255, 0),
+            inset 0 0 0 rgba(0, 255, 255, 0);
+        border-color: rgba(0, 255, 255, 0);
+    }
+}
+
+.skin-hodl-waves .vhs-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* Scanline overlay per tile, fades out over 36s. */
+.skin-hodl-waves .vhs-tile::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+        to bottom,
+        transparent 0px,
+        transparent 2px,
+        rgba(0, 0, 0, 0.35) 2px,
+        rgba(0, 0, 0, 0.35) 5px
+    );
+    z-index: 1;
+    pointer-events: none;
+    animation: vhsScanFade 36s ease-out forwards;
+}
+
+@keyframes vhsScanFade {
+    0%   { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* Tracking glitch line: a cyan band slides down each tile on a 12s loop,
+   fading out over 36s. */
+.skin-hodl-waves .vhs-tile::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 8px;
+    background: linear-gradient(
+        to bottom,
+        transparent,
+        rgba(0, 255, 255, 0.35) 30%,
+        rgba(255, 255, 255, 0.15) 50%,
+        rgba(0, 255, 255, 0.35) 70%,
+        transparent
+    );
+    box-shadow: 0 0 12px rgba(0, 255, 255, 0.3);
+    z-index: 2;
+    pointer-events: none;
+    animation: vhsTracking 12s linear infinite,
+               vhsGlitchFade 36s ease-out forwards;
+}
+
+@keyframes vhsTracking {
+    0%   { top: -8px;  transform: translateX(0) skewX(0); }
+    15%  { transform: translateX(-4px) skewX(-2deg); }
+    30%  { transform: translateX(6px) skewX(3deg); }
+    45%  { transform: translateX(-2px) skewX(0); }
+    60%  { transform: translateX(5px) skewX(-1deg); }
+    75%  { transform: translateX(-3px) skewX(2deg); }
+    90%  { transform: translateX(2px) skewX(0); }
+    100% { top: 100%; transform: translateX(0) skewX(0); }
+}
+
+@keyframes vhsGlitchFade {
+    0%   { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* Stagger the neon pulse + tracking line start times so the 12 tiles
+   don't all flicker in lock-step. */
+.skin-hodl-waves .vhs-tile:nth-child(2)  { animation-delay: 0.33s; }
+.skin-hodl-waves .vhs-tile:nth-child(3)  { animation-delay: 0.66s; }
+.skin-hodl-waves .vhs-tile:nth-child(4)  { animation-delay: 1.0s; }
+.skin-hodl-waves .vhs-tile:nth-child(5)  { animation-delay: 1.33s; }
+.skin-hodl-waves .vhs-tile:nth-child(6)  { animation-delay: 1.66s; }
+.skin-hodl-waves .vhs-tile:nth-child(7)  { animation-delay: 2.0s; }
+.skin-hodl-waves .vhs-tile:nth-child(8)  { animation-delay: 2.33s; }
+.skin-hodl-waves .vhs-tile:nth-child(9)  { animation-delay: 2.66s; }
+.skin-hodl-waves .vhs-tile:nth-child(10) { animation-delay: 3.0s; }
+.skin-hodl-waves .vhs-tile:nth-child(11) { animation-delay: 3.33s; }
+.skin-hodl-waves .vhs-tile:nth-child(12) { animation-delay: 3.66s; }
+
+.skin-hodl-waves .vhs-tile:nth-child(2)::after  { animation-delay: 0.7s; }
+.skin-hodl-waves .vhs-tile:nth-child(3)::after  { animation-delay: 1.4s; }
+.skin-hodl-waves .vhs-tile:nth-child(4)::after  { animation-delay: 2.1s; }
+.skin-hodl-waves .vhs-tile:nth-child(5)::after  { animation-delay: 2.8s; }
+.skin-hodl-waves .vhs-tile:nth-child(6)::after  { animation-delay: 3.5s; }
+.skin-hodl-waves .vhs-tile:nth-child(7)::after  { animation-delay: 4.2s; }
+.skin-hodl-waves .vhs-tile:nth-child(8)::after  { animation-delay: 4.9s; }
+.skin-hodl-waves .vhs-tile:nth-child(9)::after  { animation-delay: 5.6s; }
+.skin-hodl-waves .vhs-tile:nth-child(10)::after { animation-delay: 6.3s; }
+.skin-hodl-waves .vhs-tile:nth-child(11)::after { animation-delay: 7.0s; }
+.skin-hodl-waves .vhs-tile:nth-child(12)::after { animation-delay: 7.7s; }
+
+/* =========================================================================
+   Skin: Mining — the wallet's Mining page background re-skinned as a
+   Dashboard option. Brick-pattern rows of MiningPoolImages tiles
+   alternating scroll direction with a 12s tile-pulse breathing on each.
+   Keyframe names suffixed -mining to avoid colliding with Mining.razor.css
+   which defines its own scrollRight/scrollLeft/tilePulse (Blazor scoped
+   CSS does not isolate @keyframes globally).
+   ========================================================================= */
+.skin-mining {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.skin-mining .tile-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    margin-bottom: 4px;
+    animation: scrollRightMining 35s linear infinite;
+}
+
+.skin-mining .tile-row:nth-child(even) {
+    margin-left: -25vw;
+    animation: scrollLeftMining 35s linear infinite;
+}
+
+.skin-mining .tile-row img {
+    width: calc(25vw - 2px);
+    height: auto;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 4px;
+    animation: tilePulseMining 12s ease-in-out infinite;
+}
+
+.skin-mining .tile-row:nth-child(even) img             { animation-delay: -3s; }
+.skin-mining .tile-row img:nth-child(2)                { animation-delay: -2s; }
+.skin-mining .tile-row img:nth-child(3)                { animation-delay: -4s; }
+.skin-mining .tile-row:nth-child(even) img:nth-child(2){ animation-delay: -5s; }
+.skin-mining .tile-row:nth-child(even) img:nth-child(3){ animation-delay: -1s; }
+
+@keyframes tilePulseMining {
+    0%, 100% { opacity: 0.55; transform: scale(1);    filter: brightness(0.8); }
+    50%      { opacity: 1;    transform: scale(1.03); filter: brightness(1.3); }
+}
+
+/* Translate by --cp-set when the painter provides it (paintCoinPileTiles sets
+   it for seamless looping over set+clone rows). Default 50vw fallback keeps
+   the old Mining-skin behaviour unchanged for paintTileRows callers. */
+@keyframes scrollRightMining { 0% { transform: translateX(calc(-1 * var(--cp-set, 50vw))); } 100% { transform: translateX(0); } }
+@keyframes scrollLeftMining  { 0% { transform: translateX(0); }                              100% { transform: translateX(calc(-1 * var(--cp-set, 50vw))); } }
+
+/* =========================================================================
+   Skins: Coin Piles — the Send / Receive / Transactions page backgrounds made
+   available as Dashboard skins. All reuse the shared CoinPilesImages set,
+   painted by paintCoinPileTiles / paintCoinPileMosaic / paintCoinPileDiagonal
+   in mining-background.js. Children are JS-created → plain descendant rules.
+   ========================================================================= */
+
+/* Send style — horizontal scrolling tile rows with a breathing pulse (reuses the
+   Mining skin's keyframes). */
+.skin-coinpile-send {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+.skin-coinpile-send .tile-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    margin-bottom: 4px;
+    animation: scrollRightMining 35s linear infinite;
+}
+.skin-coinpile-send .tile-row:nth-child(even) {
+    margin-left: -25vw;
+    animation: scrollLeftMining 35s linear infinite;
+}
+.skin-coinpile-send .tile-row img {
+    width: calc(25vw - 2px);
+    height: auto;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 4px;
+    animation: tilePulseMining 12s ease-in-out infinite;
+}
+.skin-coinpile-send .tile-row:nth-child(even) img             { animation-delay: -3s; }
+.skin-coinpile-send .tile-row img:nth-child(2)                { animation-delay: -2s; }
+.skin-coinpile-send .tile-row img:nth-child(3)                { animation-delay: -4s; }
+.skin-coinpile-send .tile-row:nth-child(even) img:nth-child(2){ animation-delay: -5s; }
+.skin-coinpile-send .tile-row:nth-child(even) img:nth-child(3){ animation-delay: -1s; }
+
+/* Receive style — dense mosaic with a top-left → bottom-right block-then-smooth
+   sweep (per-tile delay set inline by the painter; 12s period). */
+.skin-coinpile-receive {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: grid;
+    gap: 2px;
+}
+.skin-coinpile-receive .mosaic-cell {
+    overflow: hidden;
+    border-radius: 4px;
+    animation: cpTwinkle 9s ease-in-out infinite;
+}
+.skin-coinpile-receive .mosaic-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    animation: cpZoom 9s ease-in-out infinite;
+}
+/* Smooth, with a TIGHT dark band: tiles stay bright most of the cycle and dip
+   to dark only briefly around the wrap, so the diagonal sweep reads as a narrow
+   shadow band gliding top-left → bottom-right. */
+@keyframes cpTwinkle {
+    0%   { opacity: 0.30; }
+    8%   { opacity: 1; }
+    92%  { opacity: 1; }
+    100% { opacity: 0.30; }
+}
+/* Zoom stays fully smooth (ease-in-out throughout) — only the opacity twinkle
+   does the block-then-smooth sweep, so the scale never jumps. */
+@keyframes cpZoom {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.08); }
+}
+
+/* Transactions style — medium-density grid drifting diagonally (seamless block
+   repeat) with a gentle per-tile breathing pulse. */
+.skin-coinpile-transactions {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+.skin-coinpile-transactions .diag-grid {
+    display: grid;
+    width: max-content;
+    will-change: transform;
+    animation: cpDiag 60s linear infinite;
+}
+.skin-coinpile-transactions .diag-grid img {
+    width: 100%;
+    height: auto;
+    display: block;
+    animation: cpPulse 6s ease-in-out infinite;
+}
+@keyframes cpDiag {
+    from { transform: translate(calc(-1 * var(--diag-x)), calc(-1 * var(--diag-y))); }
+    to   { transform: translate(0, 0); }
+}
+@keyframes cpPulse {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50%      { opacity: 1;    transform: scale(1.05); }
+}
+
+/* =========================================================================
+   Skin: Address Book — vertical columns of images scrolling up/down on
+   alternating columns, each tile with a gentle staggered pulse. The
+   Address Book page background, as a Dashboard skin. Painted by
+   paintAddressBookColumns; column width from --abcol-w (set inline by JS).
+   ========================================================================= */
+.skin-addressbook {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: flex;
+}
+.skin-addressbook .ab-col {
+    width: var(--abcol-w, 16.6vw);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    animation: abColUp 40s linear infinite;
+}
+.skin-addressbook .ab-col:nth-child(even) {
+    animation: abColDown 40s linear infinite;
+}
+.skin-addressbook .ab-col img {
+    width: 100%;
+    height: auto;
+    display: block;
+    animation: abColPulse 7s ease-in-out infinite;
+}
+@keyframes abColUp   { from { transform: translateY(0); }     to { transform: translateY(-50%); } }
+@keyframes abColDown { from { transform: translateY(-50%); }  to { transform: translateY(0); } }
+@keyframes abColPulse {
+    0%, 100% { opacity: 0.6; }
+    50%      { opacity: 1; }
+}
+
+/* Security page Ken Burns pan/zoom — global so both the page's scoped img rule
+   and the pixelate canvas overlay (created in JS) can reference it and stay in
+   sync (avoids a size jump when the canvas hands back to the image). */
+@keyframes secKenBurns {
+    0%   { transform: scale(1.12) translate(-3%, -3%); }
+    50%  { transform: scale(1.22) translate(3%, 3%); }
+    100% { transform: scale(1.12) translate(-3%, -3%); }
+}
+
+/* =========================================================================
+   Skin: Security — the Security page background (Ken Burns grid whose tiles
+   sporadically flip and matrix-green pixelate) as a Dashboard skin. Painted by
+   paintSecurityGrid; mirrors the page's scoped rules, plain descendant selectors.
+   ========================================================================= */
+.skin-security {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: grid;
+    gap: 2px;
+}
+.skin-security .security-cell {
+    overflow: hidden;
+    border-radius: 4px;
+    position: relative;
+}
+.skin-security .security-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    animation: secKenBurns 20s ease-in-out infinite;
+}
+.skin-security .sec-pixel {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+/* Backup diagonal-drift keyframes — defined globally so both the page (scoped
+   .backup-bg ::deep rules) and this skin reference them by name. */
+@keyframes bkDiagNE {
+    from { transform: translate(calc(-1 * var(--bk-diag-x)), 0); }
+    to   { transform: translate(0, calc(-1 * var(--bk-diag-y))); }
+}
+@keyframes bkPulse {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50%      { opacity: 1;    transform: scale(1.04); }
+}
+
+/* =========================================================================
+   Skin: Backup — diagonal-drift tile grid (NE direction). Painted by
+   paintBackupDiagonal; grid tracks and --bk-diag-x/y are set inline by JS.
+   Scoped variant on the Backup page is in Backup.razor.css; the scanner beam
+   is page-only (not on the dashboard).
+   ========================================================================= */
+.skin-backup {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+.skin-backup .bk-diag-grid {
+    display: grid;
+    width: max-content;
+    will-change: transform;
+    animation: bkDiagNE 60s linear infinite;
+}
+.skin-backup .bk-cell {
+    overflow: hidden;
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.skin-backup .bk-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    animation: bkPulse 6s ease-in-out infinite;
+}
+
+/* Vault scanner beam — same diagonal gold sweep as the Backup page, as an
+   ::after pseudo on the skin host so no JS change is needed. Stacks above the
+   grid (pseudos render after element children). screen-blend brightens the
+   imagery beneath. */
+.skin-backup::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: 0;
+    width: 28%;
+    height: 200%;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 193, 7, 0.00) 0%,
+        rgba(255, 193, 7, 0.18) 35%,
+        rgba(255, 215, 130, 0.55) 48%,
+        rgba(255, 240, 200, 0.90) 50%,
+        rgba(255, 215, 130, 0.55) 52%,
+        rgba(255, 193, 7, 0.18) 65%,
+        rgba(255, 193, 7, 0.00) 100%
+    );
+    transform-origin: center center;
+    animation: bkScan 16s linear infinite;
+    mix-blend-mode: screen;
+    filter: blur(1px) drop-shadow(0 0 14px rgba(255, 193, 7, 0.45));
+    will-change: transform;
+    pointer-events: none;
+}
+
+/* Backup scanner-beam sweep — defined globally so both the page (.bk-scanner
+   ::before) and the .skin-backup::after dashboard variant share it.
+   16s cycle: 11s sweep (0%→68.75%) then 5s offscreen hold (68.75%→100%). */
+@keyframes bkScan {
+    0%      { transform: translateX(-130%) rotate(20deg); }
+    68.75%  { transform: translateX(450%)  rotate(20deg); }
+    100%    { transform: translateX(450%)  rotate(20deg); }
+}
+
+/* =========================================================================
+   Skin: Digital Fire Fighters — rows of firefighter tiles scrolling sideways in
+   alternating directions + 16 more images orbiting the viewport centre at 22.5° intervals
+   on a 20s linear loop (with staggered animation-delays so the orbit looks
+   like a constant procession rather than a synchronised ring).
+   Ported from MVC Views/Home/Index.cshtml.
+   ========================================================================= */
+.skin-digital-fire-fighters {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.skin-digital-fire-fighters .firefighter-bg {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Each row scrolls horizontally, alternating direction (JS sets animation-name
+   ffScrollRight on odd rows, ffScrollLeft on even). JS also sets the row height,
+   duration, and --ff-set (one set width). Each row holds two identical clone
+   sets and translates exactly one set, so the loop is seamless. */
+.skin-digital-fire-fighters .firefighter-row {
+    display: flex;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+}
+
+.skin-digital-fire-fighters .firefighter-bg-img {
+    flex-shrink: 0;     /* width is set inline by JS; never squeeze tiles */
+    height: 100%;
+}
+
+.skin-digital-fire-fighters .firefighter-bg-img img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: brightness(110%);
+    border: 3px solid black;
+    box-sizing: border-box;
+    display: block;
+}
+
+@keyframes ffScrollRight { 0% { transform: translateX(calc(-1 * var(--ff-set))); } 100% { transform: translateX(0); } }
+@keyframes ffScrollLeft  { 0% { transform: translateX(0); } 100% { transform: translateX(calc(-1 * var(--ff-set))); } }
+
+/* Import page background-field row scroll — alternating direction per row.
+   Defined globally (not in Import.razor.css) because JS sets animationName by
+   plain string; scoped @keyframes get a suffix that JS can't anticipate. */
+@keyframes imFieldScrollLeft  { from { transform: translateX(0); }                                 to { transform: translateX(calc(-1 * var(--field-set))); } }
+@keyframes imFieldScrollRight { from { transform: translateX(calc(-1 * var(--field-set))); }       to { transform: translateX(0); }                         }
+
+/* Remaining Import keyframes — globalised so the .skin-import dashboard skin
+   shares them with the page (scoped CSS references resolve to globals when
+   the @keyframes block isn't in the same scoped file). */
+@keyframes imRingCW  { from { transform: rotate(0deg); } to { transform: rotate(360deg);  } }
+@keyframes imRingCCW { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+@keyframes imTilePulse  { 0%, 100% { opacity: 0.8; } 50% { opacity: 1; } }
+@keyframes imFieldPulse { 0%, 100% { opacity: 0.8; } 50% { opacity: 1; } }
+@keyframes imSonar {
+    0%   { width: 0;        height: 0;        border-width: 6px;   opacity: 1;   }
+    20%  {                                    border-width: 5px;   opacity: 1;   }
+    100% { width: 250vmax;  height: 250vmax;  border-width: 0.5px; opacity: 0;   }
+}
+
+/* =========================================================================
+   Skin: Import — three counter-rotating concentric rings of tiles around the
+   viewport centre over a dimmed alternating-row scrolling field, plus a glowing
+   cyan sonar pulse (::after). Painted by paintImportRings; mirrors the page's
+   scoped rules, plain descendant selectors.
+   ========================================================================= */
+.skin-import {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: #000;
+}
+.skin-import .im-field {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    opacity: 0.6;
+    display: flex;
+    flex-direction: column;
+}
+.skin-import .im-field-row {
+    display: flex;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+    will-change: transform;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+}
+.skin-import .im-field-row img {
+    flex-shrink: 0;
+    object-fit: cover;
+    display: block;
+    animation: imFieldPulse 9s ease-in-out infinite;
+}
+.skin-import .im-ring {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    transform-origin: center center;
+    will-change: transform;
+}
+.skin-import .im-ring-outer  { animation: imRingCW  var(--ring-dur, 80s) linear infinite; }
+.skin-import .im-ring-middle { animation: imRingCCW var(--ring-dur, 60s) linear infinite; }
+.skin-import .im-ring-inner  { animation: imRingCW  var(--ring-dur, 40s) linear infinite; }
+.skin-import .im-tile {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: var(--tile, 120px);
+    height: var(--tile, 120px);
+    margin-left: calc(var(--tile, 120px) / -2);
+    margin-top: calc(var(--tile, 120px) / -2);
+    transform: rotate(var(--angle, 0deg)) translateY(calc(-1 * var(--radius, 200px)));
+    overflow: hidden;
+    border-radius: 8px;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+        0 0 14px rgba(0, 0, 0, 0.5);
+    animation: imTilePulse 7s ease-in-out infinite;
+}
+.skin-import .im-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* Sonar pulse — ::after pseudo-element so no JS-painted element is needed.
+   Single pulse on a 4s cycle (page has two staggered via two pseudos; on the
+   dashboard we keep it simpler with one). Same glow stack as the page. */
+.skin-import::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border: 3px solid rgba(160, 230, 255, 1);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow:
+        0 0 18px  rgba(120, 220, 255, 0.95),
+        0 0 48px  rgba( 80, 200, 255, 0.70),
+        0 0 110px rgba( 80, 200, 255, 0.40);
+    filter: drop-shadow(0 0 24px rgba(80, 200, 255, 0.55));
+    animation: imSonar 4s ease-out infinite;
+    will-change: width, height, opacity;
+    pointer-events: none;
+}
+
+.skin-digital-fire-fighters .firefighter-orbit {
+    position: absolute;
+    top: 50%;
+    /* Offset the orbit centre slightly left of viewport centre so the
+       circle reads as centred under the dashboard rather than the whole
+       window. Adjust as needed; 50% = viewport centre. */
+    left: 47.9%;
+    width: 0;
+    height: 0;
+}
+
+.skin-digital-fire-fighters .firefighter-orbit .orbit {
+    position: absolute;
+    width: 80px;
+    height: auto;
+    transform-origin: center;
+    animation: firefighterOrbitPath 20s linear infinite;
+    animation-fill-mode: both;
+}
+
+@keyframes firefighterOrbitPath {
+    from { transform: rotate(0deg)   translateX(calc(50vw - 50px)) rotate(0deg); }
+    to   { transform: rotate(360deg) translateX(calc(50vw - 50px)) rotate(-360deg); }
+}
+
+/* 16 orbit positions at 22.5° intervals around the circle, each with a
+   1.25s animation-delay step so the ring is filled with staggered tiles
+   rather than appearing as one synchronised group. */
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(1)  { transform: rotate(0deg)     translateX(calc(50vw - 50px)) rotate(0deg);     animation-delay: 0s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(2)  { transform: rotate(22.5deg)  translateX(calc(50vw - 50px)) rotate(-22.5deg);  animation-delay: 1.25s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(3)  { transform: rotate(45deg)    translateX(calc(50vw - 50px)) rotate(-45deg);    animation-delay: 2.5s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(4)  { transform: rotate(67.5deg)  translateX(calc(50vw - 50px)) rotate(-67.5deg);  animation-delay: 3.75s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(5)  { transform: rotate(90deg)    translateX(calc(50vw - 50px)) rotate(-90deg);    animation-delay: 5s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(6)  { transform: rotate(112.5deg) translateX(calc(50vw - 50px)) rotate(-112.5deg); animation-delay: 6.25s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(7)  { transform: rotate(135deg)   translateX(calc(50vw - 50px)) rotate(-135deg);   animation-delay: 7.5s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(8)  { transform: rotate(157.5deg) translateX(calc(50vw - 50px)) rotate(-157.5deg); animation-delay: 8.75s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(9)  { transform: rotate(180deg)   translateX(calc(50vw - 50px)) rotate(-180deg);   animation-delay: 10s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(10) { transform: rotate(202.5deg) translateX(calc(50vw - 50px)) rotate(-202.5deg); animation-delay: 11.25s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(11) { transform: rotate(225deg)   translateX(calc(50vw - 50px)) rotate(-225deg);   animation-delay: 12.5s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(12) { transform: rotate(247.5deg) translateX(calc(50vw - 50px)) rotate(-247.5deg); animation-delay: 13.75s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(13) { transform: rotate(270deg)   translateX(calc(50vw - 50px)) rotate(-270deg);   animation-delay: 15s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(14) { transform: rotate(292.5deg) translateX(calc(50vw - 50px)) rotate(-292.5deg); animation-delay: 16.25s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(15) { transform: rotate(315deg)   translateX(calc(50vw - 50px)) rotate(-315deg);   animation-delay: 17.5s; }
+.skin-digital-fire-fighters .firefighter-orbit .orbit:nth-child(16) { transform: rotate(337.5deg) translateX(calc(50vw - 50px)) rotate(-337.5deg); animation-delay: 18.75s; }
+
+/* =========================================================================
+   Skin: Plain — no background animation. The body's gradient (set in
+   wallet.css) shows through. The host stays in the DOM but is invisible.
+   ========================================================================= */
+.skin-plain {
+    display: none;
+}

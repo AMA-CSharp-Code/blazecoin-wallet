@@ -1,0 +1,272 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+@inject IncomingPaymentWatcher Watcher
+@inject CometPulse Comet
+@inject IUnitSettings Units
+@inject ISkinSettings Skin
+@inject IJSRuntime Js
+@inject IPinLock Pin
+@inject IBiometricAuth Biometric
+@inject AppLockSession Lock
+@inject IWalletLocker Locker
+@inject HeaderChainSync HeaderSync
+@inject NavigationManager Nav
+
+@* The lite wallet chrome: crimson ledger header (the V2 wallet identity), a TOP nav row,
+   then the content well. One layout for every head — Android today, iOS/web later.
+   Also the incoming-payment toast host: the watcher polls while the app is open and any
+   fresh payment announces itself here, whatever page is showing. *@
+
+@* Animated coin background (ported from the V2.0 desktop wallet's Pixelated Coins skin);
+   painted by coin-skin.js when the Settings toggle is on. Sits behind .lite-shell. *@
+<div id="lite-skin-host" class="lite-skin-host lite-skin-off"></div>
+
+@if (Pin.IsSet && !Lock.IsUnlocked)
+{
+    @* Launch lock — a PIN (and biometric where available) gate before the wallet shows. *@
+    <div class="lite-shell">
+        <header class="lite-header"><span class="lite-brand">Blazecoin Wallet</span><span class="lite-net">Locked</span></header>
+        <main class="lite-main">
+            <div class="lite-card">
+                <h2>🔒 Wallet Locked</h2>
+                <p class="lite-sub">Enter your PIN to unlock.</p>
+                <input class="lite-input" type="password" inputmode="numeric" placeholder="PIN" @bind="_pinEntry" @onkeyup="OnPinKey" />
+                <button class="lite-btn" @onclick="TryPin">Unlock</button>
+                @if (_biometricAvailable)
+                {
+                    <div style="height:8px"></div>
+                    <button class="lite-btn lite-btn-ghost" @onclick="TryBiometric">👆 Use biometrics</button>
+                }
+                @if (_lockError != null) { <div class="lite-error">@_lockError</div> }
+            </div>
+        </main>
+    </div>
+}
+else
+{
+<div class="lite-shell">
+    @* Mirrors the desktop .topnav: deep V1.5 crimson gradient, gold brand mark. *@
+    <header class="lite-header">
+        <span class="lite-brand">Blazecoin Wallet</span>
+        <span class="lite-header-right">
+            <span class="lite-net">Lite</span>
+            @* Lock now (2026-08-23): what it does is the head's business — PIN gate on Android,
+               drop-the-keys + password ceremony on the web. Hidden when locking would be a no-op. *@
+            @if (Locker.CanLock && !OnSetupPage)
+            {
+                <button class="lite-lock" title="Lock wallet" aria-label="Lock wallet" @onclick="LockNow">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="4" y="11" width="16" height="10" rx="2" />
+                        <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                    </svg>
+                </button>
+            }
+            @* Advanced settings live behind this gear, off the main nav (connection/gateway). *@
+            <NavLink href="settings" class="lite-gear" title="Settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+            </NavLink>
+        </span>
+    </header>
+
+    @* Top nav: icons stay solid red; only the LABEL highlights (gold) on the active tab.
+       Send ▶ / Receive ◀ orientation matches the V2.0 desktop wallet's Sidebar.
+       HIDDEN during the setup ceremony: once Create runs, the seed exists, so Home would
+       unlock and walk straight past the write-down + quiz gates (user-found bypass,
+       2026-07-27 emulator session) — and pre-create there is nothing to navigate to. *@
+    @if (!OnSetupPage)
+    {
+    <nav class="lite-nav">
+        <NavLink href="" Match="NavLinkMatch.All" class="lite-nav-item">
+            <span class="nav-glyph">
+                @* viewBox tight-cropped to the house so it fills its box and matches the triangle size. *@
+                <svg viewBox="2 3 20 18" fill="currentColor" aria-hidden="true">
+                    <path d="M12 3 2 11.5h2.2V21H10v-5.5h4V21h5.8v-9.5H22z" />
+                </svg>
+            </span>
+            <span class="nav-label">Home</span>
+        </NavLink>
+        <NavLink href="send" class="lite-nav-item"><span class="nav-glyph tri-right"></span><span class="nav-label">Send</span></NavLink>
+        <NavLink href="receive" class="lite-nav-item"><span class="nav-glyph tri-left"></span><span class="nav-label">Receive</span></NavLink>
+    </nav>
+    }
+
+    @* Chain verification in progress (first catch-up from the shipped checkpoint can take a
+       while on a phone/browser): say so quietly instead of looking frozen. The sync yields
+       to the host between slices, so the UI keeps painting while this shows.
+       The zero-height anchor keeps the strip OUT OF FLOW — at tip the routine 15s/30s polls
+       sync one-or-two headers and flipped IsSyncing for a blink, and an in-flow strip nudged
+       the whole page down and back up each time (fixed 2026-08-24). The CSS also delays the
+       reveal ~400ms, so those at-tip blips never paint at all; only a real catch-up shows. *@
+    @if (HeaderSync.IsSyncing)
+    {
+        <div class="lite-syncbar-anchor">
+            <div class="lite-syncbar" role="status">Verifying chain · block @HeaderSync.VerifiedTipHeight.ToString("N0")…</div>
+        </div>
+    }
+
+    <main class="lite-main">
+        @foreach (var p in _toasts)
+        {
+            @* An incoming payment is announced from gateway-reported data, which the wallet
+               has not independently proven yet. Assert a confident "Received" only once it
+               has at least one confirmation; a 0-conf sighting is shown as UNCONFIRMED so a
+               fabricated-mempool payment can't read as settled money (security audit S2). *@
+            var confirmed = p.Confirmations > 0;
+            <div class="lite-toast @(confirmed ? "" : "lite-toast-pending")" role="status" @key="p.TxId">
+                <span>
+                    @(confirmed ? "▼ Received" : "▽ Incoming")
+                    <b>@LiteUnits.Format(p.AmountSatoshis, Units.Unit) @LiteUnits.Symbol(Units.Unit)</b>
+                    <small>· @(confirmed ? $"{p.Confirmations} conf" : "unconfirmed")</small>
+                </span>
+                <button class="lite-toast-close" title="Dismiss" @onclick="() => Dismiss(p)">✕</button>
+            </div>
+        }
+        @Body
+    </main>
+</div>
+}
+
+@code {
+    private readonly List<IncomingPayment> _toasts = [];
+    private IJSObjectReference? _skin;
+    private string _pinEntry = string.Empty;
+    private string? _lockError;
+    private bool _biometricAvailable;
+
+    // The setup ceremony must not offer an exit: the nav is hidden while /setup shows.
+    private bool OnSetupPage =>
+        new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').EndsWith("/setup", StringComparison.OrdinalIgnoreCase);
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+        => _ = InvokeAsync(StateHasChanged);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        // The watcher no-ops while the wallet is locked, so starting here is safe on every
+        // head — it simply picks up on its next tick once a page unlocks the session.
+        Watcher.PaymentReceived += OnPaymentReceived;
+        Watcher.Start();
+        // Re-render when the app re-locks on resume (the WebView tree survives backgrounding).
+        Lock.StateChanged += OnLockStateChanged;
+        // The verification strip follows the header sync's state (start/end + each tip advance).
+        HeaderSync.SyncStateChanged += OnSyncChanged;
+        HeaderSync.TipAdvanced += OnSyncChanged;
+        // Only offer the biometric unlock button where the device actually supports it.
+        if (Pin.IsSet) _biometricAvailable = await Biometric.IsAvailableAsync();
+    }
+
+    private void OnSyncChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private Task LockNow() => Locker.LockAsync();
+
+    private void OnLockStateChanged() => _ = InvokeAsync(async () =>
+    {
+        // Re-evaluate biometric availability at every lock transition, not just app
+        // start — a fingerprint enrolled while the wallet is running (or an activity
+        // that wasn't ready during init) would otherwise hide the button until a
+        // process restart (2026-07-27 emulator smoke).
+        if (Pin.IsSet) _biometricAvailable = await Biometric.IsAvailableAsync();
+        StateHasChanged();
+    });
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        // Load the chosen skin's module (shared, cached — the Settings dropdown imports the
+        // same URL and drives the same module state) and paint it.
+        var resolved = LiteSkinResolver.Resolve(Skin.Skin);   // Random → a fresh pick per launch
+        if (resolved is not LiteSkin.None)
+        {
+            var module = resolved switch
+            {
+                LiteSkin.AxePattern => "axe-skin.js",
+                LiteSkin.DigitalFireFighters => "firefighter-skin.js",
+                _ => "coin-skin.js",
+            };
+            _skin = await Js.InvokeAsync<IJSObjectReference>("import", $"./_content/BlazecoinWallet.Lite.UI/js/{module}");
+            await _skin.InvokeVoidAsync("start", "lite-skin-host");
+        }
+    }
+
+    private void OnPaymentReceived(IncomingPayment payment)
+    {
+        // Beyond the toast, the Home balance-card comet runs green for a window.
+        Comet.Pulse(CometPulseKind.Received);
+        _ = InvokeAsync(() =>
+        {
+            _toasts.Add(payment);
+            StateHasChanged();
+        });
+        _ = AutoDismissAsync(payment);
+    }
+
+    private async Task AutoDismissAsync(IncomingPayment payment)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(12));
+        await InvokeAsync(() =>
+        {
+            _toasts.Remove(payment);
+            StateHasChanged();
+        });
+    }
+
+    private void Dismiss(IncomingPayment payment) => _toasts.Remove(payment);
+
+    // Attempt throttling (audit round-3 C2): PBKDF2 blunts offline brute force but online
+    // guessing on a 4-digit PIN would otherwise be unbounded — 5 misses buys a 30 s wait.
+    private int _pinFailures;
+    private DateTime _pinLockedUntil = DateTime.MinValue;
+
+    private void TryPin()
+    {
+        if (DateTime.UtcNow < _pinLockedUntil)
+        {
+            _lockError = $"Too many attempts — wait {(int)(_pinLockedUntil - DateTime.UtcNow).TotalSeconds + 1}s.";
+            return;
+        }
+        if (Pin.Verify(_pinEntry))
+        {
+            Lock.Unlock();
+            _pinEntry = string.Empty; _lockError = null; _pinFailures = 0;
+        }
+        else
+        {
+            _pinEntry = string.Empty;
+            if (++_pinFailures >= 5)
+            {
+                _pinFailures = 0;
+                _pinLockedUntil = DateTime.UtcNow.AddSeconds(30);
+                _lockError = "Too many attempts — locked for 30 seconds.";
+            }
+            else
+            {
+                _lockError = "Wrong PIN.";
+            }
+        }
+    }
+
+    private void OnPinKey(KeyboardEventArgs e) { if (e.Key == "Enter") TryPin(); }
+
+    private async Task TryBiometric()
+    {
+        if (await Biometric.AuthenticateAsync("Unlock your wallet")) { Lock.Unlock(); _lockError = null; }
+        else { _lockError = "Biometric check failed — use your PIN."; }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        Watcher.PaymentReceived -= OnPaymentReceived;
+        Lock.StateChanged -= OnLockStateChanged;
+        HeaderSync.SyncStateChanged -= OnSyncChanged;
+        HeaderSync.TipAdvanced -= OnSyncChanged;
+        if (_skin is not null)
+        {
+            try { await _skin.DisposeAsync(); } catch { /* circuit already gone */ }
+        }
+    }
+}

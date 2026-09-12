@@ -1,0 +1,127 @@
+@page "/tx/{TxId}"
+@layout LiteLayout
+@inject LiteWalletService Wallet
+@inject BlazecoinWallet.Lite.Data.IChainReader Reader
+@inject ILabelStore Labels
+@inject IUnitSettings Units
+@inject IExplorerSettings Explorer
+@inject NavigationManager Nav
+@using BlazecoinWallet.Lite.Data
+
+@* Transaction detail: decode the raw tx (gateway /raw) to show outputs + the outpoints it
+   spends, flag the wallet's own addresses, let the user label it, and link to the explorer. *@
+<div class="lite-card">
+    <h2>Transaction</h2>
+    <div class="lite-txid" style="word-break:break-all">@TxId</div>
+    @{ var txUrl = LiteExplorer.TxUrl(Explorer.BaseUrl, TxId); }
+    @if (txUrl != null)
+    {
+        <a href="@txUrl" target="_blank" rel="noopener" class="lite-link lite-sub">View on explorer ↗</a>
+    }
+
+    <label class="lite-sub" style="margin-top:12px">Label (private, on this device)</label>
+    <div style="display:flex; gap:8px;">
+        <input class="lite-input" style="flex:1" placeholder="Add Label" @bind="_label" />
+        <button class="lite-btn lite-btn-ghost" style="width:auto" @onclick="SaveLabel">Save</button>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="lite-card"><p class="lite-sub">Loading transaction…</p></div>
+}
+else if (_tx == null)
+{
+    <div class="lite-card"><p class="lite-sub">Couldn't load this transaction from the gateway. It may be too old for this node, or the node is busy — try the explorer link above.</p></div>
+}
+else
+{
+    <div class="lite-card">
+        <h2>Outputs</h2>
+        <ul class="lite-history lite-history-outputs">
+            @foreach (var o in _tx.Outputs)
+            {
+                <li>
+                    <span>
+                        <span class="@(IsMine(o.Address) ? "in" : "")">@(o.Address ?? "(non-standard)")</span>
+                        @if (IsMine(o.Address)) { <span class="lite-sub"> · yours</span> }
+                    </span>
+                    <span class="in">@AmountText(o.Amount) @_sym</span>
+                </li>
+            }
+        </ul>
+        <div class="lite-sub" style="margin-top:8px">
+            @_tx.Outputs.Count output@(_tx.Outputs.Count == 1 ? "" : "s"), @_tx.Inputs.Count input@(_tx.Inputs.Count == 1 ? "" : "s")
+            @if (_tx.IsCoinbase) { <text> · ⛏️ coinbase (mined)</text> }
+            · total out @AmountText(_tx.TotalOut) @_sym
+        </div>
+    </div>
+
+    @if (_proof is { } p && (p.OnVerifiedChain || p.ProofValid))
+    {
+        <div class="lite-card">
+            <h2>Chain Verification</h2>
+            @if (p.OnVerifiedChain)
+            {
+                <p class="lite-sub">🔒 <strong>Verified on your own chain.</strong> This wallet checked the
+                    block headers' proof-of-work itself — the height below is not taken on the gateway's word.</p>
+                <div class="lite-address" style="text-align:left">
+                    Block <strong>@p.Height?.ToString("N0")</strong>@(p.Confirmations is int c ? $" · {c:N0} confirmation{(c == 1 ? "" : "s")}" : "")
+                </div>
+            }
+            else
+            {
+                <p class="lite-sub">✓ Inclusion proof is valid (scrypt proof-of-work + merkle branch). Your verified
+                    header chain hasn't reached this block yet, so its exact height isn't independently confirmed.</p>
+            }
+        </div>
+    }
+}
+
+<button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo(""))">← Back to Home</button>
+
+@code {
+    [Parameter] public string TxId { get; set; } = string.Empty;
+
+    private LiteTxDetails? _tx;
+    private LiteChainProof? _proof;
+    private bool _loading = true;
+    private string _label = string.Empty;
+    private IReadOnlyList<string> _mine = [];
+    private string _sym => LiteUnits.Symbol(Units.Unit);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await Wallet.UnlockAsync()) { Nav.NavigateTo("setup"); return; }
+        _mine = Wallet.Addresses;
+        _label = Labels.Get(TxId) ?? string.Empty;
+        try
+        {
+            var hex = await Reader.GetRawTransactionHexAsync(TxId);
+            _tx = LiteTxDecoder.Decode(hex);
+        }
+        finally { _loading = false; }
+    }
+
+    /// <summary>After the tx renders, independently confirm it against the wallet's verified
+    /// header chain (fetches a merkle proof + a header sync) and show the trustless height —
+    /// off the initial render so the page isn't blocked on it. No-op in personal-node mode.</summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _tx == null) return;
+        try
+        {
+            var proof = await Wallet.VerifyTransactionOnChainAsync(TxId);
+            if (proof.OnVerifiedChain || proof.ProofValid)
+            {
+                _proof = proof;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch { /* best-effort — the tx detail still stands without the proof line */ }
+    }
+
+    private void SaveLabel() => Labels.Set(TxId, _label);
+    private bool IsMine(string? address) => address != null && _mine.Contains(address);
+    private string AmountText(long sats) => LiteUnits.Format(sats, Units.Unit);
+}

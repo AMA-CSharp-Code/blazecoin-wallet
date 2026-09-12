@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <!-- Blazecoin Lite UI: Razor class library holding the lite wallet's pages/components
+       so every head (Android today; iOS/web later) renders the SAME UI. Keep this project
+       free of MAUI/platform APIs — platform services (secure storage, camera) are injected
+       by the heads behind interfaces defined here or in Lite.Core. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazecoinWallet.Lite.UI</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
+    <PackageReference Include="Net.Codecrete.QrCodeGenerator" Version="3.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlazecoinWallet.Lite.Core\BlazecoinWallet.Lite.Core.csproj" />
+  </ItemGroup>
+
+</Project>
