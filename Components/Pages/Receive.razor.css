@@ -1,0 +1,381 @@
+/* Title banner — nested red->black cards with text-shadow, ported from the
+   Dashboard / Send headers. Square edges to match the V1.5 card below. */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+.banner-title {
+    margin: 0;
+    padding: 12px 0;
+    text-align: center;
+    font-weight: 500;
+    color: #fff;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    white-space: nowrap;
+}
+.banner-emoji {
+    text-shadow: none;
+    margin: 0 5rem;          /* matches Send; leaves room for the ghost trail */
+    display: inline-block;
+    transform: translateY(-2px);
+}
+
+/* 3D coin-flip reveal — each letter spins on its Y axis like a flipping
+   coin, staggered 0.1s per letter so the flip sweeps across the title. The
+   keyframe spins fast (0% → 15%) then holds the final 360deg pose for the
+   rest of the cycle. Reset at 100% is invisible: rotateY(360deg) and
+   rotateY(0deg) are visually identical. Total wave for 17 chars + flip
+   duration ≈ 2.35s of motion per 4s cycle, then a brief settled pause. */
+.flip-letter {
+    display: inline-block;
+    animation: coinFlip 8s ease-in-out infinite;
+    animation-delay: calc(var(--i) * 0.1s);
+}
+
+@keyframes coinFlip {
+    0%   { transform: rotateY(0); }
+    15%  { transform: rotateY(360deg); }
+    100% { transform: rotateY(360deg); }
+}
+
+/* Left-pointing red arrows with ghost trails — same chrome as Send's arrow-r
+   but mirrored. `scaleX(-1)` on the flank flips the chunky ➜ glyph to point
+   left AND flips the ghost-trail coordinate system, so the outgoing ghosts
+   (::before/::after, +translateX) and incoming ghosts (.ghost-in, -translateX
+   start) both render mirrored automatically — no separate keyframes needed.
+   Note: scoped @keyframes get a Blazor-suffix so reusing the `arrowGhost`/
+   `arrowGhostIn` names from Send.razor.css is safe (different scopes). */
+.banner-emoji.arrow-l {
+    color: #d10000;
+    position: relative;
+    transform: scaleX(-1) translateY(-2px);
+}
+.banner-emoji.arrow-l::before,
+.banner-emoji.arrow-l::after {
+    content: "➜";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: inherit;
+    pointer-events: none;
+    animation: arrowGhost 2.5s linear infinite;
+}
+.banner-emoji.arrow-l::after { animation-delay: 1.25s; }
+
+@keyframes arrowGhost {
+    0%   { transform: translateX(0);    opacity: 0;    }
+    20%  { transform: translateX(10px); opacity: 0.55; }
+    100% { transform: translateX(60px); opacity: 0;    }
+}
+
+.banner-emoji.arrow-l .ghost-in {
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: inherit;
+    pointer-events: none;
+    animation: arrowGhostIn 2.5s linear infinite;
+}
+.banner-emoji.arrow-l .ghost-in:nth-of-type(2) { animation-delay: 1.25s; }
+
+@keyframes arrowGhostIn {
+    0%   { transform: translateX(-60px); opacity: 0;    }
+    80%  { transform: translateX(-10px); opacity: 0.55; }
+    100% { transform: translateX(0);     opacity: 0;    }
+}
+
+/* Override the global red h1 — white reads cleaner against the framed card. */
+h1 {
+    color: #fff;
+    text-shadow: none;
+}
+
+.muted {
+    color: rgba(255, 255, 255, 0.6);
+    margin-bottom: 1rem;
+    text-align: left;
+}
+
+.gen-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 1rem;
+}
+
+/* QR panel — shown above the table when an address's QR button is toggled on. */
+.qr-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    max-width: 300px;
+    margin: 0 auto 1.5rem;
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+}
+
+.qr-img {
+    width: 220px;
+    height: 220px;
+    image-rendering: pixelated; /* keep the modules crisp */
+    border-radius: 4px;
+}
+
+.qr-addr {
+    font-size: 0.8rem;
+    word-break: break-all;
+    text-align: center;
+    color: #fff;
+}
+
+/* QR-panel "Copy" button — Dashboard green (--blz-success #06d6a0) so it stands
+   out against the dark panel, brightening on hover. */
+.qr-copy {
+    color: #fff;
+    background: #06d6a0;
+    border: 1px solid #06d6a0;
+}
+.qr-copy:hover:not(:disabled) {
+    background: #08f0b4;
+    border-color: #08f0b4;
+}
+
+/* Label | Address table, V1.5 address-book style. */
+.addr-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    text-align: left;
+}
+
+.addr-table th,
+.addr-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.addr-table th {
+    color: #ff4d3a;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(158, 0, 15, 0.6);
+}
+
+/* Zebra striping — every other row a touch darker for readability. Declared
+   before :hover/.latest so those (equal/higher specificity) still win. */
+.addr-table tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.addr-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.addr-table tbody tr.latest {
+    background: rgba(6, 214, 160, 0.08);
+}
+
+.addr-table .mono {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.82rem;
+    word-break: break-all;
+    color: #fff;
+}
+
+/* Action column — QR and Copy buttons each boxed, ported from the Address
+   Book .ab-actions cell: flush right, equal fixed widths, and a fixed column
+   width so the pair lines up across rows. */
+.addr-table .addr-actions {
+    white-space: nowrap;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+.addr-actions .btn {
+    flex: 0 0 110px;
+}
+.addr-table th:last-child,
+.addr-table td.addr-actions {
+    width: 228px;            /* 2 × 110px buttons + 0.5rem gap */
+}
+
+/* Each action button gets its own box — brand-red gradient with a white
+   border, brightening to the lighter red→brand-red gradient on hover. (Square
+   corners come from the .receive-content .btn rule.) Ported from the Address
+   Book brand-red action buttons (the Add / Remove boxes). */
+.addr-actions .btn {
+    color: #fff;
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+    border: 1px solid #fff;
+}
+.addr-actions .btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%);
+}
+
+/* QR button — exact copy of the Address Book "Copy" button style
+   (.ab-actions .btn:not(.btn-danger)): white text, transparent fill, 1px
+   translucent-white border that highlights on hover. */
+.addr-actions .qr-btn {
+    color: #fff;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.addr-actions .qr-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.7);
+}
+
+/* Darker grey for the Label inputs (both the generator row's and the per-row
+   editable label cells), matching the Send page's .form-control treatment. */
+.label-input {
+    width: 100%;
+    max-width: 240px;
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+}
+.label-input:focus {
+    background: rgba(0, 0, 0, 0.6);
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.3);
+    color: #fff;
+}
+.label-input::placeholder {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.gen-row .label-input {
+    max-width: 300px;
+}
+
+/* Per-row Label inputs: let the row's (zebra) background show through instead
+   of their own fill, so the first column stays in keeping with the rest of the
+   row. (The generator row's .label-input keeps its own fill.) */
+.addr-table .label-input {
+    background: transparent;
+}
+.addr-table .label-input:focus {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.btn-sm {
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+}
+
+/* =========================================================================
+   Dense coin-pile mosaic background — a packed grid of tiles that twinkle
+   (staggered opacity) and slowly zoom in place, distinct from the Send page's
+   scrolling rows. Cells/imgs are created by initReceiveBackground in
+   mining-background.js, so they need ::deep; keyframes are declared locally
+   (scoped @keyframes don't cross components). Grid track sizes are set inline
+   from JS to fit the viewport.
+   ========================================================================= */
+.mosaic-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: grid;
+    gap: 2px;
+}
+
+.mosaic-bg ::deep .mosaic-cell {
+    overflow: hidden;
+    border-radius: 4px;
+    animation: coinTwinkle 9s ease-in-out infinite;
+}
+
+.mosaic-bg ::deep .mosaic-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    animation: coinZoom 9s ease-in-out infinite;
+}
+
+/* The first half of each cycle advances in discrete steps and the second half
+   eases smoothly. Combined with the diagonal phase offset, the leading part of
+   the TL→BR sweep moves in blocks, then glides smooth — repeating every cycle. */
+/* Smooth, with a TIGHT dark band: tiles stay bright most of the cycle and dip
+   to dark only briefly around the wrap, so the diagonal sweep reads as a narrow
+   shadow band gliding top-left → bottom-right. */
+@keyframes coinTwinkle {
+    0%   { opacity: 0.30; }
+    8%   { opacity: 1; }
+    92%  { opacity: 1; }
+    100% { opacity: 0.30; }
+}
+
+/* Zoom stays fully smooth (ease-in-out throughout) — only the opacity twinkle
+   does the block-then-smooth sweep, so the scale never jumps. */
+@keyframes coinZoom {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.08); }
+}
+
+/* Just keep page content above the mosaic background — the V1.5 .card now
+   provides the dark backdrop + border, no per-page wrapper styling needed. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* =========================================================================
+   "Receive Coins" container — ported from the Address Book "Labels" box
+   (.ab-content in AddressBook.razor.css). The global .card:has(> .status-header)
+   rule already supplies the edge-to-edge black header, 2px white border and
+   square corners; this adds the solid dark backdrop (so the busy coin-mosaic
+   doesn't bleed through and hurt readability), suppresses the hover lift (this
+   is a static panel, not a clickable card), and squares off the buttons with a
+   brand-red primary — matching the Labels card exactly.
+   ========================================================================= */
+.receive-content {
+    background: rgba(0, 0, 0, 0.45);
+    border: 2px solid #fff;
+    border-radius: 0;
+}
+/* Suppress the global .card:hover lift — this panel is static, not clickable. */
+.receive-content.card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* All buttons inside the card get square edges (matches the V1.5 chrome). */
+.receive-content .btn {
+    border-radius: 0;
+}
+
+/* "Generate new address" — brand-red gradient (matches the Labels "Add"
+   button / sidebar / Mining Start). Overrides the global .btn-primary. */
+.receive-content .btn-primary {
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+    color: #fff;
+    border: 1px solid #fff;
+}
+.receive-content .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%);
+}

@@ -1,0 +1,354 @@
+/* =========================================================================
+   Quantum Exposure page. The background is the ATOMIC skin — painted into
+   #quantumTileBg by initQuantumBackground, styled by the global
+   .skin-quantum-tiles rules in wallet.css (its children are JS-created, so
+   scoped rules can't reach them). The page's containers reuse the Provenance
+   scheme: the Dashboard's nested-card title banner, translucent-black cards
+   with the 2px white border and the black status-header bar, brand-red
+   gradient buttons, red table heads over green Consolas figures.
+   ========================================================================= */
+
+/* Keep page content above the skin layer. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* =========================================================================
+   Title banner — the Dashboard's nested-card construction, copied here
+   because those rules live in Dashboard.razor.css and Blazor scopes them to
+   that component. Outer dark-red card wraps a BLACK inner card, which wraps
+   the double-bordered Headers11 block.
+   ========================================================================= */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+.title-banner-inner { background-color: #000; border: 2px solid white; border-radius: 0; padding: 8px; }
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+.banner-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3rem;
+    margin: 0;
+    padding: 12px 0;
+    /* Explicit colour/shadow/weight: wallet.css has a global h1 rule (red +
+       glow) that would otherwise win the cascade over .Headers11. */
+    color: white;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    font-weight: 500;
+}
+
+/* The decrypting title. decryptQuantumBanner lays the word out as one
+   fixed-width cell per letter (JS-created, hence ::deep) measured from the
+   final word in this face, so the scramble never changes the word's width
+   and the marks either side hold still. Cipher glyphs read red; the settled
+   title flares once. */
+.banner-text { display: inline-block; white-space: pre; cursor: default; }
+.banner-text ::deep .ch { display: inline-block; text-align: center; }
+.banner-text ::deep .ch.cipher { color: #ff4d3a; opacity: 0.75; text-shadow: none; }
+.banner-text.banner-landed { animation: banner-flare 0.9s ease-out both; }
+@keyframes banner-flare {
+    0%   { text-shadow: 3px 3px navy, 3px 4px red, 0 0 0 rgba(255, 255, 255, 0); }
+    35%  { text-shadow: 3px 3px navy, 3px 4px red, 0 0 22px rgba(255, 120, 120, 0.95); }
+    100% { text-shadow: 3px 3px navy, 3px 4px red, 0 0 0 rgba(255, 255, 255, 0); }
+}
+
+/* The header mark — a key, in the sidebar's red, at the size the Dashboard's
+   header coins occupied. The real key breathes a soft glow. */
+.qx-mark {
+    width: 48px;
+    height: 48px;
+    display: inline-block;
+    vertical-align: middle;
+    color: #e02424;
+}
+.qx-markwrap { position: relative; display: inline-block; line-height: 0; }
+.qx-markwrap > .qx-mark { animation: keyBreathe 3s ease-in-out infinite; }
+
+/* TUNNELLING GHOSTS: each ghost blinks into being at one spot beside the key,
+   holds a beat, and vanishes, then reappears somewhere else — it never slides.
+   Three ghosts on one 1.33s cycle, offset a third apart, so one is always
+   somewhere. Four stops, walked in turn. */
+.qx-markwrap .mark-ghost {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    line-height: 0;
+    opacity: 0;
+    animation: keyTunnel 1.333s linear infinite;
+}
+.qx-markwrap .mark-ghost .qx-mark { color: #ff8a7a; animation: none; }
+.qx-markwrap .g-a { animation-delay: 0s; }
+.qx-markwrap .g-b { animation-delay: 0.444s; }
+.qx-markwrap .g-c { animation-delay: 0.889s; }
+@keyframes keyBreathe {
+    0%, 100% { filter: drop-shadow(0 0 0 rgba(255, 90, 90, 0)); }
+    50%      { filter: drop-shadow(0 0 9px rgba(255, 90, 90, 0.85)); }
+}
+@keyframes keyTunnel {
+    0%     { transform: translate(44px, -18px) scale(0.9);  opacity: 0;    filter: blur(2px); }
+    4%     { opacity: 0.55; filter: blur(0.3px); }
+    11%    { transform: translate(44px, -18px) scale(0.9);  opacity: 0;    filter: blur(2px); }
+    11.1%  { transform: translate(-42px, 12px) scale(1.05); }
+    15%    { opacity: 0.5;  filter: blur(0.3px); }
+    22%    { transform: translate(-42px, 12px) scale(1.05); opacity: 0;    filter: blur(2px); }
+    22.1%  { transform: translate(8px, 26px) scale(0.85); }
+    26%    { opacity: 0.55; filter: blur(0.3px); }
+    33%    { transform: translate(8px, 26px) scale(0.85);   opacity: 0;    filter: blur(2px); }
+    33.1%  { transform: translate(-24px, -24px) scale(1); }
+    37%    { opacity: 0.45; filter: blur(0.3px); }
+    44%    { transform: translate(-24px, -24px) scale(1);   opacity: 0;    filter: blur(2px); }
+    100%   { transform: translate(-24px, -24px) scale(1);   opacity: 0; }
+}
+
+/* =========================================================================
+   Containers — the Provenance card scheme: translucent black, 2px white
+   border, WHITE text (the global .card sets no colour, which is what left
+   the first cut of this page's body copy unreadably dark), and the
+   edge-to-edge black status-header bar kept square. No hover lift.
+   ========================================================================= */
+.card {
+    background-color: rgba(0, 0, 0, 0.65);
+    border: 2px solid white;
+    border-radius: 6px;
+    color: white;
+    padding: 1.5rem;
+}
+.card:has(> .status-header) {
+    padding: 0;
+    overflow: hidden;
+    border: 2px solid white;
+    border-radius: 0;
+}
+.card:hover {
+    transform: none;
+    box-shadow: none;
+}
+.qx-content { margin: 0 0 1.4rem; }
+.qx-content .card-body { padding: 1.1rem 1.25rem; }
+.qx-content .card-body > :last-child { margin-bottom: 0; }
+.qx-content .status-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+.qx-tag {
+    font-family: Consolas, monospace;
+    font-size: 0.78rem;
+    opacity: 0.75;
+    font-weight: 400;
+}
+.muted { color: rgba(255, 255, 255, 0.6); margin-bottom: 1rem; text-align: left; }
+.mono { font-family: Consolas, monospace; }
+
+/* Buttons — the Active Wallet card's treatment: brand-red gradient, thin
+   white border, square corners, brightening on hover, fading when disabled. */
+.btn {
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border: 1px solid #fff;
+    border-radius: 0;
+    padding: 0.45rem 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+.btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.btn-primary {
+    background: linear-gradient(135deg, #cf2013, #8b0000);
+    color: #fff;
+    border: 1px solid #fff;
+    border-radius: 0;
+}
+.btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, #ff4d3a, #cf2013); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.qx-btn-small { padding: 0.25rem 0.8rem; font-size: 0.82rem; }
+
+/* =========================================================================
+   Intro: the three-step strip replaces a paragraph nobody read.
+   ========================================================================= */
+.qx-steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.4rem;
+}
+.qx-step { display: flex; gap: 0.7rem; align-items: flex-start; }
+.qx-step-body { display: flex; flex-direction: column; gap: 0.3rem; }
+.qx-step-icon { width: 28px; height: 28px; color: #ff4d3a; flex-shrink: 0; }
+.qx-step-title {
+    font-family: 'Bebas Neue', system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    font-size: 1.15rem;
+    color: #ffd700;
+    margin: 0;
+}
+.qx-step-text { font-size: 0.88rem; opacity: 0.85; margin: 0; line-height: 1.45; }
+.qx-intro { margin: 0 0 0.9rem; }
+.qx-note { font-size: 0.78rem; opacity: 0.8; margin: 0.9rem 0 0; }
+.qx-hint { font-size: 0.78rem; opacity: 0.7; }
+.qx-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.9rem;
+    margin: 1rem 0 0;
+}
+.qx-actions-tight { margin: 0.4rem 0 0; }
+.qx-progress { font-family: Consolas, monospace; font-size: 0.82rem; color: #06d6a0; }
+.qx-error { color: #ff3a1f; font-size: 0.9rem; margin: 0.8rem 0 0; }
+
+/* =========================================================================
+   Result: one summary line, the exposed/unexposed bar, then the table.
+   ========================================================================= */
+.qx-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.6rem;
+    font-size: 0.95rem;
+    margin: 0 0 0.8rem;
+}
+.qx-summary strong { color: #06d6a0; font-family: Consolas, monospace; }
+.qx-summary .exposed strong { color: #ff4d3a; }
+.qx-bar {
+    display: flex;
+    height: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    background: rgba(0, 0, 0, 0.5);
+    margin: 0 0 0.35rem;
+}
+.qx-bar-exposed { background: linear-gradient(90deg, #cf2013, #ff4d3a); }
+.qx-bar-safe { background: #06d6a0; }
+.qx-bar-legend { display: flex; gap: 1.4rem; font-size: 0.78rem; opacity: 0.85; margin: 0 0 1rem; }
+.qx-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; }
+.qx-swatch-exposed { background: #ff4d3a; }
+.qx-swatch-safe { background: #06d6a0; }
+
+/* Table — the Provenance treatment: fixed layout so every row shares the
+   same column boundaries, red heads over a crimson rule, even rows darker,
+   figures green Consolas, exposed rows first and tinted. */
+.qx-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.9rem;
+}
+.qx-table col.c-status { width: 12%; }
+.qx-table col.c-addr   { width: 37%; }
+.qx-table col.c-label  { width: 15%; }
+.qx-table col.c-outs   { width: 10%; }
+.qx-table col.c-blz    { width: 16%; }
+.qx-table col.c-act    { width: 10%; }
+.qx-table th,
+.qx-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    text-align: left;
+    overflow-wrap: anywhere;
+    vertical-align: middle;
+}
+.qx-table thead th {
+    color: #ff4d3a;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(158, 0, 15, 0.6);
+}
+.qx-table tbody tr:nth-child(even) { background: rgba(0, 0, 0, 0.55); }
+.qx-table tbody tr:hover { background: rgba(255, 255, 255, 0.06); }
+.qx-table .num { text-align: right; }
+.qx-table .center { text-align: center; }
+/* Outputs: the count block is centred under its header, digits right-aligned inside it so
+   1 / 26 / 428 stay in line (plain centring left them ragged). */
+.qx-table .qx-fig { display: inline-block; min-width: 6ch; text-align: right; }
+.qx-table .qx-fig-blz { min-width: 14ch; }
+/* Headers centred over their columns. (Cell class is qx-figure, NOT figure: Bootstrap's
+   .figure is display:inline-block, which pulled the Outputs and BLZ cells out of the table
+   grid and wrapped both into the Outputs column.) */
+.qx-table thead th { text-align: center; }
+.qx-table .qx-figure { color: #06d6a0; font-family: Consolas, monospace; }
+.qx-table .addr { font-family: Consolas, monospace; font-size: 0.85rem; }
+.qx-table tr.exposed td { background: rgba(207, 32, 19, 0.16); }
+.qx-more td { text-align: center; font-size: 0.85rem; opacity: 0.85; padding: 0.7rem; }
+.qx-more a { color: #ff4d3a; }
+.qx-more a:hover { color: #fff; }
+
+/* Status badges: identical boxes — same fixed width, padding and line
+   height, centred uppercase text — stacked with an 8px gap (4px read as one joined box), so the Status
+   column lines up whether a row carries one badge or two. */
+.qx-badges { display: inline-flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.qx-badge {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 6rem;
+    padding: 2px 0;
+    font-size: 0.72rem;
+    line-height: 1.25;
+    letter-spacing: 1px;
+    font-weight: 600;
+    text-align: center;
+    text-transform: uppercase;
+}
+.qx-badge-exposed { background: #8b0000; color: #fff; border: 1px solid #ff5a5a; }
+.qx-badge-safe { background: rgba(6, 214, 160, 0.15); color: #06d6a0; border: 1px solid #06d6a0; }
+.qx-badge-reused { background: rgba(255, 255, 255, 0.08); color: #ddd; border: 1px solid #888; }
+
+/* =========================================================================
+   Sweep: one labelled field per line, a plan verdict, the plan figures.
+   ========================================================================= */
+.qx-field {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin: 0 0 0.7rem;
+    font-size: 0.9rem;
+}
+.qx-field label { width: 9rem; min-width: 9rem; opacity: 0.9; margin: 0; }
+.qx-field input {
+    background: rgba(0, 0, 0, 0.55);
+    color: #eee;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 0;
+    padding: 0.32rem 0.5rem;
+    font-family: Consolas, monospace;
+    font-size: 0.85rem;
+}
+.qx-input-addr { flex: 1 1 22rem; }
+.qx-input-fee { width: 8rem; }
+.qx-verdict {
+    padding: 0.45rem 0.7rem;
+    margin: 0.9rem 0 0.6rem;
+    font-size: 0.87rem;
+    border-left: 4px solid;
+}
+.qx-verdict.ok  { border-color: #2ecc71; background: rgba(46, 204, 113, 0.1); }
+.qx-verdict.bad { border-color: #ff3a1f; background: rgba(207, 32, 19, 0.15); }
+.qx-plan {
+    display: grid;
+    grid-template-columns: 9rem 1fr;
+    gap: 0.3rem 0.7rem;
+    font-size: 0.9rem;
+    margin: 0 0 0.8rem;
+}
+.qx-plan .k { opacity: 0.7; }
+.qx-plan .v { font-family: Consolas, monospace; color: #06d6a0; overflow-wrap: anywhere; }
+.qx-warn { color: #ffb347; font-size: 0.82rem; margin: 0.25rem 0 0.8rem; }
+.qx-ack { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; margin: 0 0 0.9rem; }
+.qx-sent { color: #2ecc71; font-size: 0.87rem; word-break: break-all; margin-top: 0.8rem; }
+
+@media (prefers-reduced-motion: reduce) {
+    .banner-text.banner-landed,
+    .qx-markwrap .mark-ghost,
+    .qx-markwrap > .qx-mark { animation: none; }
+}

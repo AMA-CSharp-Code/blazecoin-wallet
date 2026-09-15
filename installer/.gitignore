@@ -1,0 +1,3 @@
+# Build outputs + fetched redistributables (Build-Installer.ps1 re-creates both)
+Output/
+redist/

@@ -1,0 +1,174 @@
+@page "/receive"
+@layout LiteLayout
+@using Net.Codecrete.QrCodeGenerator
+@inject LiteWalletService Wallet
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+@inject IExplorerSettings Explorer
+@using BlazecoinWallet.Lite.Data
+
+@* Receive: the CURRENT rotation address as text + a locally-generated QR (pure C# —
+   nothing leaves the device). "Fresh address" reveals the next BIP44 slot for privacy
+   (one address per payment); every older address stays live and watched.
+   Address type: legacy (B…) today; post-quantum (BQ…, PQ_SIGNATURES.md) becomes selectable
+   only once the fork is active (§13 decision 8) — paying a BQ address earlier would park the
+   coins until then, so the toggle stays disabled with the reason. *@
+<div class="lite-card">
+    <h2>Receive BLZ</h2>
+
+    <div class="lite-addr-type" style="display:flex; gap:8px; margin-bottom:10px;">
+        <button class="lite-btn @(_pqMode ? "lite-btn-ghost" : "lite-btn-success")" style="flex:1"
+                title="A standard Blazecoin address" @onclick="() => SetMode(false)">Legacy (B…)</button>
+        <button class="lite-btn @(_pqMode ? "lite-btn-success" : "lite-btn-ghost")" style="flex:1"
+                title="@(_pqAvailable ? "A post-quantum (ML-DSA-44) address — safe against a future quantum computer" : "Available after the post-quantum fork")"
+                disabled="@(!_pqAvailable)" @onclick="() => SetMode(true)">Post-quantum (BQ…)</button>
+    </div>
+    @if (!_pqAvailable)
+    {
+        <p class="lite-sub" style="margin-top:0">Post-quantum (BQ…) addresses — available after the post-quantum fork.</p>
+    }
+
+    @if (_pqMode && _address == null)
+    {
+        <p class="lite-sub">
+            Reveal your first post-quantum address. Coins on it are protected by an ML-DSA-44
+            key that a future quantum computer cannot derive from the chain, even after you spend.
+        </p>
+        <button class="lite-btn lite-btn-success" @onclick="FreshAddressAsync" disabled="@_rotating">Reveal a post-quantum address</button>
+        @if (_rotateError != null)
+        {
+            <div class="lite-error">@_rotateError</div>
+        }
+    }
+    else if (_address != null)
+    {
+        <div class="lite-qr">@((MarkupString)_qrSvg)</div>
+        <div class="lite-address">@_address</div>
+        <button class="lite-btn lite-btn-success" @onclick="CopyAsync">@_copyLabel</button>
+        <div style="height:8px"></div>
+        <button class="lite-btn lite-btn-ghost" title="Reveal a fresh address for your next payment — better privacy, and all your old addresses keep working"
+                @onclick="FreshAddressAsync" disabled="@_rotating">⟳ Fresh address for next payment</button>
+        @if (_rotateError != null)
+        {
+            <div class="lite-error">@_rotateError</div>
+        }
+        @if (AddrUrl != null)
+        {
+            <div style="text-align:center; margin-top:8px;">
+                <a href="@AddrUrl" target="_blank" rel="noopener" class="lite-link lite-sub">View on explorer ↗</a>
+            </div>
+        }
+        <p class="lite-sub" style="margin-top:10px">
+            Coins sent here appear after one confirmation (~30 seconds). Mining payouts
+            mature after 30 blocks before they can be spent.
+        </p>
+
+        @if (_previous.Count > 0)
+        {
+            <button class="lite-btn lite-btn-ghost" @onclick="() => _showPrevious = !_showPrevious">
+                @(_showPrevious ? "▾" : "▸") Previous addresses (@_previous.Count) — still active
+            </button>
+            @if (_showPrevious)
+            {
+                <ul class="lite-history">
+                    @foreach (var a in _previous)
+                    {
+                        <li><span class="lite-txid">@a</span></li>
+                    }
+                </ul>
+            }
+        }
+    }
+</div>
+
+<div class="lite-card">
+    <h2>Old wallet from 2014?</h2>
+    <p class="lite-sub">
+        If you still have a private key from the original Blazecoin wallet, you can move
+        its coins into this wallet — no old software, no chain download.
+    </p>
+    <button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("sweep"))">🔑 Recover coins from an old key</button>
+</div>
+
+@code {
+    private string? _address;
+    private string _qrSvg = string.Empty;
+    private string _copyLabel = "📋 Copy Address";
+    private bool _rotating;
+    private bool _showPrevious;
+    private bool _pqMode;
+    private bool _pqAvailable;
+    private string? _rotateError;
+    private List<string> _previous = [];
+
+    private string? AddrUrl => _address == null ? null : LiteExplorer.AddressUrl(Explorer.BaseUrl, _address);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await Wallet.UnlockAsync())
+        {
+            Nav.NavigateTo("setup");
+            return;
+        }
+        _pqAvailable = await Wallet.IsPqActivatedAsync();
+        RefreshAddresses();
+    }
+
+    private void SetMode(bool pq)
+    {
+        if (pq && !_pqAvailable) return;
+        _pqMode = pq;
+        _rotateError = null;
+        _showPrevious = false;
+        RefreshAddresses();
+    }
+
+    private void RefreshAddresses()
+    {
+        if (_pqMode)
+        {
+            _address = Wallet.PqAddress;
+            _previous = Wallet.PqAddresses.Reverse().Skip(1).ToList();
+        }
+        else
+        {
+            _address = Wallet.Address;
+            // Newest-first, excluding the current one shown above.
+            _previous = Wallet.Addresses.Reverse().Skip(1).ToList();
+        }
+        _qrSvg = _address == null ? string.Empty : QrCode.EncodeText(_address, QrCode.Ecc.Medium).ToSvgString(2);
+    }
+
+    private async Task FreshAddressAsync()
+    {
+        _rotating = true;
+        _rotateError = null;
+        try
+        {
+            var (ok, error) = _pqMode
+                ? await Wallet.RevealNextPqAddressAsync()
+                : await Wallet.RevealNextAddressAsync();
+            if (ok) RefreshAddresses();
+            else _rotateError = error;
+        }
+        finally { _rotating = false; }
+    }
+
+    private async Task CopyAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("navigator.clipboard.writeText", _address);
+            _copyLabel = "✅ Copied!";
+            _ = ResetLabelAsync();
+        }
+        catch { _copyLabel = "Copy failed — long-press the address instead"; }
+    }
+
+    private async Task ResetLabelAsync()
+    {
+        await Task.Delay(1500);
+        _copyLabel = "📋 Copy Address";
+        await InvokeAsync(StateHasChanged);
+    }
+}

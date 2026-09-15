@@ -1,0 +1,658 @@
+@page "/"
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.Wallets
+@using BlazecoinWallet.Core.Services.Settings
+@implements IAsyncDisposable
+@inject IBlazecoindRpcService RpcService
+@inject ISyncStateService Sync
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject IWalletContext WalletCtx
+@inject IWalletManager WalletMgr
+@inject ISettingsService Settings
+
+<PageTitle>Dashboard - Blazecoin Wallet V2.0</PageTitle>
+
+@* Active skin paints into this host (see DashboardSkins in mining-background.js). *@
+<div id="dashboardBackground"></div>
+
+@* Skin selection lives on the Preferences page now (the gear popover was
+   removed); the Dashboard just applies the saved skin to #dashboardBackground. *@
+<div class="wallet-dashboard">
+
+    @* Title banner — nested red->black cards with flipping header coins, ported
+       from Views/Wallet/Index.cshtml. *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title">
+                    <canvas class="header-coin" width="32" height="32"></canvas>
+                    <span class="banner-text-wrap"><span class="banner-text">Blazecoin Wallet V2.0</span><span class="banner-caret">|</span></span>
+                    <canvas class="header-coin" width="32" height="32"></canvas>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="loading">
+            <p>Loading wallet data...</p>
+        </div>
+    }
+    else if (_error != null)
+    {
+        <DaemonError Message="@_error" OnRetry="LoadDataAsync" />
+    }
+    else
+    {
+        <div class="dashboard-grid">
+            <div class="card balance-card">
+                @* Account Status uses just the black header (no red strip),
+                   wrapped in a white border — see .balance-card CSS below. *@
+                <div class="status-header"><span>Account Status</span></div>
+                <div class="card-body">
+                    <div class="status-balances">
+                        <span class="status-label">Balance:</span>
+                        <span class="status-value primary">@AmountFormat.Format(_balances?.Mine?.Trusted ?? 0, _amtUnit, _amtDecimals) <img class="status-coin" src="BlazecoinBird/ComfyUI_02889_.webp" alt="" /></span>
+
+                        <span class="status-label">Unconfirmed:</span>
+                        <span class="status-value @((_balances?.Mine?.UntrustedPending ?? 0) > 0 ? "unconfirmed-positive" : "")">@AmountFormat.Format(_balances?.Mine?.UntrustedPending ?? 0, _amtUnit, _amtDecimals) <img class="status-coin" src="BlazecoinBird/ComfyUI_02889_.webp" alt="" /></span>
+
+                        <span class="status-label">Immature:</span>
+                        <span class="status-value @((_balances?.Mine?.Immature ?? 0) > 0 ? "immature-positive" : "")">@AmountFormat.Format(_balances?.Mine?.Immature ?? 0, _amtUnit, _amtDecimals) <img class="status-coin" src="BlazecoinBird/ComfyUI_02889_.webp" alt="" /></span>
+                    </div>
+                    <div class="balance-details">
+                        <small>@_confirmations confirmations</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card actions-card">
+                <div class="status-header"><span>Active Wallet</span></div>
+                <div class="card-body">
+                    @if (_walletsOnDisk.Count > 0)
+                    {
+                        <select class="form-control active-wallet-select @(_selectedWallet == WalletCtx.Active ? "sel-active" : "sel-inactive")" @bind="_selectedWallet" @bind:after="OnWalletSelectionChanged">
+                            @foreach (var w in _walletsOnDisk)
+                            {
+                                <option value="@w" class="@(w == WalletCtx.Active ? "wallet-opt-active" : "wallet-opt-inactive")">@WalletOption(w)</option>
+                            }
+                        </select>
+                        <div class="active-wallet-actions">
+                            <button class="btn btn-primary active-wallet-load" @onclick="LoadSelectedAsync"
+                                    disabled="@(_walletBusy || string.IsNullOrEmpty(_selectedWallet) || _selectedWallet == WalletCtx.Active)">
+                                @(_walletBusy ? "Working…" : "Load")
+                            </button>
+                            <button class="btn active-wallet-unload" @onclick="UnloadSelectedAsync"
+                                    disabled="@(_walletBusy || string.IsNullOrEmpty(_selectedWallet) || !_wallets.Contains(_selectedWallet))">
+                                Unload
+                            </button>
+                            <button class="btn active-wallet-remove" @onclick="BeginRemove"
+                                    disabled="@(_walletBusy || string.IsNullOrEmpty(_selectedWallet) || SelectedIsProtected)">
+                                Remove
+                            </button>
+                        </div>
+                        @if (_confirmingRemove)
+                        {
+                            <div class="active-wallet-confirm">
+                                <small>Permanently delete &quot;@WalletDisplay(_selectedWallet)&quot; and its wallet files from disk? This cannot be undone.</small>
+                                <div class="active-wallet-confirm-btns">
+                                    <button class="btn active-wallet-remove" @onclick="RemoveSelectedAsync" disabled="@_walletBusy">
+                                        @(_walletBusy ? "Removing…" : "Delete")
+                                    </button>
+                                    <button class="btn active-wallet-cancel" @onclick="CancelRemove" disabled="@_walletBusy">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(_walletError))
+                        {
+                            <small class="form-hint active-wallet-error">@_walletError</small>
+                        }
+                        else if (!string.IsNullOrEmpty(_walletNotice))
+                        {
+                            <small class="form-hint active-wallet-notice">@_walletNotice</small>
+                        }
+                        else
+                        {
+                            <small class="form-hint">Load switches the active wallet; Unload closes it (files kept); Remove deletes it from disk.</small>
+                        }
+                    }
+                    else
+                    {
+                        <div class="active-wallet-single">No wallets found</div>
+                    }
+                </div>
+            </div>
+
+            <div class="card blockchain-card">
+                <div class="status-header"><span>Blockchain</span></div>
+                <div class="card-body">
+                    @* Reads the shared ISyncStateService — the exact same
+                       sample the footer uses, so the numbers always match. *@
+                    <div class="blockchain-info">
+                        <p><strong>Blocks:</strong> @Sync.Current.Blocks</p>
+                        <p><strong>Headers:</strong> @Sync.Current.Headers</p>
+                        @if (Sync.Current.Synced)
+                        {
+                            <p class="sync-status synced"><strong>Status:</strong> Synced ✓</p>
+                        }
+                        else
+                        {
+                            <p class="sync-status blink-1s">
+                                <strong>Syncing:</strong> @Sync.Current.Progress.ToString("0.00")%
+                            </p>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="card network-card">
+                <div class="status-header"><span>Network</span></div>
+                <div class="card-body">
+                    <div class="network-info">
+                        <p><strong>Connections:</strong> @(_networkInfo?.Connections ?? 0)</p>
+                        <p><strong>Protocol:</strong> @(_networkInfo?.ProtocolVersion ?? 0)</p>
+                        <p><strong>Version:</strong> @(_networkInfo?.SubVersion ?? "N/A")</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="recent-transactions card">
+            <div class="status-header"><span>Recent Transactions</span></div>
+            <div class="card-body">
+            @if (_transactions != null && _transactions.Any())
+            {
+                <table class="transactions-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Amount</th>
+                            <th>Fee</th>
+                            <th>Conf.</th>
+                            <th>Status</th>
+                            <th>TxID</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @* listtransactions returns oldest->newest, so reverse to show the most recent first. *@
+                        @foreach (var tx in _transactions.AsEnumerable().Reverse().Take(25))
+                        {
+                            <tr>
+                                <td class="tx-type @TxDisplay.ColourClass(tx.Category)">@TxDisplay.TypeLabel(tx.Category)</td>
+                                <td class="@TxDisplay.ColourClass(tx.Category)">@AmountFormat.Format(tx.Amount, _amtUnit, _amtDecimals)</td>
+                                <td class="@TxDisplay.ColourClass(tx.Category)">@(tx.Fee != 0 ? AmountFormat.Format(tx.Fee, _amtUnit, _amtDecimals) : "—")</td>
+                                <td>@tx.Confirmations</td>
+                                <td>
+                                    <span class="conf-badge @(tx.Confirmations >= _confThreshold ? "confirmed" : "pending")">
+                                        @(tx.Confirmations >= _confThreshold ? "Confirmed" : "Pending")
+                                    </span>
+                                </td>
+                                <td class="txid">
+                                    @if (!string.IsNullOrEmpty(_explorerUrl) && !string.IsNullOrEmpty(tx.TxId))
+                                    {
+                                        <a class="explorer-link" @onclick="@(() => OpenExplorerAsync($"tx/{tx.TxId}"))">@GetShortTxId(tx.TxId)</a>
+                                    }
+                                    else
+                                    {
+                                        @GetShortTxId(tx.TxId)
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            else
+            {
+                <p>No recent transactions</p>
+            }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private WalletBalances? _balances;
+    private NetworkInfo? _networkInfo;
+    private BlockchainInfo? _blockchainInfo;
+    private List<Transaction>? _transactions;
+    private bool _loading = true;
+    private string? _error;
+    private int _confirmations;
+    private int _confThreshold = 30; // confs before "Confirmed" (set on Preferences)
+    private string _amtUnit = AmountFormat.DefaultUnit;
+    private int _amtDecimals = AmountFormat.DefaultDecimals;
+    private string _explorerUrl = "";
+    private CancellationTokenSource? _cts;
+    private Task? _refreshLoop;
+    private int _refreshSecs = 8; // dashboard auto-refresh interval; 0 = manual (set on Preferences)
+    private List<string> _wallets = new();        // currently-loaded wallets
+    private List<string> _walletsOnDisk = new();   // all wallets on disk, for the Active Wallet picker
+    private string _selectedWallet = "";           // dropdown selection
+    private bool _walletBusy;                       // Load/Unload/Remove in progress
+    private string? _walletError;
+    private string? _walletNotice;                  // transient success line (e.g. "Unloaded X")
+    private bool _confirmingRemove;                 // Remove clicked → show the delete/cancel prompt
+
+    // The Remove control is disabled for protected wallets (the auto-load
+    // default, whose deletion would break daemon startup) — IWalletManager owns
+    // that policy.
+    private bool SelectedIsProtected => WalletMgr.IsProtected(_selectedWallet);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Console.WriteLine("[Dashboard] OnInitializedAsync called");
+        // Re-render the Blockchain card in lock-step with the footer
+        // whenever the shared sync state updates.
+        Sync.Changed += OnSyncChanged;
+        await RefreshWalletsAsync();
+        await LoadDataAsync();
+        _cts = new CancellationTokenSource();
+        _refreshLoop = RefreshLoopAsync(_cts.Token);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                // Read the saved skin, default if missing or unknown.
+                var stored = await Settings.GetDashboardSkinAsync();
+                if (stored is not null && _availableSkins.Any(s => s.Id == stored))
+                    _currentSkin = stored;
+
+                await ApplyCurrentSkinAsync();
+                // Draw the header coin image independent of the active skin,
+                // so the flipping coins appear in every theme — not just
+                // Pixelated Coins (which would otherwise paint them as a
+                // side effect via paintCoinGrid).
+                await JS.InvokeVoidAsync("drawHeaderCoins");
+                await JS.InvokeVoidAsync("startHeaderCoinSync");
+                await JS.InvokeVoidAsync("typeBlazecoinBanner");
+
+                // Auto-refresh interval chosen on the Preferences page (0 = manual).
+                if (await Settings.GetRefreshSecsAsync() is int secs) _refreshSecs = secs;
+                if (await Settings.GetConfThresholdAsync() is int ct) _confThreshold = ct;
+                if (await Settings.GetAmountUnitAsync() is string au) _amtUnit = au;
+                if (await Settings.GetAmountDecimalsAsync() is int dec) _amtDecimals = dec;
+                _explorerUrl = await Settings.GetExplorerUrlAsync();
+
+                StateHasChanged();
+            }
+            catch { /* no-op */ }
+        }
+    }
+
+    /// <summary>Resolve _currentSkin to a concrete skin id and apply it.
+    /// For "random" we cache the resolved id in sessionStorage so navigating
+    /// away and back during one wallet launch doesn't keep re-rolling —
+    /// the dice only re-rolls on a fresh app session.</summary>
+    private async Task ApplyCurrentSkinAsync()
+    {
+        string skinToApply = _currentSkin;
+        if (_currentSkin == "random")
+        {
+            var sessionRandom = await JS.InvokeAsync<string?>("sessionStorage.getItem", "resolved_random");
+            var pool = _availableSkins
+                .Select(s => s.Id)
+                .Where(id => id != "random" && id != "plain")
+                .ToArray();
+            if (string.IsNullOrEmpty(sessionRandom) || !pool.Contains(sessionRandom))
+            {
+                sessionRandom = pool[Random.Shared.Next(pool.Length)];
+                await JS.InvokeVoidAsync("sessionStorage.setItem", "resolved_random", sessionRandom);
+            }
+            skinToApply = sessionRandom;
+        }
+        await JS.InvokeVoidAsync("applyDashboardSkin", skinToApply);
+    }
+
+    private async Task OpenExplorerAsync(string path)
+    {
+        if (string.IsNullOrWhiteSpace(_explorerUrl)) return;
+        var url = _explorerUrl.TrimEnd('/') + "/" + path;
+        try { await Browser.Default.OpenAsync(url, BrowserLaunchMode.SystemPreferred); }
+        catch { /* ignore */ }
+    }
+
+    // Default skin for new users (no saved dashboard_skin yet). An existing
+    // user's saved choice, read in OnAfterRenderAsync above, overrides this.
+    private string _currentSkin = "digital-fire-fighters";
+
+    private record SkinChoice(string Id, string Label, string Description);
+    private static readonly SkinChoice[] _availableSkins = new[]
+    {
+        new SkinChoice("pixelated-coins", "Pixelated Coins", "Drifting grid of flipping pixel coins."),
+        new SkinChoice("mining-pools",    "Mining Pools",    "9x9 image grid that pixel-fades in and scrolls diagonally."),
+        new SkinChoice("413",             "413",             "Repeating 413 tile, brick-pattern scrolling rows."),
+        new SkinChoice("shield",          "Shield",          "BlazeCoin shield splash, brick-pattern scrolling rows."),
+        new SkinChoice("phoenix",         "Phoenix",         "Cascading 8x8 grid of BlazecoinBird images with shimmer."),
+        new SkinChoice("blockchain",      "Blockchain",      "3x2 quadrants with slowly-rotating chain images."),
+        new SkinChoice("network",         "Network",         "8 scrolling columns with glitch jitters and radar sweep."),
+        new SkinChoice("hodl-waves",      "HODL Waves",      "4x3 grid with a VHS-style cyan-glow intro that settles."),
+        new SkinChoice("mining",          "Mining",          "Scrolling brick-pattern rows from the wallet's Mining page."),
+        new SkinChoice("digital-fire-fighters", "Digital Fire Fighters", "2x2 firefighter backdrop with 16 orbiting images."),
+        new SkinChoice("coinpile-send",         "Coin Send",         "Coin tiles scrolling in rows with a pulse."),
+        new SkinChoice("coinpile-receive",      "Coin Receive",      "Dense coin mosaic with a diagonal block-then-smooth sweep."),
+        new SkinChoice("coinpile-transactions", "Coin Transactions", "Coin grid drifting diagonally with a breathing pulse."),
+        new SkinChoice("addressbook",           "Address Book",      "Vertical columns of images scrolling up and down with a pulse."),
+        new SkinChoice("security",              "Security",          "Ken Burns grid; tiles sporadically flip and matrix-green pixelate."),
+        new SkinChoice("backup",                "Backup",            "Diagonal-drift tile grid drifting northeast with a breathing pulse."),
+        new SkinChoice("import",                "Import",            "Three counter-rotating rings of tiles over a scrolling field, with a cyan sonar pulse."),
+        new SkinChoice("quantum",               "Quantum",           "Mosaic of rendered atoms drifting diagonally, with drawn atoms streaming over it."),
+        new SkinChoice("random",          "Random",          "Rolls a different skin on every wallet launch."),
+        new SkinChoice("plain",           "Plain",           "Just the dark gradient backdrop."),
+    };
+
+
+    private async Task LoadDataAsync()
+    {
+        Console.WriteLine("[Dashboard] LoadDataAsync started");
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            Console.WriteLine("[Dashboard] Starting RPC calls...");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            
+            var balanceTask = RpcService.GetBalancesAsync();
+            var networkTask = RpcService.GetNetworkInfoAsync();
+            var blockchainTask = RpcService.GetBlockchainInfoAsync();
+            var transactionsTask = RpcService.ListTransactionsAsync(25);
+
+            var timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
+            var completedTask = await Task.WhenAny(
+                Task.WhenAll(balanceTask, networkTask, blockchainTask, transactionsTask),
+                timeoutTask
+            );
+
+            if (completedTask == timeoutTask)
+            {
+                Console.WriteLine("[Dashboard] Timeout occurred");
+                throw new TimeoutException("Request to Blazecoin daemon timed out after 15 seconds");
+            }
+
+            Console.WriteLine("[Dashboard] Getting task results...");
+            _balances = await balanceTask;
+            _networkInfo = await networkTask;
+            _blockchainInfo = await blockchainTask;
+            _transactions = await transactionsTask;
+
+            Console.WriteLine($"[Dashboard] Data loaded - Balance: {_balances?.Mine?.Trusted}, Blocks: {_blockchainInfo?.Blocks}");
+            _confirmations = _transactions?.FirstOrDefault()?.Confirmations ?? 0;
+        }
+        catch (RpcException ex) when (ex.Code == -28)
+        {
+            // Daemon up but still warming up (loading block index). Say so clearly
+            // instead of the misleading generic "Error loading wallet data".
+            _error = $"The Blazecoin daemon is starting up — {ex.Message}. This can take a minute or two on launch; click Retry shortly.";
+        }
+        catch (RpcException ex) when (ex.Code == -18)
+        {
+            // The selected wallet is no longer loaded AND the RPC layer's -18
+            // self-heal found no loaded wallet to fall back to (it re-points at
+            // "Primary" automatically when one exists — 2026-08-10 incident: a
+            // daemon restart dropped an RPC-loaded wallet and an already-open
+            // window dead-ended on the generic error with no way out).
+            _error = "The selected wallet is no longer loaded on the daemon — it may have restarted "
+                   + "without reloading it. Click Retry to reconnect, or press Ctrl+R to restart the app view; "
+                   + "the wallet will switch back to an available wallet automatically.";
+        }
+        catch (TimeoutException)
+        {
+            _error = "The Blazecoin daemon isn't responding (request timed out). Make sure it's running, then click Retry.";
+        }
+        catch (HttpRequestException ex)
+        {
+            Console.WriteLine($"[Dashboard] HttpRequestException: {ex.Message}");
+            _error = $"The Blazecoin daemon appears to be offline. {ex.Message} Make sure the daemon is running on the correct port, then click Retry.";
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Dashboard] Exception: {ex.GetType().Name} - {ex.Message}");
+            _error = $"Error loading wallet data: {ex.Message}";
+        }
+        finally
+        {
+            Console.WriteLine($"[Dashboard] LoadDataAsync finished - loading={_loading}, error={_error}");
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    // Periodic quiet refresh so the dashboard (especially the Blockchain
+    // "Syncing: NN%") tracks the chain instead of staying frozen at the
+    // page-load snapshot — that's why its % lagged the footer. No _loading
+    // toggle, so no flicker; transient errors keep the last good values
+    // (the footer already surfaces real daemon state).
+    private async Task RefreshLoopAsync(CancellationToken ct)
+    {
+        // Tick every second and refresh once _refreshSecs seconds have elapsed,
+        // so the interval picked on the Preferences page takes effect. 0 = manual
+        // (no auto-refresh; the shared Sync events still update the chain card).
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        var elapsed = 0;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                if (_refreshSecs <= 0) { elapsed = 0; continue; }
+                if (++elapsed < _refreshSecs) continue;
+                elapsed = 0;
+                await RefreshQuietAsync();
+                await RefreshWalletsAsync();   // auto-detect added/removed wallets
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { /* navigating away */ }
+    }
+
+    private async Task RefreshQuietAsync()
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            var balanceTask = RpcService.GetBalancesAsync();
+            var networkTask = RpcService.GetNetworkInfoAsync();
+            var blockchainTask = RpcService.GetBlockchainInfoAsync();
+            var transactionsTask = RpcService.ListTransactionsAsync(25);
+            var all = Task.WhenAll(balanceTask, networkTask, blockchainTask, transactionsTask);
+            var completed = await Task.WhenAny(all, Task.Delay(Timeout.Infinite, cts.Token));
+            if (completed != all) return; // timed out — keep last good values
+
+            _balances = await balanceTask;
+            _networkInfo = await networkTask;
+            _blockchainInfo = await blockchainTask;
+            _transactions = await transactionsTask;
+            _confirmations = _transactions?.FirstOrDefault()?.Confirmations ?? 0;
+        }
+        catch
+        {
+            // Keep last good values; the footer reflects real daemon state.
+        }
+    }
+
+    private void OnSyncChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        Sync.Changed -= OnSyncChanged;
+        _cts?.Cancel();
+        if (_refreshLoop is not null)
+        {
+            try { await _refreshLoop; } catch { /* ignore shutdown races */ }
+        }
+        _cts?.Dispose();
+    }
+
+    private string GetShortTxId(string? txId)
+    {
+        if (string.IsNullOrEmpty(txId) || txId.Length < 16)
+            return txId ?? "";
+
+        return $"{txId[..8]}...{txId[^8..]}";
+    }
+
+
+    private async Task RefreshWalletsAsync()
+    {
+        try
+        {
+            _wallets = (await WalletMgr.ListLoadedAsync()).ToList();
+            // Only wallets that actually exist on disk. We deliberately do NOT
+            // add back wallets that are still loaded in the daemon but whose
+            // files were deleted — so a deleted wallet drops off the picker
+            // automatically (auto-detect).
+            _walletsOnDisk = (await WalletMgr.ListOnDiskAsync()).ToList();
+
+            // Keep the user's current selection if it still exists; otherwise
+            // fall back to the active wallet (if still present) or the first
+            // available. This avoids the periodic refresh resetting the
+            // dropdown while the user is browsing it.
+            if (string.IsNullOrEmpty(_selectedWallet) || !_walletsOnDisk.Contains(_selectedWallet))
+            {
+                var active = WalletCtx.Active;
+                _selectedWallet = !string.IsNullOrEmpty(active) && _walletsOnDisk.Contains(active)
+                    ? active
+                    : _walletsOnDisk.FirstOrDefault() ?? "";
+            }
+        }
+        catch { /* daemon not ready — leave the lists as-is */ }
+    }
+
+    // Activate the selected wallet (load it first if needed), then reload so
+    // every page re-fetches against it.
+    private async Task LoadSelectedAsync()
+    {
+        if (string.IsNullOrEmpty(_selectedWallet) || _selectedWallet == WalletCtx.Active) return;
+
+        _walletError = null;
+        _walletBusy = true;
+        try
+        {
+            await WalletMgr.ActivateAsync(_selectedWallet);
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            _walletError = $"Couldn't load \"{_selectedWallet}\": {ex.Message}";
+            _walletBusy = false;
+        }
+    }
+
+    // Changing the picker abandons any pending Remove confirmation (it was for
+    // the previously-selected wallet) and clears stale status text.
+    private void OnWalletSelectionChanged()
+    {
+        _confirmingRemove = false;
+        _walletError = null;
+        _walletNotice = null;
+    }
+
+    // Unload the selected wallet from the daemon. Non-destructive: the wallet
+    // files stay on disk, so it reappears in the picker as a not-loaded wallet
+    // and can be Loaded again. If it was the active wallet, switch to another
+    // loaded wallet and reload so every page refetches against a valid wallet.
+    private async Task UnloadSelectedAsync()
+    {
+        var name = _selectedWallet;
+        if (string.IsNullOrEmpty(name) || !_wallets.Contains(name)) return;
+
+        _walletError = null;
+        _walletNotice = null;
+        _confirmingRemove = false;
+        _walletBusy = true;
+        try
+        {
+            var result = await WalletMgr.UnloadAsync(name);
+            await RefreshWalletsAsync();
+
+            if (result == WalletOpResult.ActiveReassigned)
+            {
+                Nav.NavigateTo(Nav.Uri, forceLoad: true);
+                return;
+            }
+            if (result == WalletOpResult.Completed)
+                _walletNotice = $"Unloaded \"{WalletDisplay(name)}\".";
+            // AlreadyUnloaded → list just refreshed, no notice (auto-detect drop).
+        }
+        catch (Exception ex)
+        {
+            _walletError = $"Couldn't unload \"{WalletDisplay(name)}\": {ex.Message}";
+        }
+        finally
+        {
+            _walletBusy = false;
+        }
+    }
+
+    private void BeginRemove()
+    {
+        _walletError = null;
+        _walletNotice = null;
+        _confirmingRemove = true;
+    }
+
+    private void CancelRemove() => _confirmingRemove = false;
+
+    // Permanently delete the selected wallet (unload + on-disk delete live in
+    // IWalletManager). Two-click confirmed in the UI; Primary is protected.
+    private async Task RemoveSelectedAsync()
+    {
+        var name = _selectedWallet;
+        if (string.IsNullOrEmpty(name) || WalletMgr.IsProtected(name)) return;
+
+        _walletError = null;
+        _walletNotice = null;
+        _walletBusy = true;
+        try
+        {
+            var result = await WalletMgr.RemoveAsync(name);
+            _confirmingRemove = false;
+            await RefreshWalletsAsync();
+
+            if (result == WalletOpResult.ActiveReassigned)
+            {
+                Nav.NavigateTo(Nav.Uri, forceLoad: true);
+                return;
+            }
+
+            _walletNotice = $"Removed \"{WalletDisplay(name)}\" from disk.";
+        }
+        catch (Exception ex)
+        {
+            _walletError = $"Couldn't remove \"{WalletDisplay(name)}\": {ex.Message}";
+        }
+        finally
+        {
+            _walletBusy = false;
+        }
+    }
+
+    private static string WalletDisplay(string w)
+    {
+        if (string.IsNullOrEmpty(w)) return "(Default)";
+        // Display-only: capitalise the first letter (e.g. "default" -> "Default").
+        // The raw wallet name is still used for RPC routing and <option value>.
+        return char.ToUpperInvariant(w[0]) + w.Substring(1);
+    }
+
+    private string WalletOption(string w)
+    {
+        // Native <option> renders plain text only. The active wallet reads as a
+        // status line  Status: <name> Active ✓  (coloured green via
+        // .wallet-opt-active). Every other wallet gets a red ✗ row that also says
+        // whether it's loaded (active-able right now) or not loaded — _wallets is
+        // the daemon's loaded set, _walletsOnDisk (the dropdown source) is wider.
+        var name = WalletDisplay(w);
+        if (w == WalletCtx.Active) return $"Status: {name} Active ✓";
+        return _wallets.Contains(w) ? $"{name} Not Active ✗" : $"{name} Not Loaded ✗";
+    }
+}

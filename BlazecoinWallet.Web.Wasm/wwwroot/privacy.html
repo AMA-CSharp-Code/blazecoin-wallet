@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blazecoin Wallet — Privacy Policy</title>
+    <style>
+        :root { color-scheme: dark; }
+        body {
+            margin: 0; padding: 0;
+            background: #0a0a0a; color: #e8e8e8;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            line-height: 1.6;
+        }
+        header {
+            background: #9e000f; color: #fff;
+            padding: 1.4rem 1rem; text-align: center;
+        }
+        header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.03em; }
+        header .sub { color: #ffd966; font-size: 0.9rem; margin-top: 0.3rem; }
+        main { max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.2rem 3rem; }
+        h2 {
+            color: #ff4d3a; font-size: 1.15rem; margin-top: 2rem;
+            border-bottom: 1px solid #3a3a3a; padding-bottom: 0.3rem;
+        }
+        .keyfact {
+            background: rgba(207, 32, 19, 0.12); border-left: 4px solid #cf2013;
+            padding: 0.7rem 1rem; margin: 1rem 0;
+        }
+        ul { padding-left: 1.3rem; }
+        li { margin: 0.35rem 0; }
+        code { background: #1c1c1c; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.92em; }
+        footer { text-align: center; color: #888; font-size: 0.85rem; padding: 1rem; }
+        a { color: #ff7a18; }
+    </style>
+</head>
+<body>
+<header>
+    <h1>BLAZECOIN WALLET</h1>
+    <div class="sub">Privacy Policy — Android, iOS and web wallet apps</div>
+</header>
+<main>
+
+    <p><strong>Effective date:</strong> 2026-08-23</p>
+
+    <div class="keyfact">
+        <strong>The short version:</strong> Blazecoin Wallet is a non-custodial wallet.
+        Your keys are created and stay on your device. The app has no accounts, no sign-up,
+        no analytics, no ads, and no trackers. We never collect your name, email, or any
+        identity information — the app has nowhere to even type them.
+    </div>
+
+    <h2>1. Who we are</h2>
+    <p>Blazecoin Wallet is published by the Blazecoin project. Questions about this policy:
+    <a href="mailto:admin@blazecoin.co.uk">admin@blazecoin.co.uk</a>.</p>
+
+    <h2>2. What stays on your device</h2>
+    <ul>
+        <li><strong>Your recovery phrase and keys</strong> — generated on the device and stored
+            in the platform's secure storage (Android Keystore-backed encrypted storage; the iOS
+            Keychain; an encrypted, password-protected vault in your browser for the web wallet).
+            They are never transmitted, never backed up by us, and never visible to us.</li>
+        <li><strong>Your settings and convenience data</strong> — display preferences, address
+            book, labels, watch-only addresses, and your PIN (stored only as a salted hash).
+            All local, never uploaded.</li>
+        <li><strong>Biometrics</strong> — fingerprint/face unlock is performed entirely by your
+            device's operating system. The app only receives a yes/no answer and never sees
+            biometric data.</li>
+    </ul>
+    <p>The Android app opts out of Android's cloud/device-transfer backups, so your wallet data
+    is not copied off the device by the OS backup system.</p>
+
+    <h2>3. What leaves your device</h2>
+    <p>To show balances and send coins, the app talks to Blazecoin <em>gateway servers</em>
+    (operated by the project) over HTTPS. Those requests necessarily contain:</p>
+    <ul>
+        <li>the <strong>wallet addresses</strong> being looked up (balances, history, unspent coins),</li>
+        <li><strong>signed transactions</strong> you choose to broadcast, and</li>
+        <li>your device's <strong>IP address</strong>, as with any internet request.</li>
+    </ul>
+    <p>The app cryptographically verifies what the gateways return, so the gateways are an
+    availability service, not a trusted party. If you prefer not to use them at all, the app
+    supports a <strong>personal node mode</strong> that talks only to your own Blazecoin node,
+    and a peer-to-peer broadcast fallback that sends transactions directly to the public
+    Blazecoin network.</p>
+    <div class="keyfact">
+        Blazecoin is a public blockchain. Transactions you broadcast become permanently public
+        on the network by design — that is how every blockchain works, and it is outside any
+        operator's control.
+    </div>
+
+    <h2>4. What our servers see and keep</h2>
+    <ul>
+        <li>Gateway servers process requests to serve them and apply <strong>per-IP rate
+            limiting</strong> to prevent abuse.</li>
+        <li>Standard, short-lived operational logs (service journals) may record request
+            metadata. They are used only to keep the service running and diagnose faults.</li>
+        <li>We do <strong>not</strong> build profiles, do not link addresses to identities, do
+            not sell or share any data with third parties, and run no third-party analytics,
+            advertising, or tracking services — on the servers or in the apps.</li>
+    </ul>
+
+    <h2>5. App permissions</h2>
+    <ul>
+        <li><strong>Camera</strong> — used only when you open the QR scanner to read a Blazecoin
+            address. Frames are processed on the device and never stored or uploaded.</li>
+        <li><strong>Photos/files</strong> — only if you choose to pick a saved QR image instead
+            of using the camera; the chosen image is decoded on the device.</li>
+        <li><strong>Biometric hardware</strong> — see section 2.</li>
+    </ul>
+
+    <h2>6. Your data, your control</h2>
+    <ul>
+        <li>Deleting the wallet in-app, or uninstalling the app, removes all locally stored
+            wallet data from the device. (Your coins live on the blockchain and are recoverable
+            anywhere with your recovery phrase — which is also why we can never recover it for
+            you.)</li>
+        <li>We hold no account or identity data about you, so there is nothing for us to export
+            or erase on request beyond the transient operational logs described above.</li>
+    </ul>
+
+    <h2>7. Children</h2>
+    <p>The app is not directed at children and is intended for users old enough to enter into
+    financial transactions in their jurisdiction.</p>
+
+    <h2>8. Changes to this policy</h2>
+    <p>If the app's behaviour ever changes in a way that affects privacy, this page will be
+    updated and the effective date above revised before the change ships.</p>
+
+</main>
+<footer>Blazecoin Wallet — non-custodial, by design.</footer>
+</body>
+</html>
