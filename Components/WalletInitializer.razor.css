@@ -1,0 +1,198 @@
+.wallet-initializer {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #cf2013 0%, #0a0a0a 100%);
+    color: #e6edf3;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    z-index: 9999;
+}
+
+.wallet-initializer-card {
+    max-width: 480px;
+    width: 90%;
+    /* Shape the card to the splash image (512×560) so the full image
+       fills it edge-to-edge at max size — no cropping, no letterbox. */
+    aspect-ratio: 512 / 560;
+    /* Writing nudged down from the top (not bottom-pinned). */
+    padding: 104px 40px 36px;
+    background: #000;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    text-align: center;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+    /* Clip the full-bleed splash image to the card's rounded corners. */
+    overflow: hidden;
+    /* Containing block for the absolute backdrop image. */
+    position: relative;
+}
+
+/* Backdrop: fills the whole card; the writing is overlaid on top. The
+   image's own black background blends with the solid-black card, so it
+   reads as the shield floating behind the text. */
+.splash-shield {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    /* contain = whole image always visible (no cropping). The card is
+       shaped to the image aspect below, so it still fills edge-to-edge. */
+    object-fit: contain;
+    z-index: 0;
+}
+
+.splash-content {
+    position: relative;
+    z-index: 1;
+    /* Crisp ~2px black silhouette (hard 0-blur outline in 8 directions
+       plus 1px diagonals to fill the corners) so the light text stays
+       sharp on the light/busy image. A faint soft drop adds separation.
+       Inherited by all the text inside. */
+    text-shadow:
+        -2px -2px 0 #000, 0 -2px 0 #000, 2px -2px 0 #000,
+        -2px  0   0 #000,                 2px  0   0 #000,
+        -2px  2px 0 #000, 0  2px 0 #000, 2px  2px 0 #000,
+        -1px -1px 0 #000, 1px -1px 0 #000,
+        -1px  1px 0 #000, 1px  1px 0 #000,
+         0    2px 3px rgba(0, 0, 0, 0.9);
+}
+
+.wallet-initializer-card h1 {
+    margin: 0 0 32px 0;
+    /* Nudge just the title up one space (32px); the relative offset keeps
+       the spinner / loading text / hint exactly where they are. */
+    position: relative;
+    top: -32px;
+    /* Two sizes larger than the original 22px. */
+    font-size: 34px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    /* Thicker ~3px solid black silhouette for the large title (overrides
+       wallet.css's global h1 red-glow). 8-direction 3px outline with 2px
+       and 1px fills so the outline is continuous, not dotted. */
+    text-shadow:
+        -3px -3px 0 #000, 0 -3px 0 #000, 3px -3px 0 #000,
+        -3px  0   0 #000,                 3px  0   0 #000,
+        -3px  3px 0 #000, 0  3px 0 #000, 3px  3px 0 #000,
+        -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000,
+        -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000,
+         0 2px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* 1s-on / 1s-off blink for the "Loading block index…" message. */
+.blink {
+    animation: splashBlink 2s linear infinite;
+}
+
+@keyframes splashBlink {
+    0%, 49.999% { opacity: 1; }
+    50%, 100%   { opacity: 0; }
+}
+
+/* "Elapsed: Nm Ss" stands out in white below the muted hint. */
+.elapsed {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.spinner {
+    width: 36px;
+    height: 36px;
+    /* Only the top border is coloured, the rest transparent — a short
+       (~quarter-circle) white arc that spins, not a near-full ring. */
+    /* Mostly-opaque dark ring = the spinner's circular track (leans dark,
+       slightly translucent); white arc spins on it. */
+    border: 3px solid rgba(0, 0, 0, 0.7);
+    border-top-color: #fff;
+    border-radius: 50%;
+    margin: 0 auto;
+    /* Spinner nudged up ~half a space net (relative offset keeps the
+       loading message below it exactly where it is). */
+    position: relative;
+    top: -16px;
+    animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.status-message {
+    margin: 0;
+    font-size: 15px;
+    color: #c9d1d9;
+}
+
+.status-loading,
+.status-error,
+.status-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Doubled rhythm (32px): spinner↔message gap and the gap down to the
+   following text. */
+.status-loading {
+    gap: 32px;
+    margin: 0 0 32px 0;
+}
+
+.status-error .status-message {
+    color: #ff7b72;
+    font-weight: 500;
+}
+
+.error-detail,
+.hint {
+    font-size: 13px;
+    color: #8b949e;
+    margin: 4px 0;
+    line-height: 1.5;
+}
+
+/* Hint shares the doubled 32px rhythm. */
+.hint {
+    margin: 0 0 32px 0;
+}
+
+.status-empty pre {
+    margin: 12px 0;
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    font-size: 12px;
+    color: #c9d1d9;
+    font-family: Consolas, 'Cascadia Mono', monospace;
+    text-align: left;
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.retry-btn {
+    margin-top: 16px;
+    padding: 10px 24px;
+    background: #cf2013;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.05s;
+}
+
+.retry-btn:hover {
+    background: #ff4d3a;
+}
+
+.retry-btn:active {
+    transform: translateY(1px);
+}

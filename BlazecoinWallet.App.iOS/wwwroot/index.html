@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Blazecoin Wallet</title>
+    <base href="/" />
+    <!-- The lite wallet's crimson theme ships in the shared Lite.UI library. -->
+    <link rel="stylesheet" href="_content/BlazecoinWallet.Lite.UI/lite.css" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="icon" href="data:,">
+    <style>
+        /* Full-screen boot splash (the desktop wallet's #app-splash pattern): the
+           platform launch screen is only a brief flash, so the BIG branding moment
+           lives here — shown from the first WebView frame until Blazor renders,
+           then faded out by the observer script below. Same lockup as Android. */
+        #app-splash {
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5vw;
+            background: #9e000f;
+            transition: opacity 0.5s ease;
+        }
+        #app-splash.hide { opacity: 0; pointer-events: none; }
+        #app-splash .splash-title {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-weight: 700;
+            font-size: 15.5vw;
+            letter-spacing: 0.02em;
+            color: #ffffff;
+            line-height: 1;
+        }
+        #app-splash .splash-sub {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-weight: 700;
+            font-size: 15.5vw;
+            letter-spacing: 0.08em;
+            color: #ffffff;
+            line-height: 1;
+        }
+        #app-splash .splash-bar {
+            width: min(60vw, 280px);
+            height: 4px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.12);
+            overflow: hidden;
+        }
+        #app-splash .splash-bar-fill {
+            width: 40%;
+            height: 100%;
+            border-radius: 2px;
+            background: linear-gradient(90deg, #8b0000, #ff4d3a, #ffd966);
+            animation: splashSlide 1.2s ease-in-out infinite;
+        }
+        @keyframes splashSlide { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }
+    </style>
+</head>
+
+<body>
+
+    <div id="app-splash">
+        <div class="splash-title">BLAZECOIN</div>
+        <div class="splash-sub">MOBILE</div>
+        <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+    </div>
+
+    <div class="status-bar-safe-area"></div>
+
+    <div id="app">Loading&#8230;</div>
+
+    <div id="blazor-error-ui" data-nosnippet>
+        An unhandled error has occurred.
+        <a href="." class="reload">Reload</a>
+        <span class="dismiss">&#128473;</span>
+    </div>
+
+    <script src="_framework/blazor.webview.js" autostart="false"></script>
+    <script>
+        // Fade the boot splash the moment Blazor replaces #app's placeholder text
+        // with real UI; hard fallback so a hiccup can never strand the overlay.
+        (function () {
+            const splash = document.getElementById('app-splash');
+            const app = document.getElementById('app');
+            function dismiss() {
+                if (!splash || splash.classList.contains('hide')) return;
+                splash.classList.add('hide');
+                setTimeout(() => splash.remove(), 600);
+            }
+            const mo = new MutationObserver(() => {
+                if (app.children.length > 0) { mo.disconnect(); dismiss(); }
+            });
+            mo.observe(app, { childList: true });
+            setTimeout(dismiss, 8000);
+        })();
+    </script>
+
+</body>
+
+</html>

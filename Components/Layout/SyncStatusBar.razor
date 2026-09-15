@@ -1,0 +1,130 @@
+@implements IAsyncDisposable
+@inject ISyncStateService Sync
+
+@* Persistent bottom status bar (Bitcoin-Qt / V1.5 style). Pure view of
+   the shared ISyncStateService, so its numbers are always identical to
+   the dashboard Blockchain card. *@
+@{
+    var s = Sync.Current;
+    var offline = s.State == DaemonState.Offline;
+    var warmup = s.State == DaemonState.Warmup;
+    var syncing = s.State == DaemonState.Online && !s.Synced;
+    var synced = s.State == DaemonState.Online && s.Synced;
+}
+<div class="syncbar">
+    <div class="syncbar-seg status">
+        @if (warmup)
+        {
+            <span class="syncing blink">Daemon starting…</span>
+            <span class="muted">Loading block index — one-time, ~15–20 min · </span><span class="elapsed">elapsed @WarmupElapsed</span>
+        }
+        else if (offline)
+        {
+            <span class="muted">Can't reach blazecoind — is the daemon running?</span>
+        }
+        else if (synced)
+        {
+            <span class="ok">● Synced</span>
+            <span class="muted">Block @Num(s.Blocks)</span>
+        }
+        else
+        {
+            <span class="syncing">Synchronizing…</span>
+            <div class="track" title="@s.Progress.ToString("0.00")% complete">
+                <div class="fill" style="width:@s.Progress.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                <span class="track-label">@Num(s.Blocks) / @Num(s.Headers) blocks · @Num(s.Behind) behind · @s.Progress.ToString("0.00")%</span>
+            </div>
+        }
+    </div>
+
+    <div class="syncbar-seg peers">
+        @* Network "fan". Peer count surfaces on hover via the SVG <title>. *@
+        <svg class="neticon @(offline ? "off" : s.Peers > 0 ? "on" : "warn")"
+             viewBox="0 0 20 17" width="38" height="33">
+            <title>@(offline ? "Daemon offline" : $"{s.Peers} active connection{(s.Peers == 1 ? "" : "s")}")</title>
+            <path class="netarc @(NetBars >= 4 ? "active" : "")" d="M2.93 6.93 Q10 1.07 17.07 6.93" />
+            <path class="netarc @(NetBars >= 3 ? "active" : "")" d="M5.05 9.05 Q10 4.95 14.95 9.05" />
+            <path class="netarc @(NetBars >= 2 ? "active" : "")" d="M7.17 11.17 Q10 8.83 12.83 11.17" />
+            <circle class="netdot @(NetBars >= 1 ? "active" : "")" cx="10" cy="14" r="1.7" />
+        </svg>
+        @* Meridian (wireframe globe): blinks while syncing, solid once
+           synced, hidden when offline/warming (no data yet). *@
+        @if (s.State == DaemonState.Online)
+        {
+            <svg class="meridian @(s.Synced ? "" : "blinking")" viewBox="0 0 24 24" width="33" height="30">
+                <title>@s.MeridianTip</title>
+                <circle cx="12" cy="12" r="10" />
+                <ellipse cx="12" cy="12" rx="4.6" ry="10" />
+                <line x1="12" y1="2" x2="12" y2="22" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <line x1="3.3" y1="7" x2="20.7" y2="7" />
+                <line x1="3.3" y1="17" x2="20.7" y2="17" />
+            </svg>
+        }
+    </div>
+</div>
+
+@code {
+    private CancellationTokenSource? _cts;
+    private Task? _tick;
+
+    protected override void OnInitialized()
+    {
+        Sync.Changed += OnSyncChanged;
+        _cts = new CancellationTokenSource();
+        _tick = TickLoopAsync(_cts.Token);
+    }
+
+    private void OnSyncChanged() => _ = InvokeAsync(StateHasChanged);
+
+    // 1s ticker so the warmup elapsed timer updates smoothly between the
+    // 8s shared polls. Cheap: only re-renders while actually in warmup.
+    private async Task TickLoopAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+                if (Sync.Current.State == DaemonState.Warmup)
+                    await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { /* component disposing */ }
+    }
+
+    private static string Num(int n) => n.ToString("N0");
+
+    private string WarmupElapsed
+    {
+        get
+        {
+            var since = Sync.Current.WarmupSince;
+            if (since is null) return "0m 00s";
+            var e = DateTime.UtcNow - since.Value;
+            return $"{(int)e.TotalMinutes}m {e.Seconds:00}s";
+        }
+    }
+
+    // Lit bars on the connection icon. Offline lights all 4 (red); 0 peers
+    // shows a single (amber) bar; otherwise it tiers up like Bitcoin-Qt's
+    // connect-1..4 icons.
+    private int NetBars
+    {
+        get
+        {
+            var s = Sync.Current;
+            if (s.State == DaemonState.Offline) return 4;
+            return s.Peers == 0 ? 1 : s.Peers < 4 ? 2 : s.Peers < 8 ? 3 : 4;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Sync.Changed -= OnSyncChanged;
+        _cts?.Cancel();
+        if (_tick is not null)
+        {
+            try { await _tick; } catch { /* ignore shutdown races */ }
+        }
+        _cts?.Dispose();
+    }
+}

@@ -1,0 +1,80 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+    <PropertyGroup>
+        <!-- ANDROID ONLY, deliberately: single-TFM avoids the multi-TFM publish trap the
+             desktop app hit (NU1102 Mono runtime pack pulled in by unused mobile TFMs —
+             see ROADMAP §A). The iOS head will be its own project when that work starts. -->
+        <TargetFrameworks>net10.0-android</TargetFrameworks>
+
+        <OutputType>Exe</OutputType>
+        <RootNamespace>BlazecoinWallet.App.Droid</RootNamespace>
+        <UseMaui>true</UseMaui>
+        <SingleProject>true</SingleProject>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <EnableDefaultCssItems>false</EnableDefaultCssItems>
+        <Nullable>enable</Nullable>
+
+        <!-- Enable XAML source generation for faster build times and improved performance.
+             This generates C# code from XAML at compile time instead of runtime inflation.
+             To disable, remove this line.
+             For individual files, you can override by setting Inflator metadata:
+               <MauiXaml Update="MyPage.xaml" Inflator="Default" /> (reverts to defaults: Runtime for Debug, XamlC for Release)
+               <MauiXaml Update="MyPage.xaml" Inflator="Runtime" /> (force runtime inflation) -->
+        <MauiXamlInflator>SourceGen</MauiXamlInflator>
+
+        <!-- Display name (launcher label — kept short so it never truncates) -->
+        <ApplicationTitle>Blazecoin</ApplicationTitle>
+
+        <!-- App Identifier -->
+        <ApplicationId>com.blazecoin.wallet</ApplicationId>
+
+        <!-- Versions -->
+        <ApplicationDisplayVersion>1.2.0</ApplicationDisplayVersion> <!-- P2PQH post-quantum fork support (H_Q=4,250,000) + fork banner; 1.1.0 = Phoenix-413 (H_A=4,194,000) -->
+        <ApplicationVersion>5</ApplicationVersion>
+
+        <!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
+        <WindowsPackageType>None</WindowsPackageType>
+
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">24.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
+        <TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- App Icon: the classic 2014 gold-coin phoenix (V1.5 splash art), circular-cropped
+             and pre-scaled to the adaptive-icon safe zone, over near-black. -->
+        <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.png" />
+
+        <!-- Splash Screen: BLAZECOIN / MOBILE text lockup (white on crimson), sized for
+             the Android 12+ circular splash-icon mask. The big full-screen branding
+             moment is the WebView #app-splash overlay in wwwroot/index.html — the
+             platform caps this one to a small circle. Replaced the template 2026-07-27. -->
+        <MauiSplashScreen Include="Resources\Splash\splash.png" Color="#9E000F" BaseSize="288,288" />
+
+        <!-- Images -->
+        <MauiImage Include="Resources\Images\*" />
+        <MauiImage Update="Resources\Images\dotnet_bot.svg" BaseSize="168,208" />
+
+        <!-- Custom Fonts -->
+        <MauiFont Include="Resources\Fonts\*" />
+
+        <!-- Raw Assets (also remove the "Resources\Raw" prefix) -->
+        <MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+        <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Maui" Version="$(MauiVersion)" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
+        <!-- AndroidX BiometricPrompt for the app-lock biometric gate (DroidBiometricAuth). -->
+        <PackageReference Include="Xamarin.AndroidX.Biometric" Version="1.1.0.29" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\BlazecoinWallet.Lite.Core\BlazecoinWallet.Lite.Core.csproj" />
+        <ProjectReference Include="..\BlazecoinWallet.Lite.UI\BlazecoinWallet.Lite.UI.csproj" />
+    </ItemGroup>
+
+</Project>
