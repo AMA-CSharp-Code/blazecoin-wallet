@@ -1,0 +1,17 @@
+wwwroot/DigitalFireFighterImages/*.png filter=lfs diff=lfs merge=lfs -text
+wwwroot/CoinPilesImages/*.png filter=lfs diff=lfs merge=lfs -text
+wwwroot/AddressBookImages/*.png filter=lfs diff=lfs merge=lfs -text
+wwwroot/SecurityImages/*.png filter=lfs diff=lfs merge=lfs -text
+wwwroot/BackupImages/*.png filter=lfs diff=lfs merge=lfs -text
+wwwroot/DigitalFireFighterImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/BlazecoinBird/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/NetworkImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/GlassChainsImage/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/BackupImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/AddressBookImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/SecurityImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/CoinPilesImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/PoolImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/MiningPoolImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/WavesImages/*.webp filter=lfs diff=lfs merge=lfs -text
+wwwroot/QuantumImages/atoms/*.png filter=lfs diff=lfs merge=lfs -text

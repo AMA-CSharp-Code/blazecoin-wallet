@@ -1,0 +1,147 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+    <PropertyGroup>
+        <TargetFrameworks>net10.0-android</TargetFrameworks>
+        <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('linux'))">$(TargetFrameworks);net10.0-ios;net10.0-maccatalyst</TargetFrameworks>
+        <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net10.0-windows10.0.19041.0</TargetFrameworks>
+        <!-- Windows exe icon resource: the 7-size .ico cut from the Telegram phoenix master (2026-09-11). Explicit, because the
+             MAUI icon generator only emits a single 64 px entry for the Windows head and cached the old .NET art by base name. -->
+        <ApplicationIcon Condition="$(TargetFramework.Contains('-windows'))">Resources\AppIcon\blazecoin.ico</ApplicationIcon>
+
+        <!-- Note for MacCatalyst:
+            The default runtime is maccatalyst-x64, except in Release config, in which case the default is maccatalyst-x64;maccatalyst-arm64.
+            When specifying both architectures, use the plural <RuntimeIdentifiers> instead of the singular <RuntimeIdentifier>.
+            The Mac App Store will NOT accept apps with ONLY maccatalyst-arm64 indicated;
+            either BOTH runtimes must be indicated or ONLY macatalyst-x64. -->
+        <!-- For example: <RuntimeIdentifiers>maccatalyst-x64;maccatalyst-arm64</RuntimeIdentifiers> -->
+
+        <OutputType>Exe</OutputType>
+        <RootNamespace>BlazecoinWallet.Maui</RootNamespace>
+        <UseMaui>true</UseMaui>
+        <SingleProject>true</SingleProject>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <EnableDefaultCssItems>false</EnableDefaultCssItems>
+        <Nullable>enable</Nullable>
+
+        <!-- The mobile/lite sibling projects live in this repo but are NOT part of this
+             app: exclude their trees from every default glob (.cs, .razor, .xaml, assets)
+             — the per-type Compile Remove below is not enough on its own. -->
+        <DefaultItemExcludes>$(DefaultItemExcludes);BlazecoinWallet.Core.Export\**;BlazecoinWallet.Lite.Core\**;BlazecoinWallet.Lite.Core.Tests\**;BlazecoinWallet.Lite.UI\**;BlazecoinWallet.Lite.UI.Tests\**;BlazecoinWallet.Lite.Gateway\**;BlazecoinWallet.Lite.Gateway.Tests\**;BlazecoinWallet.Core.Tests\**;BlazecoinWallet.App.Droid\**;BlazecoinWallet.App.iOS\**;BlazecoinWallet.Web.DevHost\**;BlazecoinWallet.Web.Wasm\**;BlazecoinWallet.PqBench\**;BlazecoinWallet.PqBench.Tests\**;BlazecoinWallet.PqBench.Runner\**</DefaultItemExcludes>
+
+        <!-- Enable XAML source generation for faster build times and improved performance.
+             This generates C# code from XAML at compile time instead of runtime inflation.
+             To disable, remove this line.
+             For individual files, you can override by setting Inflator metadata:
+               <MauiXaml Update="MyPage.xaml" Inflator="Default" /> (reverts to defaults: Runtime for Debug, XamlC for Release)
+               <MauiXaml Update="MyPage.xaml" Inflator="Runtime" /> (force runtime inflation) -->
+        <MauiXamlInflator>SourceGen</MauiXamlInflator>
+
+        <!-- Display name -->
+        <ApplicationTitle>BlazecoinWallet.Maui</ApplicationTitle>
+
+        <!-- App Identifier -->
+        <ApplicationId>com.companyname.blazecoinwallet.maui</ApplicationId>
+
+        <!-- Versions -->
+        <ApplicationDisplayVersion>2.0.6</ApplicationDisplayVersion>
+        <ApplicationVersion>7</ApplicationVersion>
+
+        <!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
+        <WindowsPackageType>None</WindowsPackageType>
+
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">24.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
+        <TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- App Icon -->
+        <MauiIcon Include="Resources\AppIcon\blazecoin_appicon.png" />
+
+        <!-- Splash Screen -->
+        <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
+
+        <!-- Images -->
+        <MauiImage Include="Resources\Images\*" />
+        <MauiImage Update="Resources\Images\dotnet_bot.svg" BaseSize="168,208" />
+
+        <!-- Custom Fonts -->
+        <MauiFont Include="Resources\Fonts\*" />
+
+        <!-- Raw Assets (also remove the "Resources\Raw" prefix) -->
+        <MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+        <PackageReference Include="ClosedXML" Version="0.105.0" />
+        <PackageReference Include="QRCoder" Version="1.6.0" />
+        <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+        <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Maui" Version="$(MauiVersion)" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
+        <PackageReference Include="QuestPDF" Version="2026.5.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Embedded into the assembly (read via GetManifestResourceStream). Explicitly
+             do NOT also drop a loose appsettings.json next to the exe: that copy is inert
+             today (the embedded stream is what's loaded) but would become a config-tamper /
+             arbitrary-ExePath vector if the loader ever switched to AddJsonFile. -->
+        <EmbeddedResource Include="appsettings.json" />
+        <Content Remove="appsettings.json" />
+        <None Remove="appsettings.json" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Skin art ships as WebP (q82, 512x512 — ~97% smaller than the PNG masters).
+             The PNG originals are kept in the repo as lossless source but excluded from
+             the build output / app package so the shipped app is ~44 MB, not ~1.6 GB.
+             (shield-tile.png and Images/413 are NOT skin art and stay in the output.) -->
+        <Content Remove="wwwroot\DigitalFireFighterImages\*.png" />
+        <Content Remove="wwwroot\BlazecoinBird\*.png" />
+        <Content Remove="wwwroot\NetworkImages\*.png" />
+        <Content Remove="wwwroot\GlassChainsImage\*.png" />
+        <Content Remove="wwwroot\BackupImages\*.png" />
+        <Content Remove="wwwroot\AddressBookImages\*.png" />
+        <Content Remove="wwwroot\SecurityImages\*.png" />
+        <Content Remove="wwwroot\CoinPilesImages\*.png" />
+        <Content Remove="wwwroot\PoolImages\*.png" />
+        <Content Remove="wwwroot\MiningPoolImages\*.png" />
+        <Content Remove="wwwroot\WavesImages\*.png" />
+        <Content Remove="wwwroot\QuantumImages\atoms\*.png" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Platform-independent logic (models, RPC, services) lives in
+             BlazecoinWallet.Core (test-plan M3). Exclude its sources from this app's
+             compile glob — they belong to that project — and reference it instead. -->
+        <Compile Remove="BlazecoinWallet.Core\**\*.cs" />
+        <Compile Remove="BlazecoinWallet.Core.Tests\**\*.cs" />
+        <!-- The mobile/lite projects + the desktop-only export lib are sibling projects,
+             not part of this app's compile glob. -->
+        <Compile Remove="BlazecoinWallet.Core.Export\**\*.cs" />
+        <Compile Remove="BlazecoinWallet.Lite.Core\**\*.cs" />
+        <Compile Remove="BlazecoinWallet.Lite.Core.Tests\**\*.cs" />
+        <Compile Remove="BlazecoinWallet.Lite.UI\**\*.cs" />
+		<!-- Added 2026-08-01: these two nested projects were missing from both this list
+		     and DefaultItemExcludes, so once they had been built their generated
+		     obj\**\AssemblyInfo.cs landed in this app's compile glob and every CLI build
+		     failed with CS0579 duplicate-attribute errors. -->
+		<Compile Remove="BlazecoinWallet.Lite.UI.Tests\**\*.cs" />
+		<Compile Remove="BlazecoinWallet.Lite.Gateway\**\*.cs" />
+		<Compile Remove="BlazecoinWallet.Lite.Gateway.Tests\**\*.cs" />
+        <Compile Remove="BlazecoinWallet.App.Droid\**\*.cs" />
+        <Compile Remove="BlazecoinWallet.Web.Wasm\**\*.cs" />
+        <!-- PQ benchmark library (2026-09-14): sibling projects at the repo root, never part of the app. -->
+        <Compile Remove="BlazecoinWallet.PqBench\**\*.cs" />
+        <Compile Remove="BlazecoinWallet.PqBench.Tests\**\*.cs" />
+        <Compile Remove="BlazecoinWallet.PqBench.Runner\**\*.cs" />
+        <ProjectReference Include="BlazecoinWallet.Core\BlazecoinWallet.Core.csproj" />
+        <ProjectReference Include="BlazecoinWallet.Core.Export\BlazecoinWallet.Core.Export.csproj" />
+    </ItemGroup>
+
+</Project>

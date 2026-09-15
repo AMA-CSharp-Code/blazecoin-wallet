@@ -1,0 +1,170 @@
+@page "/sweep"
+@layout LiteLayout
+@implements IDisposable
+@inject LiteWalletService Wallet
+@inject NavigationManager Nav
+@inject IQrScanner Scanner
+@inject IUnitSettings Units
+@inject IExplorerSettings Explorer
+@using BlazecoinWallet.Lite.Data
+
+@* Legacy key sweep: paste (or scan) a 2014-era WIF private key, see what it holds, and
+   move EVERYTHING into this wallet in one on-device-signed transaction. The imported key
+   is used once and never stored — the mnemonic stays the wallet's only backup. *@
+<div class="lite-card">
+    <h2>Recover an Old Wallet</h2>
+    <p class="lite-sub">
+        Paste a Blazecoin private key (WIF — from the original 2014 wallet's
+        <i>dumpprivkey</i> or a paper backup). The wallet checks what it holds on-chain,
+        then sweeps everything into your own address here. The key never leaves this device.
+    </p>
+
+    @if (_check?.Valid != true)
+    {
+        <label class="lite-sub">Private key (WIF)</label>
+        <div style="display:flex; gap:8px;">
+            <input class="lite-input" style="flex:1" type="password" placeholder="Private key…" @bind="_wif" />
+            @if (Scanner.IsAvailable)
+            {
+                <button class="lite-btn lite-btn-ghost" style="width:auto" title="Scan a QR code" @onclick="ScanAsync">📷</button>
+            }
+        </div>
+        <button class="lite-btn" @onclick="CheckAsync" disabled="@_busy">@(_busy ? "Checking the chain…" : "Check Key")</button>
+    }
+    else
+    {
+        <div class="lite-address" style="text-align:left">
+            <div class="lite-sub">Old address</div>
+            <div class="lite-txid">@_check.Address</div>
+            <div class="lite-sub" style="margin-top:10px">Recoverable now</div>
+            <div class="lite-balance" style="font-size:1.6rem">@AmountText(_check.SpendableSatoshis) <small>@_sym</small></div>
+            @if (_check.ImmatureSatoshis > 0)
+            {
+                <div class="lite-sub" style="margin-top:4px">
+                    + @AmountText(_check.ImmatureSatoshis) @_sym still maturing (freshly mined — try again after 30 confirmations).
+                </div>
+            }
+            <div class="lite-sub" style="margin-top:10px">Destination — your wallet</div>
+            <div class="lite-txid">@_destination</div>
+        </div>
+
+        @if (_check.SpendableSatoshis > 0)
+        {
+            @* Plain "&" — C# strings are HTML-encoded by Razor; &amp; would show literally. *@
+            <button class="lite-btn" @onclick="SweepAsync" disabled="@_busy">@(_busy ? "Signing & broadcasting…" : "🔥 Sweep It All In")</button>
+            <div style="height:8px"></div>
+        }
+        else
+        {
+            <p class="lite-sub">This key holds no spendable coins right now.</p>
+        }
+        <button class="lite-btn lite-btn-ghost" @onclick="() => Reset()" disabled="@_busy">← Different key</button>
+    }
+
+    @if (_error != null)
+    {
+        <div class="lite-error">@_error</div>
+    }
+    @if (_sweptTxId != null)
+    {
+        <div class="lite-success">
+            Recovered! Your old coins are on their way — transaction<br />
+            @{ var txUrl = LiteExplorer.TxUrl(Explorer.BaseUrl, _sweptTxId); }
+            @if (txUrl != null)
+            {
+                <a href="@txUrl" target="_blank" rel="noopener" class="lite-link"><strong>@_sweptTxId</strong></a>
+            }
+            else
+            {
+                <strong>@_sweptTxId</strong>
+            }
+            <br />They'll show on Home after one confirmation (~30 seconds).
+        </div>
+    }
+</div>
+
+@code {
+    private string _wif = string.Empty;
+    private string _destination = string.Empty;
+    private LiteWifCheck? _check;
+    private bool _busy;
+    private string? _error;
+    private string? _sweptTxId;
+    private string _sym => LiteUnits.Symbol(Units.Unit);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await Wallet.UnlockAsync())
+        {
+            Nav.NavigateTo("setup");
+            return;
+        }
+        _destination = Wallet.Address;
+    }
+
+    private async Task ScanAsync()
+    {
+        var scanned = await Scanner.ScanAsync();
+        if (!string.IsNullOrWhiteSpace(scanned)) _wif = scanned.Trim();
+    }
+
+    private async Task CheckAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_wif))
+        {
+            _error = "Enter a private key first.";
+            return;
+        }
+        _busy = true;
+        _error = null;
+        _sweptTxId = null;
+        try
+        {
+            var check = await Wallet.CheckWifAsync(_wif.Trim());
+            if (check.Valid) _check = check;
+            else _error = check.Error;
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task SweepAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await Wallet.SweepWifAsync(_wif.Trim());
+            if (result.Success)
+            {
+                _sweptTxId = result.TxId;
+                Reset(keepSuccess: true);
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally
+        {
+            // Drop the private key regardless of outcome (security audit S5): once the sweep
+            // has run, the wallet holds the coins — the key must not linger in the field for
+            // a screenshot / recents-thumbnail / navigation to capture. A retry re-enters it.
+            _wif = string.Empty;
+            _check = null;
+            _busy = false;
+        }
+    }
+
+    private void Reset(bool keepSuccess = false)
+    {
+        _wif = string.Empty; // drop the key from the field the moment it's no longer needed
+        _check = null;
+        _error = null;
+        if (!keepSuccess) _sweptTxId = null;
+    }
+
+    private string AmountText(long sats) => LiteUnits.Format(sats, Units.Unit);
+
+    // Belt-and-braces: navigating away also clears any key still in the field.
+    public void Dispose() => _wif = string.Empty;
+}

@@ -1,0 +1,754 @@
+/* Review/confirm step shown before sending (when "Confirm before sending" is on). */
+.confirm-panel {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 1.5rem;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.3);
+    border: 2px solid rgba(207, 32, 19, 0.5);
+    border-radius: 8px;
+}
+
+.confirm-panel h3 {
+    color: #fff;
+    margin: 0 0 1rem;
+}
+
+/* "You're about to send" / "to" — white (the amount stays green, address white). */
+.confirm-text {
+    color: #fff;
+}
+
+.confirm-amount {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--blz-success);
+    margin: 0.25rem 0;
+}
+
+.confirm-addr {
+    font-family: Consolas, "Courier New", monospace;
+    word-break: break-all;
+    color: #fff;
+    margin: 0.25rem 0 1rem;
+}
+
+/* Fee + total summary on the review step (label left, value right). */
+.confirm-fee {
+    max-width: 360px;
+    margin: 0 auto 1rem;
+    color: #fff;
+}
+.fee-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.35rem 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.fee-total {
+    font-weight: 700;
+    border-top: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+/* =========================================================================
+   Tiled coin-pile background — rows of coin-pile images scrolling sideways
+   with a tile-pulse breathing effect (same treatment as the Mining page).
+   The .tile-row children are created by initSendBackground in
+   mining-background.js, so they need ::deep. Keyframes are declared locally
+   because scoped @keyframes don't resolve across components.
+   ========================================================================= */
+.tile-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.tile-bg ::deep .tile-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    margin-bottom: 4px;
+    animation: scrollRight 35s linear infinite;
+}
+
+.tile-bg ::deep .tile-row:nth-child(even) {
+    margin-left: -25vw;
+    animation: scrollLeft 35s linear infinite;
+}
+
+.tile-bg ::deep .tile-row img {
+    width: calc(25vw - 2px);
+    height: auto;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 4px;
+    animation: tilePulse 12s ease-in-out infinite;
+}
+
+.tile-bg ::deep .tile-row:nth-child(even) img             { animation-delay: -3s; }
+.tile-bg ::deep .tile-row img:nth-child(2)                { animation-delay: -2s; }
+.tile-bg ::deep .tile-row img:nth-child(3)                { animation-delay: -4s; }
+.tile-bg ::deep .tile-row:nth-child(even) img:nth-child(2){ animation-delay: -5s; }
+.tile-bg ::deep .tile-row:nth-child(even) img:nth-child(3){ animation-delay: -1s; }
+
+@keyframes tilePulse {
+    0%, 100% { opacity: 0.55; transform: scale(1);    filter: brightness(0.8); }
+    50%      { opacity: 1;    transform: scale(1.03); filter: brightness(1.3); }
+}
+
+/* Translate by exactly one set width (paintCoinPileTiles sets --cp-set inline
+   on each row); the row holds set + clone so the wrap is invisible. Falls
+   back to 50vw if the var isn't set (older callers). */
+@keyframes scrollRight { 0% { transform: translateX(calc(-1 * var(--cp-set, 50vw))); } 100% { transform: translateX(0); } }
+@keyframes scrollLeft  { 0% { transform: translateX(0); }                              100% { transform: translateX(calc(-1 * var(--cp-set, 50vw))); } }
+
+/* Keep the page content above the fixed background. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* =========================================================================
+   "Send Coins" container — ported from the Address Book "Labels" box
+   (.ab-content in AddressBook.razor.css). The global .card:has(> .status-header)
+   rule already supplies the edge-to-edge black header, 2px white border and
+   square corners; this adds the solid dark backdrop (so the busy coin-pile
+   background doesn't bleed through and hurt readability), suppresses the hover
+   lift (this is a static panel, not a clickable card), and squares off the
+   buttons with a brand-red primary — matching the Labels card exactly.
+   ========================================================================= */
+.send-content {
+    background: rgba(0, 0, 0, 0.45);
+    border: 2px solid #fff;
+    border-radius: 0;
+}
+/* Suppress the global .card:hover lift — this panel is static, not clickable. */
+.send-content.card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* All buttons inside the card get square edges (matches the V1.5 chrome). */
+.send-content .btn {
+    border-radius: 0;
+}
+
+/* Primary action buttons (Send BLZ / Confirm & Send / Send Another) — brand-red
+   gradient (matches the Labels "Add" button / sidebar / Mining Start). Overrides
+   the global .btn-primary. */
+.send-content .btn-primary {
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+    color: #fff;
+    border: 1px solid #fff;
+}
+.send-content .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%);
+}
+
+/* "Send Max" — a lighter red than the crimson "Send BLZ", so the
+   empty-the-wallet action reads as a distinct (softer) shade. */
+.send-content .btn-primary.send-max-btn {
+    background: linear-gradient(135deg, #e85a4d 0%, #b81d12 100%);
+}
+.send-content .btn-primary.send-max-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff6f61 0%, #cf2013 100%);
+}
+
+/* The form content now lives inside a .card with the global V1.5 Overview
+   banner-card chrome (.card:has(> .status-header) in wallet.css) — white
+   border, square corners, edge-to-edge black header with the "Send Coins"
+   title. No per-page form panel override needed. */
+
+/* Title banner — nested red->black cards with text-shadow, ported from the
+   Dashboard header. The banner-title h1 sits inside the .Headers11 inner
+   card; both share the same navy/red drop-shadow that gives the BlazeCoin
+   chrome its look. */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;        /* square edges to match the V1.5 card chrome below */
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+.banner-title {
+    margin: 0;
+    padding: 12px 0;
+    text-align: center;
+    font-weight: 500;
+    color: #fff;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    white-space: nowrap;
+    animation: emberFlicker 2.5s ease-in-out infinite;
+}
+
+/* Flame-flicker on the title text — layers an orange/red glow on top of the
+   base navy/red shadow, with irregular keyframe percentages so it reads as a
+   natural ember rather than a rhythmic pulse. The base 3px 3px navy / 3px 4px
+   red shadow is preserved in every frame; only the additional glow layers
+   shift in intensity, blur, and offset. .banner-emoji has text-shadow: none
+   so the flanking arrows aren't affected by this animation. */
+@keyframes emberFlicker {
+    /* Two evenly-spaced peaks (25%, 75%) per 2.5s cycle = 2 pulses per ghost
+       cycle. The 2.5s period matches the arrow ghosts' `arrowGhost` animation,
+       and the staggered ghost pair (delay 0, 1.25s) keeps a ghost streaming
+       past the arrow at each flame peak — flame brightens as ghosts pass. */
+    0%, 50%, 100% {
+        text-shadow:
+            3px 3px navy,
+            3px 4px red,
+            0 0 4px rgba(255, 90, 0, 0.35);
+    }
+    25%, 75% {
+        text-shadow:
+            3px 3px navy,
+            4px 5px #ff2200,
+            0 0 14px rgba(255, 120, 20, 0.78),
+            0 0 26px rgba(255, 70, 0, 0.5);
+    }
+}
+
+/* Money-with-wings emojis flanking the title — drop the title's navy/red
+   text-shadow on the glyph (color emojis layered with a shadow look muddy)
+   and give them a little breathing room from the text. */
+.banner-emoji {
+    text-shadow: none;
+    margin: 0 5rem;          /* bumped from 3rem so the arrow ghosts have room before touching the title text */
+    display: inline-block;
+    /* nudge the emoji's baseline so it sits visually centred against the
+       text it flanks (most emoji fonts hang below the baseline). */
+    transform: translateY(-2px);
+}
+
+/* Red arrow flanks with a fading motion-blur ghost trail. ➜ (U+279C) is a
+   monochrome glyph (not a color emoji) so `color` actually applies. Two
+   pseudo-element ghosts spawn at the real arrow's spot and slide right while
+   fading, staggered 50% apart for a continuous trail. */
+.banner-emoji.arrow-r {
+    color: #d10000;
+    position: relative;
+}
+.banner-emoji.arrow-r::before,
+.banner-emoji.arrow-r::after {
+    content: "➜";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: inherit;
+    pointer-events: none;
+    animation: arrowGhost 2.5s linear infinite;
+}
+.banner-emoji.arrow-r::after { animation-delay: 1.25s; }
+
+@keyframes arrowGhost {
+    0%   { transform: translateX(0);    opacity: 0;    }
+    20%  { transform: translateX(10px); opacity: 0.55; }
+    100% { transform: translateX(60px); opacity: 0;    }
+}
+
+/* Incoming ghosts — symmetric to the outgoing pair: spawn 60px to the left of
+   the arrow, fade in as they approach, and disappear right where the real arrow
+   sits. Two ghosts staggered 50% apart so one is always streaming in. */
+.banner-emoji.arrow-r .ghost-in {
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: inherit;
+    pointer-events: none;
+    animation: arrowGhostIn 2.5s linear infinite;
+}
+.banner-emoji.arrow-r .ghost-in:nth-of-type(2) { animation-delay: 1.25s; }
+
+@keyframes arrowGhostIn {
+    0%   { transform: translateX(-60px); opacity: 0;    }
+    80%  { transform: translateX(-10px); opacity: 0.55; }
+    100% { transform: translateX(0);     opacity: 0;    }
+}
+
+/* Form labels — global rule has them red; white reads better against the
+   framed card on this page. */
+.form-group label {
+    color: #fff;
+}
+
+/* Darker grey for the Recipient Address and Amount input boxes (default
+   .form-control was rgba(255,255,255,0.1) — a barely-tinted dark). Typed
+   text is forced to white explicitly here; the global .form-control already
+   sets color:white but some WebView2 builds override input color from the
+   UA stylesheet on type=number, so being explicit keeps it consistent. */
+.form-control {
+    background: rgba(0, 0, 0, 0.5);
+    border-color: rgba(255, 255, 255, 0.15);
+    color: #fff;
+}
+.form-control:focus {
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+}
+
+/* Placeholder text in inputs (e.g. "Blazecoin address") — soft light-grey so
+   it's readable on the darker background but clearly distinct from typed
+   text (which is full white). */
+.form-control::placeholder {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+/* Amount (BLZ) arrows. WebView2's native number spin button renders as a filled
+   control, so any recolour filter turns it into a solid red block with no visible
+   arrow shapes. Instead, hide the native spinner and draw our own clickable red
+   (#d10000, the page's brand red) up/down triangles on the right of the input.
+   They step _amount via @onclick and are shown only once a number is typed. */
+#amount::-webkit-inner-spin-button,
+#amount::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+}
+#amount {
+    padding-right: 26px;   /* clear space for the arrows so typed text doesn't run under them */
+}
+
+.amount-wrap {
+    position: relative;
+}
+
+/* Hidden by default; revealed only when the input is NOT showing its placeholder
+   (i.e. a number has been typed). Updates live as the user types. */
+.amount-wrap .spin-buttons {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 7px;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+}
+#amount:not(:placeholder-shown) ~ .spin-buttons {
+    display: flex;
+}
+
+.spin-buttons button {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 9px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+}
+.spin-up::before,
+.spin-down::before {
+    content: "";
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+}
+.spin-up::before    { border-bottom: 7px solid #d10000; }
+.spin-down::before  { border-top: 7px solid #d10000; }
+.spin-up:hover::before    { border-bottom-color: #ff4d3a; }
+.spin-down:hover::before  { border-top-color: #ff4d3a; }
+
+/* =========================================================================
+   Address Book picker — custom dropdown on the recipient field, styled to
+   match the page chrome (dark fill, 2px white border, square corners,
+   brand-red hover). Replaces the native <datalist>.
+   ========================================================================= */
+.addr-picker {
+    position: relative;
+}
+/* Room for the chevron toggle so typed text doesn't run under it. */
+.addr-picker .form-control {
+    padding-right: 34px;
+}
+
+/* Brand-red chevron button at the right of the input. */
+.addr-picker-toggle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 32px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.addr-picker-toggle::before {
+    content: "";
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #d10000;
+    transition: transform 0.15s ease;
+}
+.addr-picker-toggle:hover::before { border-top-color: #ff4d3a; }
+.addr-picker-toggle.open::before { transform: rotate(180deg); }
+
+/* Transparent full-screen catcher so clicking away closes the dropdown. */
+.addr-picker-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: transparent;
+}
+
+/* The dropdown panel — same square white-bordered chrome as the page cards. */
+.addr-picker-list {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    z-index: 50;
+    max-height: 240px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.92);
+    border: 2px solid #fff;
+    border-radius: 0;
+}
+
+.addr-picker-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    background: transparent;
+    color: #fff;
+    text-align: left;
+    cursor: pointer;
+}
+.addr-picker-item:last-child {
+    border-bottom: 0;
+}
+.addr-picker-item:hover {
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+}
+.addr-picker-label {
+    font-weight: 600;
+    color: #ff4d3a;   /* brand red, like the table headers */
+}
+/* On hover the row goes brand-red, so flip the label to white to stay legible. */
+.addr-picker-item:hover .addr-picker-label {
+    color: #fff;
+}
+.addr-picker-addr {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.7);
+    word-break: break-all;
+}
+.addr-picker-item:hover .addr-picker-addr {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+/* ===================== Auto Payout container ===================== */
+.autopay-card { margin-top: 1.5rem; }
+
+.autopay-banner {
+    background: rgba(255, 193, 7, 0.14);
+    border: 1px solid rgba(255, 193, 7, 0.5);
+    color: #ffc107;
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    margin-bottom: 1rem;
+    text-align: center;
+}
+.autopay-banner em { font-style: italic; color: #ffe08a; }
+
+/* Start / Stop controls — their own centred container (black fill, subtle border,
+   shrink-to-fit) holding the buttons row with the watching/stopped indicator beneath. */
+.ap-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    width: fit-content;
+    margin: 0 auto 1rem;
+    background: #000;
+    border: 2px solid #888;
+    border-radius: 4px;
+    padding: 0.75rem 1.25rem;
+}
+.ap-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+}
+.ap-start,
+.ap-stop {
+    min-width: 6rem;
+    color: #fff;
+    border: 2px solid #fff;
+}
+.ap-start { background: var(--blz-success); }   /* dashboard green (#06d6a0) */
+.ap-stop  { background: #cf2013; }               /* brand red */
+.ap-start:hover:not(:disabled),
+.ap-stop:hover:not(:disabled) { filter: brightness(1.12); }
+.ap-start:disabled,
+.ap-stop:disabled { opacity: 0.45; cursor: default; }
+.ap-state { font-size: 0.85rem; color: #e02424; }   /* stopped = red */
+.ap-state.on { color: var(--blz-success); }          /* watching = green */
+
+/* Live banner variant — red, shown when real sends are armed. */
+.autopay-banner.live {
+    background: rgba(207, 32, 19, 0.18);
+    border-color: rgba(207, 32, 19, 0.7);
+    color: #ff6b6b;
+}
+
+/* Sending-mode row, badge and toggle button. */
+.ap-mode-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+/* Badge and toggle button share one size so they sit as two equal boxes. */
+.ap-mode-badge,
+.ap-mode-btn {
+    min-width: 14rem;
+    box-sizing: border-box;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.82rem;
+    border-radius: 3px;
+    text-align: center;
+}
+.ap-mode-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+}
+.ap-mode-badge.dry  { color: #ffc107; border: 1px solid rgba(255, 193, 7, 0.5); }
+.ap-mode-badge.live { color: #ff6b6b; border: 1px solid rgba(207, 32, 19, 0.7); background: rgba(207, 32, 19, 0.12); }
+.ap-mode-btn {
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.08);
+}
+.ap-mode-btn.golive { border-color: rgba(207, 32, 19, 0.8); color: #ff8a7a; }
+.ap-mode-btn:hover:not(:disabled) { filter: brightness(1.2); }
+.ap-mode-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* Live confirmation panel. */
+.ap-confirm {
+    background: rgba(207, 32, 19, 0.12);
+    border: 1px solid rgba(207, 32, 19, 0.6);
+    border-radius: 4px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+}
+.ap-confirm p { margin: 0 0 0.6rem; color: rgba(255, 255, 255, 0.85); line-height: 1.4; }
+.ap-confirm-check {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    cursor: pointer;
+    color: #fff;
+    margin-bottom: 0.7rem;
+}
+.ap-confirm-check input { accent-color: #cf2013; cursor: pointer; }
+.ap-confirm-actions { display: flex; justify-content: center; gap: 0.6rem; }
+/* Both confirm buttons share one size (Enable live + Cancel). */
+.ap-confirm-actions .btn {
+    min-width: 8rem;
+    box-sizing: border-box;
+    padding: 0.4rem 0.8rem;
+    border-width: 2px;
+}
+.ap-confirm-actions .ap-stop:disabled { opacity: 0.45; cursor: default; }
+
+/* Custom red up/down arrows on the number fields — same look as the Send amount
+   field. Hide the native spinner; show the triangles when the field has a value. */
+.ap-num-wrap { position: relative; }
+.ap-num-wrap .form-control { padding-right: 24px; }
+.ap-num-wrap .spin-buttons {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 7px;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+}
+.ap-num-wrap input:not(:placeholder-shown) ~ .spin-buttons { display: flex; }
+.ap-num-wrap input[type="number"]::-webkit-inner-spin-button,
+.ap-num-wrap input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+.ap-hint {
+    display: block;
+    margin-top: 0.3rem;
+    font-size: 0.74rem;
+    color: rgba(255, 255, 255, 0.6);
+    line-height: 1.3;
+}
+
+.ap-row { display: flex; gap: 1rem; }
+.ap-row > div { flex: 1; }
+
+.ap-status {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.8);
+    margin: 0.75rem 0 0.5rem;
+}
+.ap-status strong { color: var(--blz-success); }
+
+/* Live reason line — tells you exactly why the engine is waiting (or that it fired). */
+.ap-reason {
+    font-size: 0.8rem;
+    color: #ffc107;
+    margin: 0 0 0.5rem;
+    text-align: center;
+}
+
+.ap-log {
+    max-height: 170px;
+    overflow-y: auto;
+    background: #000;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+    padding: 0.5rem 0.6rem;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.76rem;
+    color: rgba(255, 255, 255, 0.8);
+}
+.ap-log-line { padding: 1px 0; white-space: nowrap; }
+
+/* =========================================================================
+   QR scanner — opened from the recipient field. Webcam (auto-granted in
+   WebView2) with an image-file fallback; decode runs in qr-scan.js. Dark
+   translucent panel matching the page's white-bordered square card chrome.
+   ========================================================================= */
+/* The "Scan QR" button itself sits in the bottom .form-actions row and reuses
+   the plain .btn .btn-primary styling (brand-red gradient, white border, square
+   corners) from .send-content .btn-primary — identical to "Send BLZ". */
+
+.qr-scan {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    background: rgba(0, 0, 0, 0.55);
+    border: 2px solid #fff;
+    border-radius: 0;
+}
+
+.qr-scan-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.6rem;
+    color: #fff;
+    font-weight: 600;
+}
+
+.qr-scan-close {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    color: #fff;
+    line-height: 1;
+    padding: 0.1rem 0.45rem;
+    cursor: pointer;
+}
+.qr-scan-close:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.7);
+}
+
+.qr-scan-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+/* Live preview — capped so it doesn't dominate the form. */
+.qr-scan-video {
+    width: 100%;
+    max-width: 320px;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    background: #000;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.qr-scan-video.hidden { display: none; }
+
+/* Off-screen decode buffer — never visible. */
+.qr-scan-canvas { display: none; }
+
+.qr-scan-msg {
+    width: 100%;
+    text-align: center;
+    color: #ffd966;
+    font-size: 0.85rem;
+}
+
+.qr-scan-actions {
+    display: flex;
+    justify-content: center;
+}
+
+/* The file <input> is visually hidden; its <label> is the clickable button
+   (square brand-red gradient, matching the card's primary buttons). */
+.qr-file-label {
+    color: #fff;
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+    border: 1px solid #fff;
+    border-radius: 0;
+    padding: 0.375rem 0.75rem;
+    cursor: pointer;
+    margin: 0;
+}
+.qr-file-label:hover { background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%); }
+.qr-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.qr-scan-hint {
+    color: rgba(255, 255, 255, 0.6);
+    text-align: center;
+}

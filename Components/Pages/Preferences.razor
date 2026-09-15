@@ -1,0 +1,404 @@
+@page "/preferences"
+@using BlazecoinWallet.Core.Services.Mining
+@using BlazecoinWallet.Core.Services.Settings
+@inject IJSRuntime JS
+@inject IMiningService Miner
+@inject IBlazecoindRpcService RpcService
+@inject ISettingsService Settings
+
+<PageTitle>Preferences - Blazecoin Wallet V2.0</PageTitle>
+
+@* Live skin background — applied into this host by ApplyAsync via
+   applyDashboardSkin; skin styles are global in wallet.css. *@
+<div id="prefBackground"></div>
+
+<div class="wallet-page">
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                @* Sliced text: the word is split into 5 horizontal bands that
+                   slide in from alternating sides and assemble into the word,
+                   hold, fade out, and rebuild — looping. *@
+                <h1 class="banner-title" aria-label="Preferences">
+                    <span class="gear gear-left" aria-hidden="true">⚙️</span>
+                    <span class="slice-stack" aria-hidden="true">
+                        @for (int i = 0; i < 5; i++)
+                        {
+                            <span class="slice" style='--i:@i; --dir:@(i % 2 == 0 ? "-70px" : "70px")'>Preferences</span>
+                        }
+                    </span>
+                    <span class="gear gear-right" aria-hidden="true">⚙️</span>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    <section class="pref-section">
+        <h2>Dashboard skin</h2>
+        <p class="pref-hint">
+            Choose the animated background for the Dashboard. Your pick is saved on
+            this device and takes effect next time you open the Dashboard.
+        </p>
+
+        <div class="selected-skin">
+            <div class="selected-preview skin-preview-@_currentSkin"></div>
+            <div class="selected-meta">
+                <div class="selected-eyebrow">Selected skin</div>
+                <div class="selected-name">@SelectedSkin.Label</div>
+                <div class="skin-card-desc">@SelectedSkin.Description</div>
+            </div>
+        </div>
+
+        <div class="skin-grid">
+            @foreach (var skin in _availableSkins)
+            {
+                <button class="skin-card @(skin.Id == _currentSkin ? "active" : "")"
+                        @onclick="@(() => PickSkinAsync(skin.Id))">
+                    <div class="skin-preview skin-preview-@skin.Id"></div>
+                    <div class="skin-card-label">
+                        <div class="skin-card-name">@skin.Label</div>
+                        <div class="skin-card-desc">@skin.Description</div>
+                    </div>
+                </button>
+            }
+        </div>
+    </section>
+
+    <section class="pref-section">
+        <h2>Dashboard refresh</h2>
+        <p class="pref-hint">
+            How often the Dashboard polls the daemon for balance, network and sync
+            status. Lower = more live, higher = less RPC load. "Manual" stops the
+            auto-poll (the sync indicator still updates from shared state).
+        </p>
+        <div class="opt-row">
+            @foreach (var opt in _refreshOptions)
+            {
+                <button class="opt-btn @(opt.Secs == _refreshSecs ? "active" : "")"
+                        @onclick="@(() => SetRefreshAsync(opt.Secs))">@opt.Label</button>
+            }
+        </div>
+    </section>
+
+    <section class="pref-section">
+        <h2>Confirmations</h2>
+        <p class="pref-hint">
+            How many confirmations before a transaction shows as "Confirmed" on the
+            Dashboard and Transactions pages. At ~30s blocks: 6 ≈ 3 min, 30 ≈ 15 min,
+            100 ≈ 50 min — higher is safer.
+        </p>
+        <div class="opt-row">
+            @foreach (var n in _confOptions)
+            {
+                <button class="opt-btn @(n == _confThreshold ? "active" : "")"
+                        @onclick="@(() => SetConfThresholdAsync(n))">@n</button>
+            }
+        </div>
+    </section>
+
+    <section class="pref-section">
+        <h2>Mining defaults</h2>
+        <p class="pref-hint">
+            Starting worker-thread count and throttle for the Mining page (applied
+            when the page opens and no run is in progress).
+        </p>
+        <div class="slider-row">
+            <label>Worker threads</label>
+            <input type="range" min="1" max="@_maxThreads" step="1"
+                   @bind="_miningThreads" @bind:event="oninput" @bind:after="SaveMiningAsync" />
+            <span class="slider-value">@_miningThreads</span>
+        </div>
+        <div class="slider-row">
+            <label>Throttle</label>
+            <input type="range" min="0" max="90" step="5"
+                   @bind="_miningThrottle" @bind:event="oninput" @bind:after="SaveMiningAsync" />
+            <span class="slider-value">@_miningThrottle%</span>
+        </div>
+    </section>
+
+    <section class="pref-section">
+        <h2>Amount display</h2>
+        <p class="pref-hint">Units and decimal places for balances and transaction amounts.</p>
+        <div class="opt-row">
+            @foreach (var u in _units)
+            {
+                <button class="opt-btn @(u == _amtUnit ? "active" : "")" @onclick="@(() => SetAmtUnitAsync(u))">@u</button>
+            }
+        </div>
+        <div class="opt-row opt-row-spaced">
+            @foreach (var d in _decimalOptions)
+            {
+                <button class="opt-btn @(d == _amtDecimals ? "active" : "")" @onclick="@(() => SetAmtDecimalsAsync(d))">@d dp</button>
+            }
+        </div>
+        <p class="pref-hint opt-row-spaced">Example: <strong>@AmountFormat.Format(1234.56785678m, _amtUnit, _amtDecimals)</strong></p>
+    </section>
+
+    <section class="pref-section">
+        <h2>Block explorer</h2>
+        <p class="pref-hint">
+            Base URL of a block explorer. When set, transaction IDs and addresses become
+            clickable (open in your browser) on the Dashboard and Transactions pages.
+            Leave blank to disable.
+        </p>
+        <input class="pref-input" placeholder="@BlazecoinWallet.Core.Services.Settings.SettingsService.DefaultExplorerUrl" @bind="_explorerUrl" @bind:after="SaveExplorerAsync" />
+    </section>
+
+    <section class="pref-section">
+        <h2>Sending</h2>
+        <label class="pref-check">
+            <input type="checkbox" @bind="_confirmSend" @bind:after="SaveConfirmSendAsync" />
+            <span>Confirm before sending — show a review step on the Send page</span>
+        </label>
+    </section>
+
+    <section class="pref-section">
+        <h2>Maintenance &amp; info</h2>
+        @if (_diag is null)
+        {
+            <p class="pref-hint">@(_maintMsg ?? "Loading…")</p>
+        }
+        else
+        {
+            <div class="diag">
+                <div class="diag-row"><span>Daemon</span><span>@_diag.Version</span></div>
+                <div class="diag-row"><span>Chain</span><span>@_diag.Chain</span></div>
+                <div class="diag-row"><span>Blocks</span><span>@_diag.Blocks.ToString("N0")</span></div>
+                <div class="diag-row"><span>Best block</span><span class="diag-mono">@_diag.Best</span></div>
+                <div class="diag-row"><span>Connections</span><span>@_diag.Connections</span></div>
+                <div class="diag-row"><span>Protocol</span><span>@_diag.Protocol</span></div>
+            </div>
+        }
+        <div class="opt-row opt-row-spaced">
+            <button class="opt-btn" @onclick="RefreshDiagAsync">Refresh</button>
+            <button class="opt-btn" @onclick="ClearListsAsync">Clear saved address lists</button>
+            <button class="opt-btn" @onclick="ResetPrefsAsync">Reset preferences</button>
+        </div>
+        @if (!string.IsNullOrEmpty(_maintMsg) && _diag is not null) { <p class="pref-hint opt-row-spaced">@_maintMsg</p> }
+    </section>
+</div>
+
+@code {
+    // Default skin for new users (no saved dashboard_skin yet). An existing
+    // user's saved choice, read in OnInitializedAsync, overrides this.
+    private string _currentSkin = "digital-fire-fighters";
+
+    private record SkinChoice(string Id, string Label, string Description);
+    private static readonly SkinChoice[] _availableSkins = new[]
+    {
+        new SkinChoice("pixelated-coins", "Pixelated Coins", "Drifting grid of flipping pixel coins."),
+        new SkinChoice("mining-pools",    "Mining Pools",    "9x9 image grid that pixel-fades in and scrolls diagonally."),
+        new SkinChoice("413",             "413",             "Repeating 413 tile, brick-pattern scrolling rows."),
+        new SkinChoice("shield",          "Shield",          "BlazeCoin shield splash, brick-pattern scrolling rows."),
+        new SkinChoice("phoenix",         "Phoenix",         "Cascading 8x8 grid of BlazecoinBird images with shimmer."),
+        new SkinChoice("blockchain",      "Blockchain",      "3x2 quadrants with slowly-rotating chain images."),
+        new SkinChoice("network",         "Network",         "8 scrolling columns with glitch jitters and radar sweep."),
+        new SkinChoice("hodl-waves",      "HODL Waves",      "4x3 grid with a VHS-style cyan-glow intro that settles."),
+        new SkinChoice("mining",          "Mining",          "Scrolling brick-pattern rows from the wallet's Mining page."),
+        new SkinChoice("digital-fire-fighters", "Digital Fire Fighters", "2x2 firefighter backdrop with 16 orbiting images."),
+        new SkinChoice("coinpile-send",         "Coin Send",         "Coin tiles scrolling in rows with a pulse."),
+        new SkinChoice("coinpile-receive",      "Coin Receive",      "Dense coin mosaic with a diagonal block-then-smooth sweep."),
+        new SkinChoice("coinpile-transactions", "Coin Transactions", "Coin grid drifting diagonally with a breathing pulse."),
+        new SkinChoice("addressbook",           "Address Book",      "Vertical columns of images scrolling up and down with a pulse."),
+        new SkinChoice("security",              "Security",          "Ken Burns grid; tiles sporadically flip and matrix-green pixelate."),
+        new SkinChoice("backup",                "Backup",            "Diagonal-drift tile grid drifting northeast with a breathing pulse."),
+        new SkinChoice("import",                "Import",            "Three counter-rotating rings of tiles over a scrolling field, with a cyan sonar pulse."),
+        new SkinChoice("quantum",               "Quantum",           "Mosaic of rendered atoms drifting diagonally, with drawn atoms streaming over it."),
+        new SkinChoice("random",          "Random",          "Rolls a different skin on every wallet launch."),
+        new SkinChoice("plain",           "Plain",           "Just the dark gradient backdrop."),
+    };
+
+    private SkinChoice SelectedSkin =>
+        _availableSkins.FirstOrDefault(s => s.Id == _currentSkin) ?? _availableSkins[0];
+
+    // ---- Dashboard refresh interval ----
+    private record RefreshOption(int Secs, string Label);
+    private static readonly RefreshOption[] _refreshOptions = new[]
+    {
+        new RefreshOption(2, "2s"),
+        new RefreshOption(8, "8s"),
+        new RefreshOption(30, "30s"),
+        new RefreshOption(0, "Manual"),
+    };
+    private int _refreshSecs = 8;
+
+    // ---- Confirmations threshold ----
+    private static readonly int[] _confOptions = { 6, 30, 100 };
+    private int _confThreshold = 30;
+
+    // ---- Mining defaults ----
+    private int _miningThreads = 1;
+    private int _miningThrottle = 50;
+    private int _maxThreads = 1;
+
+    // ---- Amount display ----
+    private static readonly string[] _units = { "BLZ", "mBLZ" };
+    private static readonly int[] _decimalOptions = { 2, 4, 8 };
+    private string _amtUnit = AmountFormat.DefaultUnit;
+    private int _amtDecimals = AmountFormat.DefaultDecimals;
+
+    // ---- Block explorer + sending ----
+    private string _explorerUrl = "";
+    private bool _confirmSend = true;
+
+    // ---- Maintenance / diagnostics ----
+    private sealed class Diag
+    {
+        public string Version = "?", Chain = "?", Best = "";
+        public int Blocks, Connections, Protocol;
+    }
+    private Diag? _diag;
+    private string? _maintMsg;
+
+    protected override void OnInitialized()
+    {
+        _maxThreads = Miner.MaxAllowedThreads;
+        _miningThreads = Miner.DefaultThreadCount;
+    }
+
+    protected override async Task OnInitializedAsync() => await RefreshDiagAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                var stored = await Settings.GetDashboardSkinAsync();
+                if (stored is not null && _availableSkins.Any(s => s.Id == stored))
+                    _currentSkin = stored;
+
+                await ApplyAsync();   // render the live skin behind this page
+
+                if (await Settings.GetRefreshSecsAsync() is int rs) _refreshSecs = rs;
+
+                if (await Settings.GetMiningThreadsAsync() is int t) _miningThreads = Math.Min(t, _maxThreads);
+                if (await Settings.GetMiningThrottleAsync() is int thr) _miningThrottle = thr;
+
+                if (await Settings.GetConfThresholdAsync() is int c) _confThreshold = c;
+
+                if (await Settings.GetAmountUnitAsync() is string au) _amtUnit = au;
+                if (await Settings.GetAmountDecimalsAsync() is int dec && _decimalOptions.Contains(dec)) _amtDecimals = dec;
+                _explorerUrl = await Settings.GetExplorerUrlAsync();
+                _confirmSend = await Settings.GetConfirmSendAsync(); // default on for safety
+
+                StateHasChanged();    // highlight the active card / selected preview
+            }
+            catch { /* no-op */ }
+        }
+    }
+
+    private async Task PickSkinAsync(string id)
+    {
+        _currentSkin = id;
+        try
+        {
+            await Settings.SetDashboardSkinAsync(id);
+            // Picking "Random" explicitly re-rolls; clear the cached resolution.
+            if (id == "random")
+                await JS.InvokeVoidAsync("sessionStorage.removeItem", "resolved_random");
+            await ApplyAsync();       // update the live preview immediately
+        }
+        catch { /* no-op */ }
+    }
+
+    /// <summary>Resolve "random" to a concrete skin (cached per session, like the
+    /// Dashboard) and paint it into this page's #prefBackground host.</summary>
+    private async Task ApplyAsync()
+    {
+        var skinToApply = _currentSkin;
+        if (_currentSkin == "random")
+        {
+            var sessionRandom = await JS.InvokeAsync<string?>("sessionStorage.getItem", "resolved_random");
+            var pool = _availableSkins.Select(s => s.Id)
+                .Where(skinId => skinId != "random" && skinId != "plain").ToArray();
+            if (string.IsNullOrEmpty(sessionRandom) || !pool.Contains(sessionRandom))
+            {
+                sessionRandom = pool[Random.Shared.Next(pool.Length)];
+                await JS.InvokeVoidAsync("sessionStorage.setItem", "resolved_random", sessionRandom);
+            }
+            skinToApply = sessionRandom;
+        }
+        await JS.InvokeVoidAsync("applyDashboardSkin", skinToApply, "prefBackground");
+    }
+
+    private async Task SetRefreshAsync(int secs)
+    {
+        _refreshSecs = secs;
+        await Settings.SetRefreshSecsAsync(secs);
+    }
+
+    private async Task SetConfThresholdAsync(int n)
+    {
+        _confThreshold = n;
+        await Settings.SetConfThresholdAsync(n);
+    }
+
+    private async Task SetAmtUnitAsync(string unit)
+    {
+        _amtUnit = unit;
+        await Settings.SetAmountUnitAsync(unit);
+    }
+
+    private async Task SetAmtDecimalsAsync(int d)
+    {
+        _amtDecimals = d;
+        await Settings.SetAmountDecimalsAsync(d);
+    }
+
+    private async Task SaveExplorerAsync()
+    {
+        await Settings.SetExplorerUrlAsync(_explorerUrl ?? "");
+    }
+
+    private async Task SaveConfirmSendAsync()
+    {
+        await Settings.SetConfirmSendAsync(_confirmSend);
+    }
+
+    private async Task RefreshDiagAsync()
+    {
+        try
+        {
+            var bc = await RpcService.GetBlockchainInfoAsync();
+            var net = await RpcService.GetNetworkInfoAsync();
+            _diag = new Diag
+            {
+                Chain = bc?.Chain ?? "?",
+                Blocks = bc?.Blocks ?? 0,
+                Best = bc?.BestBlockHash ?? "",
+                Connections = net?.Connections ?? 0,
+                Protocol = net?.ProtocolVersion ?? 0,
+                Version = net?.SubVersion ?? "?",
+            };
+            _maintMsg = null;
+        }
+        catch (Exception ex) { _maintMsg = $"Couldn't load diagnostics: {ex.Message}"; }
+        StateHasChanged();
+    }
+
+    private async Task ClearListsAsync()
+    {
+        foreach (var k in new[] { "receive_addresses", "blz_addressbook" })
+            await JS.InvokeVoidAsync("localStorage.removeItem", k);
+        _maintMsg = "Saved address / receive lists cleared.";
+    }
+
+    private async Task ResetPrefsAsync()
+    {
+        await Settings.ResetAsync();
+
+        _currentSkin = "digital-fire-fighters"; _refreshSecs = 8; _confThreshold = 30;
+        _miningThreads = Miner.DefaultThreadCount; _miningThrottle = 50;
+        _amtUnit = AmountFormat.DefaultUnit; _amtDecimals = AmountFormat.DefaultDecimals;
+        _explorerUrl = ""; _confirmSend = true;
+        await ApplyAsync(); // re-render the live skin preview (now the default skin)
+        _maintMsg = "Preferences reset to defaults.";
+    }
+
+    private async Task SaveMiningAsync()
+    {
+        await Settings.SetMiningThreadsAsync(_miningThreads);
+        await Settings.SetMiningThrottleAsync(_miningThrottle);
+    }
+}
