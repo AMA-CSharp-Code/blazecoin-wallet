@@ -1,0 +1,412 @@
+{
+ "T": 30,
+ "tau": 12390,
+ "pow_limit_bits": 504365055,
+ "vectors": [
+  {
+   "name": "steady_dh0",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1600000000,
+   "expect_bits": 486604690
+  },
+  {
+   "name": "steady_dh1",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1600000030,
+   "expect_bits": 486604690
+  },
+  {
+   "name": "steady_dh412",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500413,
+   "parent_time": 1600012360,
+   "expect_bits": 486604690
+  },
+  {
+   "name": "steady_dh413",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500414,
+   "parent_time": 1600012390,
+   "expect_bits": 486604690
+  },
+  {
+   "name": "steady_dh9999",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4510000,
+   "parent_time": 1600299970,
+   "expect_bits": 486604690
+  },
+  {
+   "name": "jitter_-29",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1600000001,
+   "expect_bits": 486604584
+  },
+  {
+   "name": "jitter_-1",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1600000029,
+   "expect_bits": 486604686
+  },
+  {
+   "name": "jitter_+1",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1600000031,
+   "expect_bits": 486604693
+  },
+  {
+   "name": "jitter_+29",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1600000059,
+   "expect_bits": 486604795
+  },
+  {
+   "name": "jitter_+300",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1600000330,
+   "expect_bits": 486605798
+  },
+  {
+   "name": "jitter_-300",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1599999730,
+   "expect_bits": 486603603
+  },
+  {
+   "name": "stall_1halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1600012420,
+   "expect_bits": 486670334
+  },
+  {
+   "name": "surge_1halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1599987640,
+   "expect_bits": 478150528
+  },
+  {
+   "name": "stall_2halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1600024810,
+   "expect_bits": 486801404
+  },
+  {
+   "name": "surge_2halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1599975250,
+   "expect_bits": 473956288
+  },
+  {
+   "name": "stall_3halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1600037200,
+   "expect_bits": 487063544
+  },
+  {
+   "name": "surge_3halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1599962860,
+   "expect_bits": 471859168
+  },
+  {
+   "name": "stall_4halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1600049590,
+   "expect_bits": 487587824
+  },
+  {
+   "name": "surge_4halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1599950470,
+   "expect_bits": 470810608
+  },
+  {
+   "name": "stall_5halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1600061980,
+   "expect_bits": 488636384
+  },
+  {
+   "name": "surge_5halflife",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1599938080,
+   "expect_bits": 470286328
+  },
+  {
+   "name": "strand_13x",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4501001,
+   "parent_time": 1600390390,
+   "expect_bits": 504365055
+  },
+  {
+   "name": "strand_23x",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4501001,
+   "parent_time": 1600690690,
+   "expect_bits": 504365055
+  },
+  {
+   "name": "strand_100x",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4501001,
+   "parent_time": 1603003000,
+   "expect_bits": 504365055
+  },
+  {
+   "name": "future_abuse_7200",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1600007230,
+   "expect_bits": 486637134
+  },
+  {
+   "name": "clamp_powlimit",
+   "anchor_bits": 504365055,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1604956000,
+   "expect_bits": 504365055
+  },
+  {
+   "name": "clamp_one",
+   "anchor_bits": 50331649,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500001,
+   "parent_time": 1562830000,
+   "expect_bits": 16842752
+  },
+  {
+   "name": "anchor_easy_steady",
+   "anchor_bits": 504365055,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500003,
+   "parent_time": 1600000060,
+   "expect_bits": 504363311
+  },
+  {
+   "name": "anchor_easy_stall",
+   "anchor_bits": 504365055,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500003,
+   "parent_time": 1600012450,
+   "expect_bits": 504365055
+  },
+  {
+   "name": "anchor_hard_steady",
+   "anchor_bits": 453281356,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500003,
+   "parent_time": 1600000060,
+   "expect_bits": 453280862
+  },
+  {
+   "name": "anchor_hard_stall",
+   "anchor_bits": 453281356,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500003,
+   "parent_time": 1600012450,
+   "expect_bits": 453576889
+  },
+  {
+   "name": "anchor_mid_steady",
+   "anchor_bits": 470131700,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500003,
+   "parent_time": 1600000060,
+   "expect_bits": 470131085
+  },
+  {
+   "name": "anchor_mid_stall",
+   "anchor_bits": 470131700,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500003,
+   "parent_time": 1600012450,
+   "expect_bits": 470500116
+  },
+  {
+   "name": "walk_000",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500002,
+   "parent_time": 1600000053,
+   "expect_bits": 486604773
+  },
+  {
+   "name": "walk_010",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500012,
+   "parent_time": 1600000556,
+   "expect_bits": 486605522
+  },
+  {
+   "name": "walk_020",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500022,
+   "parent_time": 1600001141,
+   "expect_bits": 486606590
+  },
+  {
+   "name": "walk_030",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500032,
+   "parent_time": 1600001624,
+   "expect_bits": 486607284
+  },
+  {
+   "name": "walk_040",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500042,
+   "parent_time": 1600002041,
+   "expect_bits": 486607731
+  },
+  {
+   "name": "walk_050",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500052,
+   "parent_time": 1600002510,
+   "expect_bits": 486608382
+  },
+  {
+   "name": "walk_060",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500062,
+   "parent_time": 1600002823,
+   "expect_bits": 486608432
+  },
+  {
+   "name": "walk_070",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500072,
+   "parent_time": 1600003364,
+   "expect_bits": 486609372
+  },
+  {
+   "name": "walk_080",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500082,
+   "parent_time": 1600003841,
+   "expect_bits": 486610069
+  },
+  {
+   "name": "walk_090",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500092,
+   "parent_time": 1600004330,
+   "expect_bits": 486610822
+  },
+  {
+   "name": "walk_100",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500102,
+   "parent_time": 1600004873,
+   "expect_bits": 486611801
+  },
+  {
+   "name": "walk_110",
+   "anchor_bits": 486604799,
+   "anchor_parent_time": 1600000000,
+   "anchor_height": 4500000,
+   "eval_height": 4500112,
+   "parent_time": 1600005166,
+   "expect_bits": 486611772
+  }
+ ]
+}

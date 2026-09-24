@@ -1,0 +1,493 @@
+
+/* =========================================================================
+   Title banner — same nested-card construction as the Mining page, with
+   pixelated flipping coins flanking the title instead of emojis.
+   ========================================================================= */
+.wallet-dashboard {
+    position: relative;
+    z-index: 1;
+}
+
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;        /* square edges to match the V1.5 card chrome below */
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+
+.banner-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3rem;
+    margin: 0;
+    padding: 12px 0;
+    /* Explicit color / text-shadow / weight to match MVC's .Headers11
+       defaults. wallet.css has a global h1 rule (red + red glow) that
+       otherwise overrides the cascade from .Headers11; the scoped
+       selector beats that on specificity. */
+    color: white;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    font-weight: 500;
+}
+
+/* Typewriter: banner-text-wrap groups text + caret as a single flex item
+   so the 3rem gap stays between coin/text only (not coin/caret). */
+.banner-text-wrap {
+    display: inline-flex;
+    align-items: baseline;
+    white-space: nowrap;
+}
+
+/* Hidden unless the wrapper carries .typing (set by typeBlazecoinBanner for the duration of the
+   animation). Hidden-by-default matters: a re-render that recreates the caret must come back
+   hidden — on the Intel Mac the caret stayed at the end of the finished title (2026-09-24). */
+.banner-caret {
+    margin-left: 4px;
+    color: white;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    opacity: 0;
+    animation: none;
+    transition: opacity 0.5s ease;
+}
+.banner-text-wrap.typing .banner-caret {
+    opacity: 1;
+    animation: banner-caret-blink 0.7s steps(1) infinite;
+}
+
+@keyframes banner-caret-blink {
+    50% { opacity: 0.2; }
+}
+
+.header-coin {
+    width: 48px;
+    height: 48px;
+    display: inline-block;
+    vertical-align: middle;
+    /* Backing store is 48 x devicePixelRatio (drawMirroredCoinHiDpi): pixel art sampled at
+       device resolution rather than 48 samples blown up 2x on Retina. */
+    image-rendering: pixelated;
+    filter: sepia(1) saturate(2) brightness(1.1) hue-rotate(5deg);
+    /* No CSS animation — rotation is driven from JS via
+       startHeaderCoinSync() in mining-background.js, which writes the
+       same transform to every .header-coin every animation frame using
+       one shared timestamp. CSS animations on multiple canvases drift
+       in WebView2 even with identical declarations; the JS loop sidesteps
+       that by guaranteeing both coins compute the same rotation. */
+    clip-path: polygon(
+        33% 0%, 67% 0%,
+        67% 17%, 83% 17%,
+        83% 33%, 100% 33%,
+        100% 67%, 83% 67%,
+        83% 83%, 67% 83%,
+        67% 100%, 33% 100%,
+        33% 83%, 17% 83%,
+        17% 67%, 0% 67%,
+        0% 33%, 17% 33%,
+        17% 17%, 33% 17%
+    );
+}
+
+/* =========================================================================
+   Dashboard cards — black with white border, navy+red title shadow, matching
+   MVC's .wallet-card. Overrides the global .card styling for this page only
+   (scoped CSS applies the b-* attribute to the cards rendered by this page).
+   ========================================================================= */
+::deep .card {
+    background-color: rgba(0, 0, 0, 0.65);
+    border: 2px solid white;
+    border-radius: 6px;
+    color: white;
+    padding: 1.5rem;
+}
+
+/* Banner cards (with a .status-header child) must keep the V1.5 edge-to-edge
+   chrome from wallet.css. Without this, the rule above ties the global
+   .card:has(> .status-header) on specificity and wins by source order
+   (scoped CSS loads last), insetting the black header bar by 1.5rem. */
+::deep .card:has(> .status-header) {
+    padding: 0;
+    overflow: hidden;
+    border: 2px solid white;
+    border-radius: 0;
+}
+
+/* Suppress the global .card:hover lift + shadow (wallet.css). Dashboard
+   cards are read-only panels, not clickable, so the bounce-up feels off. */
+::deep .card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+::deep .card h2 {
+    color: white;
+    text-shadow: 2px 2px navy, 2px 3px red;
+    font-size: 1.2rem;
+    margin: 0 0 1rem 0;
+    font-weight: 700;
+}
+
+/* =========================================================================
+   Balance card styled after the V1.5 wallet's Overview panel: right-aligned
+   label : value rows (Balance / Unconfirmed / Immature), each with a circular
+   gold coin. Spans the full top grid row so Network / Blockchain / Quick
+   Actions flow beneath it.
+   ========================================================================= */
+::deep .balance-card {
+    grid-column: 1 / -1;
+    /* Layout (padding/overflow/border) comes from .card:has(> .status-header)
+       below — Account Status now shares the same chrome as the other four. */
+}
+
+/* .card:has(> .status-header) + .card-body + .status-header rules are global
+   in wallet.css so any page can adopt the V1.5 Overview banner-card chrome. */
+
+/* Stack the dashboard's banner-headed containers flush vertically (no row
+   gap), but keep horizontal breathing room between Quick Actions / Blockchain
+   / Network on the second row. */
+::deep .dashboard-grid {
+    row-gap: 1.5rem;           /* gap between Account Status (row 1) and the row of 3 below */
+    column-gap: 1.5rem;        /* breathing room between Quick Actions / Blockchain / Network */
+    margin-bottom: 1.5rem;     /* same gap above Recent Transactions */
+}
+::deep .recent-transactions {
+    margin-top: 0;
+}
+
+/* Left-aligned labels in column 1, values + trailing coin in column 2, block
+   centred. */
+::deep .status-balances {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: center;
+    align-items: center;
+    column-gap: 1.25rem;
+    row-gap: 0.6rem;
+}
+
+::deep .status-label {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 1.05rem;
+}
+
+/* Value with the circular gold coin trailing on its right-hand side. */
+::deep .status-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 1.1rem;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.25rem;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Circular gold coin (the Pixelated Coins swatch image). Same
+   sepia/saturate/hue-rotate filter the dashboard header coins use to turn the
+   BlazecoinBird art gold; clipped to a circle. */
+::deep .status-coin {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    border-radius: 50%;
+    object-fit: cover;
+    image-rendering: pixelated;
+    filter: sepia(1) saturate(2) brightness(1.1) hue-rotate(5deg);
+}
+
+/* The spendable balance is the headline figure — gold and glowing, but the
+   same size as the Unconfirmed / Immature figures. */
+::deep .status-value.primary {
+    color: #fff;
+    text-shadow: 0 0 12px rgba(255, 255, 255, 0.5);
+}
+
+/* Immature balance: white at 0 BLZ (default .status-value colour), but hot
+   pink with a matching glow once there's an immature (e.g. freshly-mined,
+   not-yet-spendable) amount above 0. The pink matches the Backup page's
+   <code>wallet.dat</code> (Bootstrap's --bs-code-color #d63384). */
+::deep .status-value.immature-positive {
+    color: #d63384;
+    text-shadow: 0 0 12px rgba(214, 51, 132, 0.5);
+}
+
+/* Unconfirmed balance: white at 0 BLZ (default .status-value colour), but a
+   dark red with a matching glow once there's a pending amount above 0. */
+::deep .status-value.unconfirmed-positive {
+    color: #a30015;
+    text-shadow: 0 0 12px rgba(163, 0, 21, 0.5);
+}
+
+::deep .balance-details {
+    margin-top: 1rem;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+::deep .btn-primary {
+    /* Brand-red gradient — same as the sidebar nav red and the primary
+       action buttons on Mining (Start Mining), Console (Run), and
+       Address Book (Add). */
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+    border: 2px solid white;
+    color: white;
+    font-weight: 700;
+}
+
+::deep .btn-primary:hover {
+    background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%);
+    transform: none;
+}
+
+::deep .btn-secondary {
+    background-color: rgba(0, 0, 0, 0.6);
+    border: 2px solid white;
+    color: white;
+}
+
+::deep .btn-secondary:hover {
+    background-color: rgba(139, 0, 0, 0.5);
+}
+
+/* Recent Transactions table — styled to match the Address Book "Labels"
+   table (.ab-table in AddressBook.razor.css): brand-red headers, subtle row
+   separators, white body text, and zebra striping on even rows. Sits inside
+   the .recent-transactions card, so the table itself has no border/fill. */
+::deep .transactions-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+::deep .transactions-table th,
+::deep .transactions-table td {
+    text-align: center;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+::deep .transactions-table th {
+    color: #ff4d3a;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(158, 0, 15, 0.6);
+}
+
+::deep .transactions-table tbody td {
+    color: #fff;
+}
+
+/* Zebra striping — every other (even) row darker, matching the Labels table. */
+::deep .transactions-table tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.55);
+}
+
+/* Transaction Type/Amount colour-coding by category. */
+::deep .transactions-table .send-cell {        /* send — red */
+    color: #ff6b6b;
+}
+::deep .transactions-table .receive-cell {     /* receive — Blockchain "Synced" green */
+    color: var(--blz-success);
+}
+::deep .transactions-table .mined-cell {       /* generate (shown as "Mined") — azure blue */
+    color: #1e90ff;
+}
+
+/* Type column (send/receive/generate/immature) — capitalise each word. */
+::deep .transactions-table .tx-type {
+    text-transform: capitalize;
+}
+
+/* Immature (not-yet-spendable) transactions: Type + Amount in hot pink,
+   matching the Immature balance on the Account Status card. */
+::deep .transactions-table .immature-cell {
+    color: #d63384;
+}
+
+/* Orphan transactions: light grey (was falling back to the dark default cell colour). */
+::deep .transactions-table .orphan-cell {
+    color: #c0c0c0;
+}
+
+/* Active Wallet picker (replaces the old Quick Actions buttons). The <select>
+   inherits the global .form-control chrome; these rules just set spacing and
+   the read-only single-wallet display. */
+.active-wallet-select {
+    width: 100%;
+    cursor: pointer;
+    background: rgba(12, 12, 12, 0.92);
+    color: #fff;
+    text-align: center;
+    text-align-last: center;   /* centre the selected value shown in the closed box */
+}
+
+/* The open dropdown list renders its <option> rows with default (light)
+   colours, which read as same-on-same against the dark control. Force a dark
+   row with white text so the choices are legible. */
+.active-wallet-select option {
+    background-color: #141414;
+    color: #fff;
+    text-align: center;
+}
+
+/* The active wallet's row gets the same green tick treatment as the
+   Blockchain card's "Synced ✓" — same colour token, same bold weight.
+   Chromium/WebView2 honours `color` on <option> in the dropdown list. */
+.active-wallet-select option.wallet-opt-active {
+    color: var(--blz-success);
+    font-weight: bold;
+}
+
+/* Every non-active wallet gets a red ✗ row to pair with the green ✓. */
+.active-wallet-select option.wallet-opt-inactive {
+    color: var(--blz-accent);
+}
+
+/* When the active wallet is the one currently selected, the collapsed
+   control shows its "✓ name" in green too (Chromium paints the closed
+   <select> text in the control's own colour, not the option's). The
+   `option` rule above keeps the expanded list rows their own colours. */
+.active-wallet-select.sel-active {
+    color: var(--blz-success);
+    font-weight: bold;
+}
+
+/* ...and red in the collapsed box when a non-active wallet is selected. */
+.active-wallet-select.sel-inactive {
+    color: var(--blz-accent);
+}
+
+.active-wallet-single {
+    padding: 0.6rem 0.7rem;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(158, 0, 15, 0.6);
+    border-radius: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.actions-card .form-hint {
+    display: block;
+    margin-top: 0.5rem;
+}
+
+/* Load button under the wallet picker — brand-red, matching the wallet's
+   primary action buttons. */
+.active-wallet-load {
+    margin-top: 0.6rem;
+    width: 100%;
+    background: linear-gradient(135deg, #cf2013, #8b0000);
+    color: #fff;
+    border: 1px solid #fff;
+    border-radius: 0;
+}
+
+.active-wallet-load:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a, #cf2013);
+}
+
+.active-wallet-load:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* Load / Unload / Remove sit in one row under the picker. Load keeps its
+   brand-red emphasis and takes the remaining width; Unload is a muted
+   neutral; Remove is a danger style that only fills red on hover so it
+   doesn't compete with Load for attention. */
+.active-wallet-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+}
+
+/* All three buttons share the row evenly: flex-basis 0 + equal grow makes
+   their widths identical regardless of label length (min-width:0 stops the
+   text from forcing one wider). nowrap + tighter horizontal padding keeps
+   each label on a single line so words never break mid-word. */
+.active-wallet-actions .btn {
+    margin-top: 0;
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.active-wallet-unload,
+.active-wallet-remove,
+.active-wallet-cancel {
+    border-radius: 0;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    background: rgba(40, 40, 40, 0.9);
+}
+
+.active-wallet-unload:hover:not(:disabled),
+.active-wallet-cancel:hover:not(:disabled) {
+    background: rgba(70, 70, 70, 0.95);
+}
+
+.active-wallet-remove {
+    border-color: rgba(207, 32, 19, 0.9);
+    color: #ff8a80;
+    background: rgba(40, 10, 10, 0.85);
+}
+
+.active-wallet-remove:hover:not(:disabled) {
+    background: linear-gradient(135deg, #cf2013, #8b0000);
+    color: #fff;
+}
+
+.active-wallet-unload:disabled,
+.active-wallet-remove:disabled,
+.active-wallet-cancel:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* Inline confirm strip for the destructive Remove action — keeps the
+   irreversible delete one extra deliberate click away. */
+.active-wallet-confirm {
+    margin-top: 0.6rem;
+    padding: 0.6rem 0.7rem;
+    background: rgba(40, 10, 10, 0.85);
+    border: 1px solid rgba(207, 32, 19, 0.9);
+    color: #ffd9d6;
+}
+
+.active-wallet-confirm-btns {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
+.active-wallet-confirm-btns .btn {
+    flex: 1 1 auto;
+}
+
+.active-wallet-notice {
+    color: var(--blz-success);
+}
+
+.active-wallet-error {
+    color: #ff8a80;
+}

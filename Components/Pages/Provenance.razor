@@ -1,0 +1,955 @@
+@page "/provenance"
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.Provenance
+@implements IAsyncDisposable
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject IAncestryRpc AncestryRpc
+@inject IVintageSendRpc SendRpc
+@inject IChainInfoRpc ChainInfo
+@inject IJSRuntime JS
+
+<PageTitle>Provenance - Blazecoin Wallet V2.0</PageTitle>
+
+@* Pixelated Coins skin — the drifting, flipping pixel-coin grid, painted into this
+   host by initProvenanceBackground (global .skin-pixelated-coins CSS). *@
+<div id="provenanceTileBg"></div>
+
+<div class="wallet-page">
+    @* Dashboard title banner, flanked by this page's own sidebar mark — the
+       coin-with-an-age-ring — instead of the Dashboard's flipping coins. *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                @* Send's ghost-trail treatment, applied to the marks: eight ghost
+                   copies of the icon per side, leaving one at a time round the
+                   compass — cardinals from the mark, diagonals from further out —
+                   fading as they go. Same shape defined once (@Mark) throughout. *@
+                <h1 class="banner-title">
+                    <span class="prov-mark">
+                        <span class="mark-ghost g-right">@Mark</span>
+                        <span class="mark-ghost g-down">@Mark</span>
+                        <span class="mark-ghost g-left">@Mark</span>
+                        <span class="mark-ghost g-up">@Mark</span>
+                        <span class="mark-ghost far g-dr">@Mark</span>
+                        <span class="mark-ghost far g-dl">@Mark</span>
+                        <span class="mark-ghost far g-ul">@Mark</span>
+                        <span class="mark-ghost far g-ur">@Mark</span>
+                        @Mark
+                    </span>
+                    <span class="banner-text-wrap"><span class="banner-text">Provenance</span></span>
+                    <span class="prov-mark">
+                        <span class="mark-ghost g-right">@Mark</span>
+                        <span class="mark-ghost g-down">@Mark</span>
+                        <span class="mark-ghost g-left">@Mark</span>
+                        <span class="mark-ghost g-up">@Mark</span>
+                        <span class="mark-ghost far g-dr">@Mark</span>
+                        <span class="mark-ghost far g-dl">@Mark</span>
+                        <span class="mark-ghost far g-ul">@Mark</span>
+                        <span class="mark-ghost far g-ur">@Mark</span>
+                        @Mark
+                    </span>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+        <div class="prov-content card">
+            <div class="status-header">
+                <span>Mint Ancestry</span>
+                @if (_report is not null)
+                {
+                    <span class="prov-attested">attested to block @_tipHeight.ToString("N0")</span>
+                }
+            </div>
+            <div class="card-body">
+                <p class="muted">
+                    Every satoshi traces back to the block that minted it. This reads your own
+                    coins from your own node — nothing leaves this machine. Sends are free on
+                    this chain, but every output must still clear the
+                    @VintageCoinControl.DustThresholdSatoshis.ToString("N0")-satoshi dust limit,
+                    so that is the smallest amount that can be sent.
+                </p>
+
+                <div class="prov-actions">
+                    <button class="btn btn-primary" @onclick="TraceAsync" disabled="@_busy">
+                        @(_busy ? "Tracing…" : _report is null ? "Trace provenance" : "Re-trace")
+                    </button>
+                    @if (_busy)
+                    {
+                        <span class="prov-elapsed">@Elapsed</span>
+                        @if (_progress is not null)
+                        {
+                            <span class="prov-progress">
+                                @_progress.OutputsDone.ToString("N0") / @_progress.OutputsTotal.ToString("N0") outputs
+                                · @_progress.TransactionsRead.ToString("N0") transactions read
+                            </span>
+                        }
+                    }
+                    else if (_report is not null)
+                    {
+                        <span class="prov-progress">
+                            @_report.Outputs.Count.ToString("N0") outputs ·
+                            @_report.TransactionsRead.ToString("N0") transactions read
+                            @if (_lastRun > TimeSpan.Zero)
+                            {
+                                <text> · traced in @Format(_lastRun)</text>
+                            }
+                        </span>
+                    }
+                </div>
+
+                @if (_error is not null)
+                {
+                    <p class="prov-error">@_error</p>
+                }
+
+                @if (_report is not null)
+                {
+                    var model = _fifo ? _report.Fifo : _report.Haircut;
+                    <div class="prov-summary">
+                        <span><strong>@Sats(_report.TotalSatoshis)</strong> held</span>
+                        <span><strong>@Sats(model.AttributedSatoshis)</strong> traced to a minting block</span>
+                        @if (model.AttributedSatoshis < _report.TotalSatoshis)
+                        {
+                            <span class="prov-partial">
+                                @Sats(_report.TotalSatoshis - model.AttributedSatoshis) unproven —
+                                lineage that couldn't be read is never guessed
+                            </span>
+                        }
+                    </div>
+
+                    @* Two ways of counting the same coins. Pedigree (FIFO) gives every
+                       satoshi ONE minting block; Proportional is the website's maths, so
+                       the numbers there reconcile with the collector board. *@
+                    <div class="prov-models">
+                        <button class="prov-model prov-model-primary @(_fifo ? "on" : null)" @onclick="() => _fifo = true">Pedigree (FIFO)</button>
+                        <button class="prov-model @(!_fifo ? "on" : null)" @onclick="() => _fifo = false">Proportional (site-equivalent)</button>
+                        <span class="prov-model-note">
+                            @(_fifo
+                                ? "Every satoshi belongs to exactly one block — whole sats, and the runs are sendable."
+                                : "Mixed coins split across their inputs' vintages by value — what the website pays claims on.")
+                        </span>
+                    </div>
+
+                    @* Each catalogue gets its own card inside Mint Ancestry — the
+                       Dashboard's nested-card construction, so a table and its heading
+                       read as one object. *@
+                    <div class="prov-panel card">
+                        <div class="status-header"><span>Year Vintages</span></div>
+                        <div class="card-body">
+                    @if (model.Years.Count == 0)
+                    {
+                        <p class="muted">No year lineage traced.</p>
+                    }
+                    else
+                    {
+                        <table class="prov-table">
+                            <colgroup>
+                                <col /><col /><col /><col /><col />
+                            </colgroup><thead>
+                                <tr><th>Year</th><th>Month</th><th class="num">Blocks</th><th class="num">Satoshis</th><th class="num">BLZ</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var y in model.Years)
+                                {
+                                    @* Year total, then the months that make it up — the
+                                       months come straight off the block timestamps. *@
+                                    <tr class="prov-year-row">
+                                        <td class="mono prov-figure">@y.Label</td>
+                                        <td class="prov-figure">@y.MonthsLabel</td>
+                                        <td class="num mono prov-figure">@y.OutputCount.ToString("N0")</td>
+                                        <td class="num mono prov-figure">@y.Satoshis.ToString("N0")</td>
+                                        <td class="num mono prov-figure">@Blz(y.Satoshis)</td>
+                                    </tr>
+                                    @foreach (var m in model.MonthsOf(y))
+                                    {
+                                        <tr class="prov-month-row">
+                                            <td></td>
+                                            <td class="prov-figure">@m.FirstTimeUtc.ToString("MMMM")</td>
+                                            <td class="num mono prov-figure">@m.OutputCount.ToString("N0")</td>
+                                            <td class="num mono prov-figure">@m.Satoshis.ToString("N0")</td>
+                                            <td class="num mono prov-figure">@Blz(m.Satoshis)</td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    }
+                        </div>
+                    </div>
+
+                    <div class="prov-panel card">
+                        <div class="status-header"><span>Special Vintages</span></div>
+                        <div class="card-body">
+                    @if (model.Specials.Count == 0)
+                    {
+                        <p class="muted">None held. Special vintages are single blocks — the premine,
+                        block 413, halvings, 500,000-block milestones, repdigits, leap-day mints,
+                        the Resurrection and the first V2 block.</p>
+                    }
+                    else
+                    {
+                        <table class="prov-table">
+                            <colgroup>
+                                <col /><col /><col /><col /><col />
+                            </colgroup><thead>
+                                <tr><th>Vintage</th><th class="num">Block</th><th>Mined</th><th class="num">Satoshis</th><th class="num">BLZ</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var s in model.Specials)
+                                {
+                                    <tr>
+                                        <td class="prov-pink">@s.Label</td>
+                                        <td class="num mono prov-pink">@s.FirstHeight.ToString("N0")</td>
+                                        <td class="mono prov-pink">@s.FirstTimeUtc.ToString("d MMM yyyy HH:mm")</td>
+                                        <td class="num mono prov-pink">@s.Satoshis.ToString("N0")</td>
+                                        <td class="num mono prov-pink">@Blz(s.Satoshis)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                        </div>
+                    </div>
+
+                    @* ── Send a vintage ── Coin control: pick a block's lineage and this
+                       plans the exact inputs/outputs that deliver it, verifies the plan
+                       against the FIFO stream, then (only on a second, explicit click)
+                       builds, signs and broadcasts it. *@
+                    <div class="prov-panel card">
+                        <div class="status-header"><span>Send A Vintage</span></div>
+                        <div class="card-body">
+                    <div class="prov-send">
+                        <div class="prov-send-row">
+                            <label>Vintage</label>
+                            <select @bind="_sendKey" @bind:after="ClearPlan">
+                                <option value="">— choose —</option>
+                                @foreach (var v in _sendable)
+                                {
+                                    @* Months are indented under their year — send a whole
+                                       year, one month of it, or a single-block special. *@
+                                    <option value="@v.Key">@(v.IsMonth ? "    · " : "")@v.Label — @v.Satoshis.ToString("N0") sats available</option>
+                                }
+                            </select>
+                            <button class="btn prov-guide-btn" type="button" @onclick="() => _showGuide = true">Guide</button>
+                        </div>
+                        <div class="prov-send-row">
+                            <label>To address</label>
+                            <input @bind="_sendTo" @bind:after="ClearPlan" placeholder="B…" />
+                        </div>
+                        <div class="prov-send-row">
+                            @* Colour-coded so the mode is obvious at a glance: the box means
+                               something different in each. *@
+                            <label class="@(_wholeBlock ? "lbl-block" : _wholeCoins ? "lbl-outputs" : "lbl-amount")">
+                                @(_wholeBlock ? "Block height" : _wholeCoins ? "How many outputs" : "Amount (sats)")
+                            </label>
+                            <input @bind="_sendAmount" @bind:after="ClearPlan" placeholder="@(_wholeBlock ? "413" : _wholeCoins ? "1" : "546")" />
+                            <label class="prov-fee-label">Fee (sats)</label>
+                            <input @bind="_sendFee" @bind:after="ClearPlan" placeholder="0" />
+                        </div>
+                        @* The collector's modes, boxed so they read as a distinct choice.
+                           Deliberately says OUTPUT, not "coin": in wallet jargon a coin is
+                           one unspent output of any size, but in plain use a coin is 1 BLZ
+                           — and that clash sent 0.02675 BLZ instead of a block reward once. *@
+                        <div class="prov-collector">
+                            <div class="prov-collector-head">🪙 Collector sends — nothing split, no change returned</div>
+                            <p class="prov-collector-intro">
+                                An <strong>output</strong> is one indivisible entry in the ledger — its value is
+                                whatever it holds, most often one block's whole reward. Sending it
+                                intact keeps that reward exactly as it was minted. To send a set
+                                amount instead (1 BLZ, say), leave these unticked and use the amount
+                                box — the wallet then splits an output and returns change.
+                            </p>
+                            <label class="prov-whole-label">
+                                <input type="checkbox" checked="@_wholeCoins" @onchange="ToggleWholeCoins" />
+                                <span><strong>Send whole outputs, intact</strong> — the amount box becomes a COUNT of outputs; choose their size below</span>
+                            </label>
+                            <label class="prov-whole-label">
+                                <input type="checkbox" checked="@_wholeBlock" @onchange="ToggleWholeBlock" />
+                                <span><strong>Send a whole block's reward</strong> — the amount box becomes a BLOCK HEIGHT; every output this wallet holds from that block goes together (early blocks often paid three)</span>
+                            </label>
+                            @if (_wholeCoins && _selectedVintage is { } sv)
+                            {
+                                @* WHICH output matters: a mining wallet holds thousands of
+                                   identical block rewards plus the odd small output, and
+                                   picking blind sends the smallest. *@
+                                <div class="prov-send-row prov-coin-pick">
+                                    <label>Output size</label>
+                                    <select @bind="_coinSize" @bind:after="ClearPlan">
+                                        <option value="0">smallest available</option>
+                                        @foreach (var size in _coinSizes)
+                                        {
+                                            <option value="@size.Satoshis">@Blz(size.Satoshis) BLZ — @size.Count.ToString("N0") available</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="prov-collector-note">
+                                    @_wholeAvailable.ToString("N0") whole output@(_wholeAvailable == 1 ? "" : "s") of @sv.Label
+                                    @if (_wholeSmallest > 0)
+                                    {
+                                        <text> · smallest @Blz(_wholeSmallest) BLZ</text>
+                                    }
+                                    · a modern block's reward is 51.62500000 BLZ in one output
+                                </div>
+                            }
+                            @if (_wholeBlock)
+                            {
+                                @* You can't type a height you don't know — this lists the
+                                   blocks the wallet actually holds outputs from, biggest
+                                   reward first, narrowed by the vintage above when one is
+                                   chosen. Picking one fills the height box. *@
+                                <div class="prov-send-row prov-coin-pick">
+                                    <label>Block</label>
+                                    <select @bind="_blockPick" @bind:after="OnBlockPicked">
+                                        <option value="0">— choose a block —</option>
+                                        @foreach (var b in _blocksHeld.Take(300))
+                                        {
+                                            <option value="@b.Height">@b.Height.ToString("N0") — @Blz(b.Satoshis) BLZ@(b.Outputs > 1 ? $" in {b.Outputs} outputs" : "")</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="prov-collector-note">
+                                    @if (_blocksHeld.Count == 0)
+                                    {
+                                        <text>No block is held whole here — trace first, or pick a different vintage.</text>
+                                    }
+                                    else
+                                    {
+                                        <text>
+                                            @_blocksHeld.Count.ToString("N0") block@(_blocksHeld.Count == 1 ? "" : "s") held whole
+                                            @(_selectedVintage is { } bv ? $"in {bv.Label}" : "across the wallet")@(_blocksHeld.Count > 300 ? " — richest 300 listed" : "").
+                                            You can also type a height directly.
+                                        </text>
+                                    }
+                                    Most early blocks paid their reward across THREE outputs (413 BLZ as
+                                    408.457 + 4.13 + 0.413), so this gathers them back together. Modern
+                                    blocks pay one output, where this and the option above do the same thing.
+                                </div>
+                            }
+                        </div>
+                        <div class="prov-send-row">
+                            <button class="btn" @onclick="PlanAsync" disabled="@(_sending || (!_wholeBlock && string.IsNullOrEmpty(_sendKey)))">Plan send</button>
+                            @if (_plan is not null)
+                            {
+                                <button class="btn btn-primary prov-broadcast" @onclick="BroadcastAsync" disabled="@_sending">
+                                    @(_sending ? "Broadcasting…" : "Broadcast this transaction")
+                                </button>
+                            }
+                        </div>
+
+                        @if (_planProblem is not null)
+                        {
+                            <p class="prov-error">@_planProblem</p>
+                        }
+                        @if (_sendResult is not null)
+                        {
+                            <p class="prov-sent">@_sendResult</p>
+                        }
+
+                        @if (_plan is not null)
+                        {
+                            <div class="prov-plan">
+                                <div class="prov-plan-verdict @(_verified == _plan.SendAmount ? "ok" : "bad")">
+                                    @if (_verified == _plan.SendAmount)
+                                    {
+                                        <span>✓ Verified: the recipient's output lands on @_verified.ToString("N0") satoshis of this exact vintage.</span>
+                                    }
+                                    else
+                                    {
+                                        <span>✗ Verification failed — the recipient's output would carry only @_verified.ToString("N0") of @_plan.SendAmount.ToString("N0") vintage satoshis. Do not broadcast.</span>
+                                    }
+                                </div>
+                                <table class="prov-table">
+                                    <thead><tr><th>Part</th><th>Detail</th><th class="num">Satoshis</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var i in _plan.Inputs)
+                                        {
+                                            <tr>
+                                                <td>Input</td>
+                                                <td class="mono prov-outpoint">@i.TxId[..12]…:@i.Vout</td>
+                                                <td class="num mono">@i.Satoshis.ToString("N0")</td>
+                                            </tr>
+                                        }
+                                        @foreach (var o in _plan.Outputs)
+                                        {
+                                            <tr>
+                                                <td>@(o.Role switch { OutputRole.Vintage => "→ Send", OutputRole.LeadingChange => "Leading change", _ => "Change" })</td>
+                                                <td class="mono prov-outpoint">@o.Address</td>
+                                                <td class="num mono">@o.Satoshis.ToString("N0")</td>
+                                            </tr>
+                                        }
+                                        <tr><td>Fee</td><td class="muted">taken from the tail</td><td class="num mono">@_plan.FeeSatoshis.ToString("N0")</td></tr>
+                                    </tbody>
+                                </table>
+                                @foreach (var w in _plan.Warnings)
+                                {
+                                    <p class="prov-warn">⚠ @w</p>
+                                }
+                                <p class="muted prov-order-note">
+                                    Output order is part of the plan — the transaction is built exactly as listed.
+                                </p>
+                            </div>
+                        }
+                    </div>
+                        </div>
+                    </div>
+                    @* Pure coins — a whole UTXO minted by one block: the collector's items,
+                       and the cleanest thing to send intact. *@
+                    @if (_fifo && (_pureYears.Count > 0 || _pureSpecials.Count > 0))
+                    {
+                        <div class="prov-panel card">
+                        <div class="status-header"><span>Pure Coins</span></div>
+                        <div class="card-body">
+                        <p class="muted">
+                            Coins whose WHOLE value descends from the vintage on that row — nothing
+                            else mixed in, so they can be sent intact. Counted exactly as the send
+                            picker counts them, so the totals here match it. A coin can be pure for
+                            its year while spanning two of its months, so a year can hold more than
+                            its months add up to.
+                        </p>
+                        <table class="prov-table">
+                            <colgroup>
+                                <col /><col /><col /><col /><col />
+                            </colgroup><thead>
+                                <tr><th>Vintage</th><th>Month</th><th class="num">Coins</th><th class="num">Satoshis</th><th class="num">BLZ</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var year in _pureYears)
+                                {
+                                    <tr class="prov-year-row">
+                                        <td class="mono prov-gold">@year.Label</td>
+                                        <td class="prov-gold">@year.Span</td>
+                                        <td class="num mono prov-gold">@year.Coins.ToString("N0")</td>
+                                        <td class="num mono prov-gold">@year.Satoshis.ToString("N0")</td>
+                                        <td class="num mono prov-gold">@Blz(year.Satoshis)</td>
+                                    </tr>
+                                    @foreach (var m in year.Months)
+                                    {
+                                        <tr class="prov-month-row">
+                                            <td></td>
+                                            <td class="prov-gold">@m.Label</td>
+                                            <td class="num mono prov-gold">@m.Coins.ToString("N0")</td>
+                                            <td class="num mono prov-gold">@m.Satoshis.ToString("N0")</td>
+                                            <td class="num mono prov-gold">@Blz(m.Satoshis)</td>
+                                        </tr>
+                                    }
+                                }
+                                @* Pure coins of a SPECIAL block have no month rollup — a
+                                   special is one block — so they list on their own. *@
+                                @foreach (var s in _pureSpecials)
+                                {
+                                    <tr class="prov-year-row">
+                                        <td class="prov-gold">@s.Label</td>
+                                        <td class="num mono prov-gold">@s.Span</td>
+                                        <td class="num mono prov-gold">@s.Coins.ToString("N0")</td>
+                                        <td class="num mono prov-gold">@s.Satoshis.ToString("N0")</td>
+                                        <td class="num mono prov-gold">@Blz(s.Satoshis)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    }
+
+    @* The guide — a small window in the wallet's own chrome, floating over a
+       dimmed page. Click the ✕ or anywhere outside it to close. Rendered at the
+       PAGE level, not inside the Send panel: every .card carries a
+       backdrop-filter (wallet.css), which makes the card the CONTAINING BLOCK
+       for position:fixed descendants — inside the panel this overlay was pinned
+       to the Send A Vintage card and clipped by its overflow:hidden. *@
+    @if (_showGuide)
+    {
+        <div class="prov-guide-overlay" @onclick="() => _showGuide = false">
+            <div class="prov-guide card" @onclick:stopPropagation="true">
+                <div class="status-header">
+                    <span>Send A Vintage — How It Works</span>
+                    <button class="prov-guide-close" type="button" title="Close" @onclick="() => _showGuide = false">✕</button>
+                </div>
+                <div class="card-body prov-guide-body">
+                    <h4>What a vintage is</h4>
+                    <p>
+                        Every satoshi this wallet holds traces back to the block that minted it.
+                        A vintage groups that lineage — a whole year, one month of it, or a special
+                        single block (the premine, block 413, a halving, a milestone). The dropdown
+                        lists only vintages your traced coins actually contain, with the satoshis
+                        available from each. Trace first: the list is built from the trace.
+                    </p>
+
+                    <h4>Planning a send</h4>
+                    <p>
+                        Pick a vintage, enter the recipient's address (B…) and an amount in
+                        satoshis, then press <strong>Plan send</strong>. Nothing is signed or
+                        broadcast yet — the plan is a preview of the exact inputs and outputs,
+                        arranged so the recipient's output lands precisely on the vintage's
+                        satoshis (when a mixed coin has to be cut, a leading change output pushes
+                        the send onto the right run). Every output must clear the
+                        @VintageCoinControl.DustThresholdSatoshis.ToString("N0")-satoshi dust
+                        floor, change included.
+                    </p>
+
+                    <h4>The verification line</h4>
+                    <p>
+                        Before broadcasting, the plan is re-checked by replaying the FIFO satoshi
+                        stream over it. A green ✓ means the recipient receives the full amount of
+                        the exact vintage; on any shortfall the wallet refuses to broadcast.
+                        Editing any field clears the plan, so a stale plan can never be sent —
+                        and <strong>Broadcast</strong> is the only irreversible click.
+                    </p>
+
+                    <h4>Collector sends — the gold box</h4>
+                    <p>
+                        These send coins intact: nothing split, no change returned, so the coin
+                        arrives satoshi-for-satoshi as it was minted. <strong>Whole outputs</strong>
+                        reads the amount box as a COUNT of outputs, with a size picker so you
+                        choose which. <strong>Whole block</strong> reads it as a BLOCK HEIGHT and
+                        gathers every output this wallet holds from that block — early blocks
+                        often paid their 413 BLZ reward across three outputs. A pure, untouched
+                        output is 100% one vintage under both accounting models — the cleanest
+                        gift to another collector.
+                    </p>
+
+                    <h4>Fees</h4>
+                    <p>
+                        This chain relays free transactions, so a fee of 0 is normal. Any fee is
+                        taken from the TAIL of the transaction; the wallet warns when a fee would
+                        shave the coin you're sending, and refuses a plan where the fee would eat
+                        into the vintage itself.
+                    </p>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// The header mark — the sidebar's coin-with-an-age-ring. Defined once and rendered
+    /// eighteen times (a real one and eight ghosts each side), so the shape can never
+    /// drift between copies.
+    /// </summary>
+    private static readonly RenderFragment Mark =
+        @<svg class="prov-header-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="8.5" />
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2" />
+        </svg>;
+
+    private AncestryTracer? _tracer;
+    private ProvenanceReport? _report;
+    private TraceProgress? _progress;
+    private string? _error;
+    private bool _busy;
+    private long _tipHeight;
+
+    /// <summary>Which accounting model the tables show. FIFO pedigree is the default —
+    /// it's the collector's truth; the proportional view is there to reconcile with the
+    /// website's claim board.</summary>
+    private bool _fifo = true;
+
+    /// <summary>Pure coins rolled up: one row per group, months nested under their year.</summary>
+    private sealed record PureGroup(string Label, string Span, int Coins, long Satoshis,
+        List<PureGroup> Months, long Height = 0);
+
+    private List<PureGroup> _pureYears = new();
+    private List<PureGroup> _pureSpecials = new();
+
+    // ── vintage coin control ──
+    /// <summary>One row per VINTAGE (a year covers thousands of blocks), not per block.</summary>
+    private IReadOnlyList<SendableVintage> _sendable = Array.Empty<SendableVintage>();
+    private string _sendKey = "";
+    private string _sendTo = "";
+    private string _sendAmount = "";
+    private string _sendFee = "0";
+    /// <summary>Collector modes: send coins entire, with no change output. Mutually
+    /// exclusive — one reads the amount box as a coin count, the other as a height.</summary>
+    private bool _wholeCoins;
+    private bool _wholeBlock;
+    private int _wholeAvailable;
+    private long _wholeSmallest;
+
+    /// <summary>Exact output size to send, or 0 for "smallest available".</summary>
+    private long _coinSize;
+    private IReadOnlyList<(long Satoshis, int Count)> _coinSizes = Array.Empty<(long, int)>();
+
+    /// <summary>Blocks this wallet holds whole, for the whole-block picker.</summary>
+    private long _blockPick;
+    private IReadOnlyList<(long Height, int Outputs, long Satoshis)> _blocksHeld = Array.Empty<(long, int, long)>();
+
+    /// <summary>Choosing a block fills the height box the planner reads.</summary>
+    private void OnBlockPicked()
+    {
+        if (_blockPick > 0) _sendAmount = _blockPick.ToString();
+        ClearPlan();
+    }
+    private SendableVintage? _selectedVintage =>
+        _sendable.FirstOrDefault(v => v.Key == _sendKey);
+
+    private VintageSendPlan? _plan;
+    private string? _planProblem;
+    private string? _sendResult;
+    private long _verified;
+    private bool _sending;
+
+    /// <summary>The Send-A-Vintage guide window (opened by the Guide button).</summary>
+    private bool _showGuide;
+
+    // ── elapsed clock ──
+    // A trace over a mining wallet is tens of thousands of RPC reads, so a running
+    // clock is the difference between "working" and "hung" to anyone watching.
+    private readonly System.Diagnostics.Stopwatch _watch = new();
+    private System.Threading.Timer? _ticker;
+    private TimeSpan _lastRun;
+
+    // ── banner loop ──
+    // The whole sequence runs about 6.5s (4.5s climb, 0.7s hold on the arrival
+    // figure, then the handover), so 14s leaves the title standing for roughly as
+    // long as the animation itself — present, not restless.
+    private const int BannerLoopSeconds = 14;
+    private System.Threading.Timer? _bannerLoop;
+    private bool _disposed;
+
+    private string Elapsed => Format(_watch.Elapsed);
+
+    private static string Format(TimeSpan t) =>
+        t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        await CheckDaemonAsync();
+        StateHasChanged();
+
+        // The banner counts up to the chain tip before settling on the title, so it
+        // needs the height first. One cheap call; if the daemon is unreachable the
+        // banner just shows the title.
+        long tip = 0;
+        try { tip = (await ChainInfo.GetBlockchainInfoAsync())?.Blocks ?? 0; }
+        catch { /* offline — countProvenanceBanner(0) skips the count */ }
+
+        try
+        {
+            // Pixelated-coins skin, then the block-height odometer. No header-coin
+            // calls: the banner is flanked by static SVG marks, not canvases.
+            await JS.InvokeVoidAsync("initProvenanceBackground");
+            await JS.InvokeVoidAsync("countProvenanceBanner", tip);
+        }
+        catch { /* WebView not ready — background just won't appear */ }
+
+        StartBannerLoop();
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Replays the header — height climbing to the tip, then the title — every
+    /// <see cref="BannerLoopSeconds"/>. Driven from here rather than looping inside the
+    /// JS so each pass RE-READS the tip: a page left open all evening keeps arriving at
+    /// the current height instead of the one it was opened with, which matters on a
+    /// 30-second chain. One `getblockchaininfo` per pass.
+    /// </summary>
+    private void StartBannerLoop()
+    {
+        _bannerLoop?.Dispose();
+        _bannerLoop = new System.Threading.Timer(async _ =>
+        {
+            if (_disposed) return;
+            try
+            {
+                long t = (await ChainInfo.GetBlockchainInfoAsync())?.Blocks ?? 0;
+                if (_disposed) return;
+                await InvokeAsync(() => JS.InvokeVoidAsync("countProvenanceBanner", t).AsTask());
+            }
+            catch { /* daemon or WebView gone — skip this pass, try again next */ }
+        }, null, TimeSpan.FromSeconds(BannerLoopSeconds), TimeSpan.FromSeconds(BannerLoopSeconds));
+    }
+
+    /// <summary>
+    /// Walks the wallet's unspent outputs back to the blocks that minted them. Never
+    /// runs on page load: on a big mining wallet this is thousands of RPC reads, so it
+    /// stays an explicit action with progress.
+    /// </summary>
+    private async Task TraceAsync()
+    {
+        _busy = true;
+        _error = null;
+        _progress = null;
+        _watch.Restart();
+        // Ticks the elapsed clock once a second while the trace runs.
+        _ticker = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000);
+        StateHasChanged();
+
+        try
+        {
+            _tipHeight = (await ChainInfo.GetBlockchainInfoAsync())?.Blocks ?? 0;
+
+            // A fresh tracer each run so a re-trace re-reads the chain rather than
+            // replaying a stale cache (new blocks, new coins).
+            _tracer = new AncestryTracer(AncestryRpc);
+            // Throttled: the tracer reports per OUTPUT, and re-rendering 40,000 times
+            // would cost more than the trace itself. The 1s ticker keeps the clock live
+            // between these.
+            var lastPaint = System.Diagnostics.Stopwatch.StartNew();
+            var progress = new Progress<TraceProgress>(p =>
+            {
+                _progress = p;
+                if (lastPaint.ElapsedMilliseconds < 250) return;
+                lastPaint.Restart();
+                InvokeAsync(StateHasChanged);
+            });
+            _report = await _tracer.TraceOutputsAsync(await AncestryRpc.ListUnspentAsync(), progress);
+
+            // Grouped BY VINTAGE — a mining wallet holds thousands of blocks of the same
+            // year, and listing every one of them would repeat "2026" endlessly.
+            _sendable = VintageCoinControl.SendableVintages(_report);
+
+            // Built from the SAME holdings as the picker, so the table and the dropdown
+            // can never quote different pure-coin totals.
+            BuildPureGroups();
+            ClearPlan();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Trace failed: {ex.Message}";
+        }
+        finally
+        {
+            _watch.Stop();
+            _lastRun = _watch.Elapsed;
+            if (_ticker is not null) { await _ticker.DisposeAsync(); _ticker = null; }
+            _busy = false;
+            _progress = null;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Rolls the pure coins up per VINTAGE, using the very same holdings the send picker
+    /// uses — a coin counts as pure for a vintage when its WHOLE value descends from
+    /// that vintage. (Measuring "descends from exactly one block" instead made this
+    /// table disagree with the dropdown for any coin built from two blocks of the same
+    /// year: 100% of the year, but not of one block.) Years carry their months; specials
+    /// stand alone, being single blocks.
+    /// </summary>
+    private void BuildPureGroups()
+    {
+        _pureYears = new();
+        _pureSpecials = new();
+        if (_report is null) return;
+
+        var vintages = VintageCoinControl.SendableVintages(_report).Where(v => !v.PureOnly).ToList();
+
+        (int Coins, long Sats) Pure(SendableVintage v)
+        {
+            var pure = VintageCoinControl.Holdings(_report, v.Heights).Where(h => h.IsPure).ToList();
+            return (pure.Count, pure.Sum(h => h.VintageSatoshis));
+        }
+
+        // "June" — the year already labels the row above.
+        string MonthName(SendableVintage m) =>
+            _report.Origins.TryGetValue(m.Heights.Min(), out var o) ? o.TimeUtc.ToString("MMMM") : m.Label;
+
+        foreach (var year in vintages.Where(v => v.Kind == VintageKind.Year && !v.IsMonth))
+        {
+            var (coins, sats) = Pure(year);
+            if (coins == 0) continue;
+
+            var months = new List<PureGroup>();
+            foreach (var month in vintages.Where(v => v.IsMonth && v.Key.StartsWith(year.Key + "-", StringComparison.Ordinal)))
+            {
+                var (mCoins, mSats) = Pure(month);
+                if (mCoins == 0) continue;
+                // "Jun 2026" → "June" (the year is already the row above).
+                months.Add(new PureGroup(MonthName(month), string.Empty, mCoins, mSats, new List<PureGroup>()));
+            }
+
+            var span = months.Count switch
+            {
+                0 => string.Empty,
+                1 => months[0].Label,
+                _ => $"{months[0].Label[..3]}–{months[^1].Label[..3]}"
+            };
+            _pureYears.Add(new PureGroup(year.Label, span, coins, sats, months));
+        }
+
+        foreach (var special in vintages.Where(v => v.Kind != VintageKind.Year))
+        {
+            var (coins, sats) = Pure(special);
+            if (coins == 0) continue;
+            _pureSpecials.Add(new PureGroup(special.Label, special.FirstHeight.ToString("N0"),
+                coins, sats, new List<PureGroup>(), special.FirstHeight));
+        }
+    }
+
+    private void ToggleWholeCoins(ChangeEventArgs e)
+    {
+        _wholeCoins = (bool?)e.Value ?? false;
+        if (_wholeCoins) _wholeBlock = false;   // the amount box can only mean one thing
+        ClearPlan();
+    }
+
+    private void ToggleWholeBlock(ChangeEventArgs e)
+    {
+        _wholeBlock = (bool?)e.Value ?? false;
+        if (_wholeBlock) _wholeCoins = false;
+        ClearPlan();
+    }
+
+    /// <summary>Any edit invalidates a plan — never let a stale one reach Broadcast.</summary>
+    private void ClearPlan()
+    {
+        _plan = null;
+        _planProblem = null;
+        _sendResult = null;
+        _verified = 0;
+
+        // Refresh what whole coins the chosen vintage actually offers.
+        _wholeAvailable = 0;
+        _wholeSmallest = 0;
+        _coinSizes = Array.Empty<(long, int)>();
+        if (_report is not null && _selectedVintage is { } v)
+        {
+            var coins = VintageCoinControl.WholeCoins(_report, v.Heights);
+            _wholeAvailable = coins.Count;
+            _wholeSmallest = coins.Count > 0 ? coins[0].Output.Satoshis : 0;
+            _coinSizes = VintageCoinControl.WholeCoinSizes(_report, v.Heights);
+            // Drop a size that no longer exists for the newly chosen vintage.
+            if (_coinSize > 0 && !_coinSizes.Any(s => s.Satoshis == _coinSize)) _coinSize = 0;
+        }
+
+        // Blocks for the whole-block picker: narrowed to the chosen vintage, or the
+        // whole wallet when none is chosen (a whole-block send needs no vintage).
+        if (_report is not null)
+        {
+            _blocksHeld = VintageCoinControl.BlocksHeld(_report, _selectedVintage?.Heights);
+            if (_blockPick > 0 && !_blocksHeld.Any(b => b.Height == _blockPick)) _blockPick = 0;
+        }
+    }
+
+    /// <summary>
+    /// Builds the coin-control plan and verifies it against the FIFO stream. Nothing is
+    /// signed or broadcast here — this is the preview.
+    /// </summary>
+    private async Task PlanAsync()
+    {
+        ClearPlan();
+        if (_report is null) return;
+
+        if (!long.TryParse(_sendAmount, out var amount))
+        {
+            _planProblem = _wholeCoins ? "Enter how many whole coins to send." : "Enter the amount in satoshis.";
+            return;
+        }
+        if (!long.TryParse(_sendFee, out var fee)) fee = 0;
+
+        var changeAddress = await SendRpc.GetChangeAddressAsync();
+        if (string.IsNullOrWhiteSpace(changeAddress))
+        {
+            _planProblem = "Couldn't get a change address from the wallet.";
+            return;
+        }
+
+        // A whole-block send names its own block, so it needs no vintage chosen.
+        if (_wholeBlock)
+        {
+            var blockResult = VintageCoinControl.PlanWholeBlock(_report, amount, _sendTo.Trim(), fee);
+            if (blockResult.Plan is null) { _planProblem = blockResult.Problem; return; }
+            _plan = blockResult.Plan;
+            _verified = VintageCoinControl.VerifyVintageDelivered(_plan, _report);
+            return;
+        }
+
+        var vintage = _sendable.FirstOrDefault(v => v.Key == _sendKey);
+        if (vintage is null)
+        {
+            _planProblem = "Choose a vintage to send.";
+            return;
+        }
+
+        // Whole-coin mode reads the amount box as a COUNT of coins and needs no change
+        // address — nothing comes back.
+        var result = _wholeCoins
+            ? VintageCoinControl.PlanWholeCoins(
+                _report, vintage.Heights, vintage.FirstHeight, (int)amount, _sendTo.Trim(), fee,
+                _coinSize > 0 ? _coinSize : null)
+            : VintageCoinControl.PlanSend(
+                _report, vintage.Heights, vintage.FirstHeight, amount, _sendTo.Trim(), changeAddress, fee,
+                vintage.PureOnly);
+        if (result.Plan is null)
+        {
+            _planProblem = result.Problem;
+            return;
+        }
+
+        _plan = result.Plan;
+        _verified = VintageCoinControl.VerifyVintageDelivered(_plan, _report);
+    }
+
+    /// <summary>Builds, signs and broadcasts the planned transaction — output order intact.</summary>
+    private async Task BroadcastAsync()
+    {
+        if (_plan is null || _report is null) return;
+
+        // Refuse anything the FIFO re-check doesn't fully back, and anything that
+        // doesn't balance — a malformed plan must never reach the network.
+        if (_verified != _plan.SendAmount || !_plan.Balances)
+        {
+            _planProblem = "The plan didn't verify — nothing was sent.";
+            return;
+        }
+
+        _sending = true;
+        _planProblem = null;
+        StateHasChanged();
+        try
+        {
+            var raw = await SendRpc.CreateRawTransactionAsync(
+                _plan.Inputs.Select(i => (i.TxId, i.Vout)).ToList(),
+                _plan.Outputs.Select(o => (o.Address, o.Satoshis)).ToList());
+            if (raw is null) { _planProblem = "The daemon couldn't build the transaction."; return; }
+
+            var signed = await SendRpc.SignRawTransactionAsync(raw);
+            if (signed is null) { _planProblem = "Signing failed or was incomplete (is the wallet unlocked?)."; return; }
+
+            var txid = await SendRpc.SendRawTransactionAsync(signed);
+            if (txid is null) { _planProblem = "The network rejected the transaction."; return; }
+
+            _sendResult = $"Sent — txid {txid}. Re-trace to see the new lineage.";
+            _plan = null;
+        }
+        catch (Exception ex)
+        {
+            _planProblem = $"Send failed: {ex.Message}";
+        }
+        finally
+        {
+            _sending = false;
+            StateHasChanged();
+        }
+    }
+
+    // No data loads in the lifecycle (the trace is user-initiated), so the base's
+    // no-op OnDaemonReconnectedAsync is exactly right after a retry.
+
+    /// <summary>Stops the elapsed-clock ticker if the page is left mid-trace.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;   // stops an in-flight banner pass calling into a dead circuit
+        if (_ticker is not null) await _ticker.DisposeAsync();
+        if (_bannerLoop is not null) await _bannerLoop.DisposeAsync();
+    }
+
+    private static string Sats(long sats) => $"{sats:N0} sats";
+    private static string Blz(long sats) => (sats / 100_000_000m).ToString("0.########");
+}
