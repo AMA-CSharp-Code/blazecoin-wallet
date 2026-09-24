@@ -56,6 +56,20 @@
         <TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
     </PropertyGroup>
 
+    <!-- Mac Catalyst universal build (2026-09-24): the Intel slice must interpret everything.
+         With the interpreter enabled, the .NET macOS SDK starts x86_64 in MONO_AOT_MODE_INTERP_ONLY,
+         which rejects every full-AOT image ("unusable: compiled with --aot=full") and interprets all
+         code. The default managed-static registrar, however, hard-links its Objective-C methods to
+         the AOT entry points of any assembly that is not on the interpreter list. On Intel those
+         entry points never initialise, so the first native-to-managed call (-[AppDelegate init])
+         jumps to address 0 and 2.0.8 died with SIGSEGV at launch. arm64 runs MONO_AOT_MODE_INTERP,
+         keeps its AOT images, and is unaffected. Interpreting everything on maccatalyst-x64 makes
+         the registrar resolve callbacks at runtime for that slice only; the build Mac's own
+         MtouchInterpreter list (if any) must stay ABOVE this override so this one wins for x64. -->
+    <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'maccatalyst-x64'">
+        <MtouchInterpreter>all</MtouchInterpreter>
+    </PropertyGroup>
+
     <ItemGroup>
         <!-- App Icon -->
         <MauiIcon Include="Resources\AppIcon\blazecoin_appicon.png" />
