@@ -1,0 +1,281 @@
+@inject IBlazecoindRpcService RpcService
+@inject IWalletContext WalletContext
+@inject BlazecoinWallet.Maui.Services.IDaemonProcessManager DaemonMgr
+
+@if (_state == InitState.Ready)
+{
+    @ChildContent
+}
+else
+{
+    <div class="wallet-initializer">
+        <div class="wallet-initializer-card">
+            @* The shield image is the card backdrop; all the writing is
+               overlaid on top of it. *@
+            <img class="splash-shield" src="splash-shield.png" alt="Blazecoin" />
+
+            <div class="splash-content">
+                <h1>Blazecoin Wallet V2.0</h1>
+
+                @if (_state != InitState.Error && _state != InitState.NoWalletOnDisk)
+                {
+                    <div class="status-loading">
+                        <div class="spinner"></div>
+                        <p class="status-message @(_state == InitState.WaitingForIndex ? "blink" : "")">@_statusMessage</p>
+                    </div>
+                }
+
+                @if (_state == InitState.Error)
+                {
+                    <div class="status-error">
+                        <p class="status-message">@_statusMessage</p>
+                        <p class="error-detail">@_errorDetail</p>
+                        <button class="retry-btn" @onclick="RetryAsync">Try again</button>
+                    </div>
+                }
+                else if (_state == InitState.NoWalletOnDisk)
+                {
+                    <div class="status-empty">
+                        <p class="status-message">No wallet found</p>
+                        <p class="hint">This is a fresh install. Create the wallet this app will use:</p>
+                        <button class="retry-btn" @onclick="CreateWalletAsync" disabled="@_creating">@(_creating ? "Creating…" : "Create wallet \"Primary\"")</button>
+                        @if (!string.IsNullOrEmpty(_errorDetail))
+                        {
+                            <p class="error-detail">@_errorDetail</p>
+                        }
+                        <p class="hint">Or, from a terminal:</p>
+                        <pre>@CreateWalletCommand</pre>
+                        <button class="retry-btn" @onclick="RetryAsync">Check again</button>
+                    </div>
+                }
+                else
+                {
+                    @if (!string.IsNullOrEmpty(_subMessage))
+                    {
+                        <p class="hint">@_subMessage</p>
+                    }
+                    @if (!string.IsNullOrEmpty(_elapsed))
+                    {
+                        <p class="elapsed">@_elapsed</p>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private enum InitState { Connecting, WaitingForIndex, LoadingWallet, NoWalletOnDisk, Ready, Error }
+
+    private InitState _state = InitState.Connecting;
+    private string _statusMessage = "Connecting to Blazecoin daemon…";
+    private string? _subMessage;
+    private string? _elapsed;
+    private string? _errorDetail;
+
+    // Loading the block index on a ~4M-block chain (30s spacing) is a
+    // one-time, CPU-bound ~15-20 min startup. The wallet must sit on a
+    // "loading" splash for that whole window, not give up after a minute.
+    private static readonly TimeSpan StartupWaitCeiling = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan PollDelay = TimeSpan.FromSeconds(2);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Launch the local daemon if one isn't already listening (no-op if it was
+        // started externally — e.g. kept up for mining — or no blazecoind.exe is
+        // bundled). Runs before the readiness loop so warmup overlaps app startup.
+        try { await DaemonMgr.EnsureRunningAsync(); } catch { /* fall through to the wait below */ }
+        await InitializeAsync();
+    }
+
+    private async Task InitializeAsync()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sawWarmup = false;
+
+        while (true)
+        {
+            _errorDetail = null;
+            try
+            {
+                if (!sawWarmup)
+                {
+                    _state = InitState.Connecting;
+                    _statusMessage = "Connecting to Blazecoin daemon…";
+                    _subMessage = null;
+                    _elapsed = null;
+                    StateHasChanged();
+                }
+
+                // Probe: getnetworkinfo needs no wallet and is the cheapest
+                // "is the daemon past warmup?" check.
+                await RpcService.GetNetworkInfoAsync();
+
+                _state = InitState.LoadingWallet;
+                _statusMessage = "Loading wallet…";
+                _subMessage = null;
+                _elapsed = null;
+                StateHasChanged();
+
+                var loaded = await RpcService.ListWalletsAsync();
+                if (loaded.Count > 0)
+                {
+                    // Pick the wallet that wallet RPCs will target. Once more
+                    // than one wallet is loaded Core needs this to be explicit.
+                    WalletContext.SetActive(ChooseActive(loaded));
+                    _state = InitState.Ready;
+                    StateHasChanged();
+                    return;
+                }
+
+                var onDisk = await RpcService.ListWalletDirAsync();
+                if (onDisk.Count == 0)
+                {
+                    _state = InitState.NoWalletOnDisk;
+                    StateHasChanged();
+                    return;
+                }
+
+                // Prefer "Primary" if it exists, otherwise take the first on disk.
+                var target = onDisk.Contains("Primary") ? "Primary" : onDisk[0];
+                _statusMessage = $"Loading wallet \"{target}\"…";
+                StateHasChanged();
+
+                await RpcService.LoadWalletAsync(target);
+
+                WalletContext.SetActive(target);
+                _state = InitState.Ready;
+                StateHasChanged();
+                return;
+            }
+            catch (RpcException ex) when (ex.Code == -4)
+            {
+                // "Wallet already loaded" — race with another caller. Treat as success.
+                _state = InitState.Ready;
+                StateHasChanged();
+                return;
+            }
+            catch (Exception ex) when (IsStillStarting(ex) && sw.Elapsed < StartupWaitCeiling)
+            {
+                // Daemon is up but not ready yet: RPC_IN_WARMUP (-28, loading
+                // the block index), an empty HTTP 500 from the earliest
+                // startup window, a connection refused before the socket is
+                // listening, or a slow first response. Keep the splash up and
+                // wait — this is the expected ~15-20 min first-launch path.
+                sawWarmup = true;
+                _state = InitState.WaitingForIndex;
+                _statusMessage = "Loading block index…";
+                _subMessage = "The daemon is starting. First launch on the full chain can take 15–20 minutes.";
+                _elapsed = $"Elapsed: {Elapsed(sw)}";
+                StateHasChanged();
+                await Task.Delay(PollDelay);
+            }
+            catch (Exception ex) when (IsStillStarting(ex))
+            {
+                // Past the ceiling and still warming up. Tell the truth: the
+                // daemon is reachable, just unusually slow (reindex / slow disk).
+                _state = InitState.Error;
+                _statusMessage = "Daemon still loading after a long wait";
+                _errorDetail = $"blazecoind has been starting for {Elapsed(sw)} and still isn't ready. "
+                    + "It may be reindexing or on slow storage. Leave it running and click "
+                    + "\"Try again\", or check debug.log.";
+                StateHasChanged();
+                return;
+            }
+            catch (RpcException ex)
+            {
+                _state = InitState.Error;
+                _statusMessage = "The daemon rejected a startup request";
+                _errorDetail = $"RPC error {ex.Code}: {ex.Message}";
+                StateHasChanged();
+                return;
+            }
+            catch (Exception ex)
+            {
+                _state = InitState.Error;
+                _statusMessage = "Something went wrong starting up";
+                _errorDetail = ex.Message;
+                StateHasChanged();
+                return;
+            }
+        }
+    }
+
+    // "Daemon up but not ready yet" conditions — all retryable during the
+    // startup window. -28 is RPC_IN_WARMUP; HttpRequestException covers both
+    // a refused connection (socket not listening yet) and the empty HTTP 500
+    // the daemon emits before its RPC dispatcher registers; TimeoutException
+    // covers a slow first response under load.
+    private static bool IsStillStarting(Exception ex) => ex switch
+    {
+        RpcException rpc => rpc.Code == -28,
+        HttpRequestException => true,
+        TimeoutException => true,
+        _ => false
+    };
+
+    private static string Elapsed(System.Diagnostics.Stopwatch sw)
+        => $"{(int)sw.Elapsed.TotalMinutes}m {sw.Elapsed.Seconds:00}s";
+
+    // Keep the persisted active wallet if it's still loaded; otherwise prefer
+    // "Primary", falling back to whatever loaded first.
+    private string ChooseActive(List<string> loaded)
+    {
+        var current = WalletContext.Active;
+        if (!string.IsNullOrEmpty(current) && loaded.Contains(current)) return current;
+        return loaded.Contains("Primary") ? "Primary" : loaded[0];
+    }
+
+    // The command shown on the "No wallet found" card. On macOS the node and its cli
+    // ship INSIDE the .app bundle (Contents/MacOS, beside the wallet executable), so a
+    // bare "blazecoin-cli" is not on PATH and the instruction cannot be followed as
+    // written (2026-09-22, first Mac run). AppContext.BaseDirectory is Contents/MonoBundle
+    // under Mac Catalyst — the same layout DaemonProcessManager resolves the node from.
+    private static string CreateWalletCommand
+    {
+        get
+        {
+            const string args = "-named createwallet wallet_name=\"Primary\"";
+            if (OperatingSystem.IsMacCatalyst() || OperatingSystem.IsMacOS())
+            {
+                var cli = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "MacOS", "blazecoin-cli"));
+                if (File.Exists(cli)) return $"\"{cli}\" {args}";
+            }
+            return $"blazecoin-cli {args}";
+        }
+    }
+
+    private bool _creating;
+
+    // One click instead of a Terminal command on first launch (both platforms; on macOS the
+    // cli lives inside the bundle and users were typing paths, 2026-09-24). createwallet
+    // loads the new wallet, so the normal startup probe then finds it and proceeds.
+    private async Task CreateWalletAsync()
+    {
+        if (_creating) return;
+        _creating = true; _errorDetail = null; StateHasChanged();
+        try
+        {
+            await RpcService.CreateWalletAsync("Primary");
+        }
+        catch (RpcException ex) when (ex.Code == -4 && (ex.Message?.Contains("already", StringComparison.OrdinalIgnoreCase) ?? false))
+        {
+            // It exists after all (unloaded, or created moments ago) — the probe below loads it.
+        }
+        catch (Exception ex)
+        {
+            _errorDetail = $"Couldn't create the wallet: {ex.Message}";
+            _creating = false; StateHasChanged();
+            return;
+        }
+        _creating = false;
+        await InitializeAsync();
+    }
+
+    private async Task RetryAsync()
+    {
+        await InitializeAsync();
+    }
+}

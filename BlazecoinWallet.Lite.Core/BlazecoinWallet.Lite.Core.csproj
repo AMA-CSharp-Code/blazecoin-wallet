@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Blazecoin Lite Core: the "wallet brain" the lite (no-local-node) heads need and the
+       desktop full-node wallet never did — key management (BIP39 mnemonic + BIP32 HD,
+       legacy-P2PKH prefix 26 / WIF 154), client-side transaction building + signing, and
+       the Indexer-backed IWalletDataService implementation. Consumed by the Android head
+       (BlazecoinWallet.App.Droid) and, later, the iOS/web heads. Platform-free on purpose:
+       anything touching Android Keystore/Keychain lives in the app heads, not here. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazecoinWallet.Lite</RootNamespace>
+  </PropertyGroup>
+
+  <!-- NuGet package (decided 2026-09-26, ROADMAP §A): consumed by the Phase 4 repos (blazecoin-pay,
+       blazecoin-iot tooling, blazecoin-governance) from the org's private GitHub Packages feed.
+       PackageId = assembly = namespace root — deliberately NOT renamed. Version is supplied by
+       installer/Publish-LiteCorePackages.ps1 from the wallet's ApplicationDisplayVersion, so the
+       package version always equals the wallet release it shipped with. The heads keep their
+       ProjectReference; only outside repos consume the package. -->
+  <PropertyGroup>
+    <PackageId>BlazecoinWallet.Lite.Core</PackageId>
+    <Authors>AMA-CSharp-Code</Authors>
+    <Company>Blazecoin</Company>
+    <Description>Blazecoin lite-wallet core: address + xpub derivation (legacy B… and post-quantum BQ…), client-side transaction building/signing, trustless UTXO + merkle-proof verification, header-chain sync, and the gateway data client. Platform-free; consumed by the wallet heads and the Phase 4 services.</Description>
+    <RepositoryUrl>https://github.com/AMA-CSharp-Code/BlazecoinWallet.Maui</RepositoryUrl>
+    <PackageTags>blazecoin;wallet;lite;cryptocurrency;post-quantum</PackageTags>
+    <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="PACKAGE.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlazecoinWallet.Core\BlazecoinWallet.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NBitcoin" Version="10.0.7" />
+    <!-- ML-DSA-44 (FIPS 204) for the post-quantum output type (PQ_SIGNATURES.md §3/§6):
+         seed-deterministic keygen, deterministic signing, FIPS 204 context strings. Same
+         version BlazecoinWallet.Core already ships. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Lets the test suite drive internals deterministically (e.g. the payment watcher's
+         poll cycle) without exposing them to consumers. -->
+    <InternalsVisibleTo Include="BlazecoinWallet.Lite.Core.Tests" />
+    <InternalsVisibleTo Include="BlazecoinWallet.Lite.UI.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,576 @@
+@page "/quantum"
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.Provenance
+@using BlazecoinWallet.Core.Services.Quantum
+@implements IAsyncDisposable
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject IExposureRpc ExposureRpc
+@inject QuantumSweepSession Session
+@inject IJSRuntime JS
+
+<PageTitle>Quantum Exposure - Blazecoin Wallet V2.0</PageTitle>
+
+@* Atomic skin — black ground, scrolling pixel-atom tiles, drawn atoms streaming over them — painted into this
+   host by initQuantumBackground (global .skin-quantum-tiles CSS in wallet.css). *@
+<div id="quantumTileBg"></div>
+
+<div class="wallet-page">
+    @* Dashboard title banner, flanked by this page's own mark — a key — each with three
+       tunnelling ghosts. The title decrypts (decryptQuantumBanner). *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title">
+                    <span class="qx-markwrap">
+                        @Mark
+                        <span class="mark-ghost g-a">@Mark</span>
+                        <span class="mark-ghost g-b">@Mark</span>
+                        <span class="mark-ghost g-c">@Mark</span>
+                    </span>
+                    <span id="quantumBannerText" class="banner-text" title="Click to replay">Quantum Exposure</span>
+                    <span class="qx-markwrap">
+                        @Mark
+                        <span class="mark-ghost g-a">@Mark</span>
+                        <span class="mark-ghost g-b">@Mark</span>
+                        <span class="mark-ghost g-c">@Mark</span>
+                    </span>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+        <div class="qx-content card">
+            <div class="status-header">
+                <span>What this page checks</span>
+                <span class="qx-tag">reads this wallet's own transactions only</span>
+            </div>
+            <div class="card-body">
+                <div class="qx-steps">
+                    <div class="qx-step">
+                        <svg class="qx-step-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>
+                        <div class="qx-step-body">
+                            <p class="qx-step-title">1. An address hides its key</p>
+                            <p class="qx-step-text">A Blazecoin address is a hash of a public key. A hash gives a quantum computer nothing to work on.</p>
+                        </div>
+                    </div>
+                    <div class="qx-step">
+                        <svg class="qx-step-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6z" /><circle cx="12" cy="12" r="2.5" /></svg>
+                        <div class="qx-step-body">
+                            <p class="qx-step-title">2. Spending reveals it</p>
+                            <p class="qx-step-text">The first time an address spends, its public key goes into the signature on-chain, for ever. From then on the address is exposed.</p>
+                        </div>
+                    </div>
+                    <div class="qx-step">
+                        <svg class="qx-step-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13" /><path d="M13 7l5 5-5 5" /><rect x="19" y="8" width="2" height="8" /></svg>
+                        <div class="qx-step-body">
+                            <p class="qx-step-title">3. Move to post-quantum</p>
+                            <p class="qx-step-text">Since block 4,250,000 a BQ… address is secured by ML-DSA-44, which a quantum computer cannot break. Move coins there, exposed or not. A wallet made before 2.1.0 has no BQ… keys: create a new wallet and send to it.</p>
+                        </div>
+                    </div>
+                </div>
+                <p class="qx-note">
+                    Not visible here: a key proved to someone off-chain. A website address verification uses
+                    <span class="mono">signmessage</span>, whose signature reveals the key to whoever holds it.
+                </p>
+
+                <div class="qx-actions">
+                    <button class="btn btn-primary" @onclick="ScanAsync" disabled="@_scanning">
+                        @(_scanning ? "Scanning…" : (_report is null ? "Scan this wallet" : "Rescan"))
+                    </button>
+                    @if (_scanning)
+                    {
+                        <span class="qx-progress">@_progressText · @ElapsedText</span>
+                        <button class="btn" @onclick="CancelScan">Cancel</button>
+                    }
+                    else if (_report is null)
+                    {
+                        <span class="qx-hint">Reads every input this wallet ever signed. A few seconds for most wallets; a mining wallet takes longer.</span>
+                    }
+                </div>
+                @if (_error is not null) { <p class="qx-error">@_error</p> }
+            </div>
+        </div>
+
+        @if (_report is not null)
+        {
+            var total = _report.TotalSatoshis;
+            var exposedPct = total > 0 ? 100.0 * _report.ExposedSatoshis / total : 0;
+            <div class="qx-content card">
+                <div class="status-header">
+                    <span>Result</span>
+                    <span class="qx-tag">scanned @_report.ScannedAtUtc.ToLocalTime().ToString("HH:mm:ss") · @_report.TransactionsScanned.ToString("N0") sends read · @_report.ExposedKeyCount.ToString("N0") keys seen on-chain</span>
+                </div>
+                <div class="card-body">
+                    <div class="qx-summary">
+                        <span><strong>@Blz(total)</strong> BLZ held</span>
+                        <span class="exposed"><strong>@Blz(_report.ExposedSatoshis)</strong> BLZ exposed on @_report.ExposedAddressCount.ToString("N0") @Plural(_report.ExposedAddressCount, "address", "addresses")</span>
+                        <span><strong>@Blz(_report.UnexposedSatoshis)</strong> BLZ unexposed on @_report.UnexposedAddressCount.ToString("N0") @Plural(_report.UnexposedAddressCount, "address", "addresses")</span>
+                        @if (_report.PostQuantumAddressCount > 0)
+                        {
+                            <span><strong>@Blz(_report.PostQuantumSatoshis)</strong> BLZ post-quantum on @_report.PostQuantumAddressCount.ToString("N0") @Plural(_report.PostQuantumAddressCount, "address", "addresses")</span>
+                        }
+                    </div>
+                    @if (total > 0)
+                    {
+                        <div class="qx-bar">
+                            <div class="qx-bar-exposed" style="width: @exposedPct.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                            <div class="qx-bar-safe" style="width: @((100 - exposedPct).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                        </div>
+                        <div class="qx-bar-legend">
+                            <span><span class="qx-swatch qx-swatch-exposed"></span>exposed @exposedPct.ToString("0.#")%</span>
+                            <span><span class="qx-swatch qx-swatch-safe"></span>unexposed @((100 - exposedPct).ToString("0.#"))%</span>
+                        </div>
+                    }
+
+                    @if (_report.TotalSatoshis - _report.PostQuantumSatoshis > 0)
+                    {
+                        <div class="qx-actions qx-actions-tight">
+                            <button class="btn btn-primary" @onclick="SelectAllLegacyAsync" disabled="@Session.IsSending">Move everything to post-quantum</button>
+                            <span class="qx-hint">@Blz(_report.TotalSatoshis - _report.PostQuantumSatoshis) BLZ on legacy addresses → one BQ… address in this wallet</span>
+                        </div>
+                    }
+                    else if (_report.PostQuantumAddressCount > 0)
+                    {
+                        <p class="qx-verdict ok">Every coin in this wallet is on a post-quantum address.</p>
+                    }
+
+                    @if (_report.Addresses.Count == 0)
+                    {
+                        <p class="muted">This wallet holds no spendable coins.</p>
+                    }
+                    else
+                    {
+                        var ordered = _report.InActionOrder();   // exposed, then legacy, then post-quantum
+                        var hidden = _showAll ? new List<AddressExposure>() : ordered.Where(a => a.Status != ExposureStatus.Exposed).Skip(CollapsedUnexposedRows).ToList();
+                        var shown = ordered.Except(hidden).ToList();
+                        <table class="qx-table">
+                            <colgroup><col class="c-status" /><col class="c-addr" /><col class="c-label" /><col class="c-outs" /><col class="c-blz" /><col class="c-act" /></colgroup>
+                            <thead>
+                                <tr><th>Status</th><th>Address</th><th>Label</th><th>Outputs</th><th>BLZ</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var a in shown)
+                                {
+                                    var exposed = a.Status == ExposureStatus.Exposed;
+                                    <tr class="@(exposed ? "exposed" : null)">
+                                        <td class="center">
+                                            <span class="qx-badges">
+                                                @if (exposed)
+                                                {
+                                                    <span class="qx-badge qx-badge-exposed" title="@("Key revealed by " + a.ExposingTxId)">Exposed</span>
+                                                }
+                                                else if (a.Status == ExposureStatus.PostQuantum)
+                                                {
+                                                    <span class="qx-badge qx-badge-safe" title="A post-quantum (ML-DSA-44) address: spending reveals nothing a quantum computer can use">Post-quantum</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="qx-badge qx-badge-legacy" title="An ECDSA address whose key is still only a hash on-chain. Safe until it spends; not post-quantum.">Legacy · unexposed</span>
+                                                }
+                                                @if (a.IsReused) { <span class="qx-badge qx-badge-reused" title="This address received more than once">Reused</span> }
+                                            </span>
+                                        </td>
+                                        <td class="addr center">@a.Address</td>
+                                        <td class="center">@LabelOf(a.Address)</td>
+                                        <td class="center qx-figure">@a.OutputCount.ToString("N0")</td>
+                                        <td class="center qx-figure"><span class="qx-fig qx-fig-blz">@Blz(a.Satoshis)</span></td>
+                                        <td class="center">
+                                            @if (a.Status != ExposureStatus.PostQuantum)
+                                            {
+                                                <button class="btn @(exposed ? "btn-primary" : "") qx-btn-small" @onclick="() => SelectForSweepAsync(a)" disabled="@Session.IsSending">Move to BQ</button>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                                @if (hidden.Count > 0)
+                                {
+                                    <tr class="qx-more">
+                                        <td colspan="6">
+                                            @{ var hiddenLegacy = hidden.Where(h => h.Status == ExposureStatus.Unexposed).ToList(); var hiddenPq = hidden.Where(h => h.Status == ExposureStatus.PostQuantum).ToList(); }
+                                            @hidden.Count.ToString("N0") more @Plural(hidden.Count, "address", "addresses"):
+                                            @if (hiddenLegacy.Count > 0) { <span class="qx-more-legacy">@hiddenLegacy.Count.ToString("N0") legacy (@Blz(hiddenLegacy.Sum(h => h.Satoshis)) BLZ)</span> }
+                                            @if (hiddenLegacy.Count > 0 && hiddenPq.Count > 0) { <span>, </span> }
+                                            @if (hiddenPq.Count > 0) { <span>@hiddenPq.Count.ToString("N0") post-quantum (@Blz(hiddenPq.Sum(h => h.Satoshis)) BLZ)</span> }
+                                            ·
+                                            <a href="" @onclick="() => _showAll = true" @onclick:preventDefault>show all</a>
+                                        </td>
+                                    </tr>
+                                }
+                                else if (_showAll && ordered.Count(a => a.Status != ExposureStatus.Exposed) > CollapsedUnexposedRows)
+                                {
+                                    <tr class="qx-more">
+                                        <td colspan="6"><a href="" @onclick="() => _showAll = false" @onclick:preventDefault>show fewer</a></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (Session.Selection is { } sel)
+        {
+            var kind = Session.DestinationKind;
+            var plan = Session.Plan;
+            <div class="qx-content card" id="qxSweepPanel">
+                <div class="status-header">
+                    <span>Move @sel.Title to post-quantum</span>
+                    <span class="qx-tag">@sel.OutputCount.ToString("N0") @Plural(sel.OutputCount, "output", "outputs") · @Blz(sel.Satoshis) BLZ</span>
+                </div>
+                <div class="card-body">
+                    <p class="qx-step-text qx-intro">
+                        Every confirmed output goes to one BQ… address in this wallet, in batches of up to
+                        @QuantumSweepPlanner.DefaultMaxInputsPerTx inputs. From then on the coins can only be spent with an
+                        ML-DSA-44 signature. Spending the old addresses reveals their keys once, while the move confirms.
+                    </p>
+
+                    @if (Session.DestinationNotice is { } notice && Session.CreatedWallet is null)
+                    {
+                        <p class="qx-warn">⚠ @notice</p>
+                        @if (Session.CanCreatePostQuantumWallet)
+                        {
+                            <div class="qx-create">
+                                <p class="qx-step-title">Create a post-quantum wallet</p>
+                                <p class="qx-hint">
+                                    A new wallet on this node with BQ… keys from birth, encrypted with a passphrase only you know
+                                    unless you choose otherwise below. It is backed up to the file below, then unloaded; its first
+                                    BQ… address becomes the destination. Nothing is sent until you press Broadcast.
+                                </p>
+                                <div class="qx-field">
+                                    <label for="qxNewName">Wallet name</label>
+                                    <input id="qxNewName" class="qx-input-name" @bind="_newWalletName" @bind:event="oninput" @bind:after="RefreshDefaultBackupPath" disabled="@Session.IsCreatingWallet" />
+                                </div>
+                                @if (!_unencrypted)
+                                {
+                                    <div class="qx-field">
+                                        <label for="qxNewPass">Passphrase</label>
+                                        <input id="qxNewPass" type="password" autocomplete="new-password" class="qx-input-name" @bind="_newPass" @bind:event="oninput" disabled="@Session.IsCreatingWallet" />
+                                    </div>
+                                    <div class="qx-field">
+                                        <label for="qxNewPass2">Confirm passphrase</label>
+                                        <input id="qxNewPass2" type="password" autocomplete="new-password" class="qx-input-name" @bind="_newPass2" @bind:event="oninput" disabled="@Session.IsCreatingWallet" />
+                                    </div>
+                                    <p class="qx-hint">At least @PqWalletRequest.MinPassphraseLength characters, plain keyboard characters only, no double quote. Write it on paper before you press Create.</p>
+                                }
+                                <label class="qx-ack">
+                                    <input type="checkbox" @bind="_unencrypted" @bind:after="ClearPassphrases" disabled="@Session.IsCreatingWallet" />
+                                    Leave this wallet unencrypted — anyone with the wallet file or this computer can spend it.
+                                </label>
+                                @if (_unencrypted)
+                                {
+                                    <p class="qx-warn">⚠ Only for a wallet that must sign on its own (like a payout hot wallet). Keep the backup file somewhere nobody else can reach.</p>
+                                }
+                                <div class="qx-field">
+                                    <label for="qxNewBackup">Backup file</label>
+                                    <input id="qxNewBackup" class="qx-input-addr" @bind="_newBackupPath" @bind:event="oninput" @bind:after="() => _backupPathEdited = true" disabled="@Session.IsCreatingWallet" />
+                                </div>
+                                <div class="qx-actions qx-fallback">
+                                    <button class="btn btn-primary qx-btn-small" @onclick="CreatePqWalletAsync" disabled="@(Session.IsCreatingWallet || Session.IsSending)">
+                                        @(Session.IsCreatingWallet ? "Creating…" : "Create post-quantum wallet")
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                        @if (Session.CanUseLegacyFallback)
+                        {
+                            <div class="qx-actions qx-fallback">
+                                <button class="btn qx-btn-small" @onclick="UseLegacyFallbackAsync" disabled="@Session.IsSending">Use a fresh legacy address instead</button>
+                                <span class="qx-hint">hides the exposed key again — does NOT make the coins post-quantum</span>
+                            </div>
+                        }
+                    }
+
+                    @if (Session.CreatedWallet is { } cw)
+                    {
+                        <div class="qx-create">
+                            <p class="qx-verdict ok">Created '@cw.WalletName' with post-quantum keys. Its first BQ… address is now the destination.</p>
+                            <div class="qx-plan">
+                                <span class="k">Encryption</span><span class="v @(cw.Encrypted ? "" : "qx-warn")">@(cw.Encrypted ? "Encrypted" : "UNENCRYPTED — anyone with the wallet file or this computer can spend it")</span>
+                                <span class="k">Backup</span><span class="v">@cw.BackupPath</span>
+                                <span class="k">Backup size</span><span class="v">@cw.BackupBytes.ToString("N0") bytes · SHA-256 @cw.BackupSha256[..16]…</span>
+                                <span class="k">On the node</span><span class="v">@(cw.Unloaded ? "unloaded (load it by name when you need it)" : "still loaded")</span>
+                            </div>
+                            <p class="qx-warn">⚠ @(cw.Encrypted
+                                ? "Write the passphrase on paper now and copy the backup file to a USB stick. Without both, coins sent to this wallet cannot be recovered."
+                                : "Copy the backup file to a USB stick and keep it where nobody else can reach it: the file alone is enough to spend these coins.")</p>
+                        </div>
+                    }
+
+                    <div class="qx-field">
+                        <label for="qxDestination">Destination</label>
+                        <input id="qxDestination" class="qx-input-addr" value="@Session.Destination" @onchange="OnDestinationChanged" disabled="@Session.IsSending" />
+                        <button class="btn qx-btn-small" @onclick="NewPqDestinationAsync" disabled="@Session.IsSending">New BQ… address</button>
+                    </div>
+                    <div class="qx-field">
+                        <label></label>
+                        @if (kind == SweepDestinationKind.PostQuantum)
+                        {
+                            <span class="qx-badge qx-badge-safe">Post-quantum BQ… address</span>
+                        }
+                        else if (kind == SweepDestinationKind.Legacy)
+                        {
+                            <span class="qx-badge qx-badge-exposed">Legacy B… address — NOT post-quantum</span>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(Session.Destination))
+                        {
+                            <span class="qx-badge qx-badge-exposed">Not a Blazecoin address</span>
+                        }
+                    </div>
+                    <div class="qx-field">
+                        <label for="qxFeeRate">Fee rate</label>
+                        <input id="qxFeeRate" class="qx-input-fee" @bind="_feeRate" disabled="@Session.IsSending" />
+                        <span class="qx-hint">satoshis per kB · the chain relays at 0; 100,000 is the legacy 0.001 BLZ/kB</span>
+                    </div>
+                    <div class="qx-actions qx-actions-tight">
+                        <button class="btn btn-primary" @onclick="PlanAsync" disabled="@Session.IsSending">Plan</button>
+                        <button class="btn" @onclick="CloseSweep" disabled="@Session.IsSending">Close</button>
+                    </div>
+
+                    @if ((_pageProblem ?? Session.Problem) is { } problem) { <p class="qx-error">@problem</p> }
+
+                    @if (plan is not null)
+                    {
+                        <div class="qx-verdict @(plan.Balances ? "ok" : "bad")">
+                            @(plan.Balances
+                                ? $"Plan balances: {plan.InputCount:N0} inputs in {plan.Transactions.Count:N0} transaction{(plan.Transactions.Count == 1 ? "" : "s")}, nothing left behind."
+                                : "The plan does not balance — nothing will be sent.")
+                        </div>
+                        <div class="qx-plan">
+                            <span class="k">Moves</span><span class="v">@Blz(plan.OutputSatoshis) BLZ → @Session.Destination</span>
+                            <span class="k">Fee</span><span class="v">@Blz(plan.FeeSatoshis) BLZ (@plan.FeeSatoshis.ToString("N0") sats)</span>
+                            <span class="k">Transactions</span><span class="v">@plan.Transactions.Count.ToString("N0") · @plan.InputCount.ToString("N0") inputs</span>
+                        </div>
+                        @foreach (var w in Session.Warnings) { <p class="qx-warn">⚠ @w</p> }
+                        <label class="qx-ack">
+                            <input type="checkbox" @bind="_ackIrreversible" disabled="@Session.IsSending" />
+                            I understand this moves real coins on-chain and cannot be undone.
+                        </label>
+                        @if (Session.RequiresBackupAck)
+                        {
+                            <label class="qx-ack">
+                                <input type="checkbox" @bind="_ackBackup" disabled="@Session.IsSending" />
+                                I have a backup of the wallet that owns this BQ… address, made AFTER its post-quantum keys were created. Older backups cannot recover these coins.
+                            </label>
+                        }
+                        <button class="btn btn-primary" @onclick="BroadcastAsync" disabled="@(!Session.CanBroadcast(_ackIrreversible, _ackBackup))">
+                            @(Session.IsSending ? "Sending…" : "Broadcast")
+                        </button>
+                    }
+
+                    @if (Session.LastBroadcast is { } sent)
+                    {
+                        <div class="@(sent.Succeeded ? "qx-sent" : "qx-error")">
+                            @sent.Describe()
+                            @foreach (var t in sent.SentTxIds) { <div class="mono">@t</div> }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// The header mark — a key, the thing this page is about. Defined once and rendered
+    /// eight times (a real one and three ghosts each side), so the shape can never drift
+    /// between copies.
+    /// </summary>
+    private static readonly RenderFragment Mark =
+        @<svg class="qx-mark" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="17" cy="31" r="9" />
+            <circle cx="17" cy="31" r="3" />
+            <path d="M23.5 24.5 L40 8" />
+            <path d="M34 14 L39 19" />
+            <path d="M30 18 L34 22" />
+        </svg>;
+
+    /// <summary>Unexposed rows shown before the table collapses the rest behind "show all" —
+    /// a mining wallet has hundreds of one-output change addresses and the exposed rows
+    /// are the ones that need acting on.</summary>
+    private const int CollapsedUnexposedRows = 4;
+
+    private ExposureReport? _report;
+    private bool _scanning;
+    private bool _showAll;
+    private string _progressText = "";
+    private DateTime _scanStartedUtc;
+    private string ElapsedText => $"{(int)(DateTime.UtcNow - _scanStartedUtc).TotalSeconds}s";
+    private string? _error;
+    private CancellationTokenSource? _scanCts;
+    private Dictionary<string, string> _labels = new(StringComparer.Ordinal);
+
+    // The sweep's state and rules live in QuantumSweepSession (Core, unit-tested); this page only
+    // renders it and forwards clicks. The two acknowledgement boxes and the fee text are view state.
+    private string _feeRate = QuantumSweepPlanner.DefaultFeeRateSatPerKb.ToString();
+    private bool _ackIrreversible;
+    private bool _ackBackup;
+    private string? _pageProblem;
+
+    // "Create a post-quantum wallet" form. The passphrase fields are cleared after every attempt.
+    private string _newWalletName = PqWalletRequest.DefaultName;
+    private string _newPass = "";
+    private string _newPass2 = "";
+    private string _newBackupPath = "";
+    private bool _backupPathEdited;
+    private bool _unencrypted;          // encrypted by default; unticking is a deliberate choice
+
+    private void ClearPassphrases() { _newPass = ""; _newPass2 = ""; }
+
+    private void ResetCreateForm()
+    {
+        _newWalletName = PqWalletRequest.DefaultName;
+        _newPass = ""; _newPass2 = "";
+        _unencrypted = false;
+        _backupPathEdited = false;
+        RefreshDefaultBackupPath();
+    }
+
+    private void RefreshDefaultBackupPath()
+    {
+        if (_backupPathEdited) return;
+        _newBackupPath = PqWalletRequest.DefaultBackupPath(_newWalletName, DateTime.Now,
+            BlazecoinWallet.Core.Services.UserFolders.Documents());
+    }
+
+    private async Task CreatePqWalletAsync()
+    {
+        ResetAcks();
+        var request = new PqWalletRequest(_newWalletName, _newPass, _newPass2, _newBackupPath, Encrypt: !_unencrypted);
+        try { await Session.CreatePostQuantumWalletAsync(request); }
+        finally { _newPass = ""; _newPass2 = ""; }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // A row's "Sweep" opens the panel below the (possibly very long) table: scroll to it once it
+        // has rendered, otherwise the click looks like a no-op (reported 2026-09-14).
+        if (_scrollToPanel)
+        {
+            _scrollToPanel = false;
+            try { await JS.InvokeVoidAsync("scrollQuantumPanel", "qxSweepPanel"); } catch { /* WebView not ready */ }
+        }
+        if (!firstRender) return;
+        await CheckDaemonAsync();
+        StateHasChanged();
+        try
+        {
+            // Atomic skin, then the decrypting title (which loops on its own in JS and stops
+            // itself when the banner leaves the document).
+            await JS.InvokeVoidAsync("initQuantumBackground");
+            await JS.InvokeVoidAsync("decryptQuantumBanner");
+        }
+        catch { /* WebView not ready — background and banner animation just won't appear */ }
+    }
+
+    private async Task ScanAsync()
+    {
+        if (Session.IsSending) return;
+        _error = null; _report = null; _showAll = false; CloseSweep();
+        _scanning = true; _progressText = "reading wallet history…";
+        _scanStartedUtc = DateTime.UtcNow;
+        _ = TickWhileScanningAsync();   // keeps the elapsed seconds moving during the long history read
+        _scanCts = new CancellationTokenSource();
+        var lastUi = DateTime.MinValue;
+        var progress = new Progress<ExposureProgress>(p =>
+        {
+            _progressText = p.Phase == ExposurePhase.ReadingHistory
+                ? "reading wallet history…"
+                : $"{p.TransactionsDone:N0} / {p.TransactionsTotal:N0} sends read · {p.ExposedKeysFound:N0} keys seen";
+            if ((DateTime.UtcNow - lastUi).TotalMilliseconds > 250) { lastUi = DateTime.UtcNow; InvokeAsync(StateHasChanged); }
+        });
+        try
+        {
+            var labelsTask = RpcService.ListLabelledAddressesAsync();
+            var scanner = new QuantumExposureScanner(ExposureRpc);
+            _report = await scanner.ScanAsync(progress: progress, ct: _scanCts.Token);
+            try
+            {
+                _labels = (await labelsTask)
+                    .Where(e => !string.IsNullOrEmpty(e.Address))
+                    .GroupBy(e => e.Address, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.First().Label ?? "", StringComparer.Ordinal);
+            }
+            catch { /* labels are decoration */ }
+        }
+        catch (OperationCanceledException) { _error = "Scan cancelled."; }
+        catch (Exception ex) { _error = $"Scan failed: {ex.Message}"; }
+        finally { _scanning = false; _scanCts = null; StateHasChanged(); }
+    }
+
+    private void CancelScan() => _scanCts?.Cancel();
+
+    /// <summary>Re-renders once a second while a scan runs, so the elapsed time ticks even while the
+    /// daemon is still answering the one long history read.</summary>
+    private async Task TickWhileScanningAsync()
+    {
+        while (_scanning)
+        {
+            await Task.Delay(1000);
+            if (_scanning) await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private string LabelOf(string address) => _labels.TryGetValue(address, out var l) ? l : "";
+
+    private static string Plural(long n, string one, string many) => n == 1 ? one : many;
+
+    private bool _scrollToPanel;
+
+    private Task SelectForSweepAsync(AddressExposure a) => OpenAsync(SweepSelection.FromAddress(a));
+
+    private Task SelectAllLegacyAsync() => _report is null ? Task.CompletedTask : OpenAsync(SweepSelection.AllLegacy(_report));
+
+    private async Task OpenAsync(SweepSelection? selection)
+    {
+        if (selection is null || Session.IsSending || Session.IsCreatingWallet) return;
+        ResetAcks();
+        ResetCreateForm();
+        _scrollToPanel = true;
+        await Session.SelectAsync(selection);
+    }
+
+    private async Task NewPqDestinationAsync() { ResetAcks(); await Session.NewPostQuantumDestinationAsync(); }
+
+    private async Task UseLegacyFallbackAsync() { ResetAcks(); await Session.UseLegacyFallbackAsync(); }
+
+    private void OnDestinationChanged(ChangeEventArgs e) { ResetAcks(); Session.SetDestination(e.Value?.ToString()); }
+
+    private async Task PlanAsync()
+    {
+        ResetAcks();
+        if (!long.TryParse(_feeRate, out var rate)) { _pageProblem = "Enter the fee rate in satoshis per kB."; return; }
+        await Session.PlanAsync(rate);
+    }
+
+    private void CloseSweep() { ResetAcks(); Session.Close(); }
+
+    private void ResetAcks() { _ackIrreversible = false; _ackBackup = false; _pageProblem = null; }
+
+    /// <summary>One broadcast of the current plan; the session clears the plan first, so it can never go out twice.</summary>
+    private async Task BroadcastAsync()
+    {
+        var task = Session.BroadcastAsync(_ackIrreversible, _ackBackup);
+        StateHasChanged();          // show "Sending…" while the batches go out
+        try { await task; }
+        catch (Exception ex) { _pageProblem = $"Send failed: {ex.Message} — rescan before doing anything else."; }
+        finally { ResetAcksKeepProblem(); StateHasChanged(); }
+    }
+
+    private void ResetAcksKeepProblem() { _ackIrreversible = false; _ackBackup = false; }
+
+    private static string Blz(long sats) => (sats / 100_000_000m).ToString("0.########");
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("stopQuantumBanner"); } catch { /* circuit gone */ }
+    }
+}
