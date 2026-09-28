@@ -1,0 +1,764 @@
+@page "/transactions"
+@using BlazecoinWallet.Core.Services
+@using System.Globalization
+@using BlazecoinWallet.Core.Services.AddressBook
+@using BlazecoinWallet.Core.Services.Export
+@using BlazecoinWallet.Core.Services.Settings
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject ISettingsService Settings
+@inject IAddressBookStore AddrBook
+@inject ITransactionExportService Export
+@inject IJSRuntime JS
+
+<PageTitle>Transactions - Blazecoin Wallet V2.0</PageTitle>
+
+@* Vertical coin-pile columns background (ticker-style), painted by initTransactionsBackground. *@
+<div class="coincol-bg" id="txTileBg"></div>
+
+<div class="wallet-page">
+    @* Title banner — same chrome as Send (nested red→black cards with red
+       ➜ arrow flanks, ghost trails, flame-flicker text). *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title"><span class="banner-emoji arrow-r"><span class="ghost-in">➜</span><span class="ghost-in">➜</span>➜</span><span class="banner-emoji arrow-r arrow-sw pair-buddy"><span class="ghost-in">➜</span><span class="ghost-in">➜</span>➜</span> Transactions <span class="banner-emoji arrow-r"><span class="ghost-in">➜</span><span class="ghost-in">➜</span>➜</span><span class="banner-emoji arrow-r arrow-sw pair-buddy"><span class="ghost-in">➜</span><span class="ghost-in">➜</span>➜</span></h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+    <div class="card tx-filter-card">
+        <div class="status-header tx-filter-header"><span>Search &amp; Filter</span><span class="tx-count">@FilteredCountLabel</span></div>
+        <div class="card-body">
+            <div class="tx-toolbar">
+        <div class="tx-filters">
+            <div class="filt type-filter">
+                <span>Type</span>
+                <div class="type-dd">
+                    <button type="button" class="type-toggle @(_typeMenuOpen ? "open" : "")" @onclick="ToggleTypeMenu">
+                        <span>@TypeSummary</span><span class="type-chev"></span>
+                    </button>
+                    @if (_typeMenuOpen)
+                    {
+                        <div class="type-backdrop" @onclick="CloseTypeMenu"></div>
+                        <div class="type-menu">
+                            @foreach (var opt in _typeOptions)
+                            {
+                                <label class="type-opt">
+                                    <input type="checkbox" checked="@_selectedTypes.Contains(opt.Cat)"
+                                           @onchange="@(e => ToggleType(opt.Cat, (bool)(e.Value ?? false)))" />
+                                    <span>@opt.Label</span>
+                                </label>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+            <label class="filt">
+                <span>Status</span>
+                <select @bind="_statusFilter" @bind:after="ApplyFilters">
+                    <option value="">All</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="pending">Pending</option>
+                </select>
+            </label>
+            <label class="filt">
+                <span>Direction</span>
+                <select @bind="_directionFilter" @bind:after="ApplyFilters">
+                    <option value="">All</option>
+                    <option value="in">Incoming</option>
+                    <option value="out">Outgoing</option>
+                </select>
+            </label>
+            <label class="filt">
+                <span>Min (@_amtUnit)</span>
+                <input type="number" step="any" min="0" placeholder="0" @bind="_amtMin" @bind:after="ApplyFilters" />
+            </label>
+            <label class="filt">
+                <span>Max (@_amtUnit)</span>
+                <input type="number" step="any" min="0" placeholder="∞" @bind="_amtMax" @bind:after="ApplyFilters" />
+            </label>
+            <label class="filt">
+                <span>Min fee (@_amtUnit)</span>
+                <input type="number" step="any" min="0" placeholder="0" @bind="_feeMin" @bind:after="ApplyFilters" />
+            </label>
+            <label class="filt">
+                <span>Max fee (@_amtUnit)</span>
+                <input type="number" step="any" min="0" placeholder="∞" @bind="_feeMax" @bind:after="ApplyFilters" />
+            </label>
+            @* Break so the date range starts on its own row. *@
+            <div class="filt-break"></div>
+            <label class="filt">
+                <span>From date</span>
+                <input type="date" @bind="_dateFrom" @bind:after="ApplyFilters" />
+            </label>
+            <label class="filt">
+                <span>To date</span>
+                <input type="date" @bind="_dateTo" @bind:after="ApplyFilters" />
+            </label>
+            <div class="filt date-presets">
+                <span>Quick range</span>
+                <div class="preset-row">
+                    <button type="button" class="preset-btn" @onclick="@(() => SetDatePreset("today"))">Today</button>
+                    <button type="button" class="preset-btn" @onclick="@(() => SetDatePreset("7d"))">7d</button>
+                    <button type="button" class="preset-btn" @onclick="@(() => SetDatePreset("30d"))">30d</button>
+                    <button type="button" class="preset-btn" @onclick="@(() => SetDatePreset("year"))">Year</button>
+                </div>
+            </div>
+            @* Force a line break so the toggles / Search sit on their own row. *@
+            <div class="filt-break"></div>
+            <div class="filt filt-check">
+                <span>Immature</span>
+                <label class="chk"><input type="checkbox" @bind="_excludeImmature" @bind:after="ApplyFilters" /> Exclude</label>
+            </div>
+            <div class="filt filt-check">
+                <span>Mined</span>
+                <label class="chk"><input type="checkbox" @bind="_excludeMined" @bind:after="ApplyFilters" /> Exclude</label>
+            </div>
+            <div class="filt filt-check">
+                <span>Fee</span>
+                <label class="chk"><input type="checkbox" @bind="_feePaidOnly" @bind:after="ApplyFilters" /> Paid</label>
+            </div>
+            <label class="filt filt-search">
+                <span>Search address / label / TxID</span>
+                <input type="text" placeholder="Address, label or TxID…" @bind="_search" @bind:event="oninput" @bind:after="ApplyFilters" />
+            </label>
+        </div>
+        <div class="tx-actions">
+            <button class="btn btn-secondary" @onclick="ClearFilters">Clear</button>
+            <button class="btn btn-secondary" @onclick="Load" disabled="@_loading">Refresh</button>
+            <div class="export-dd">
+                <button type="button" class="btn btn-secondary" @onclick="@(() => _exportMenuOpen = !_exportMenuOpen)">Export ▾</button>
+                @if (_exportMenuOpen)
+                {
+                    <div class="type-backdrop" @onclick="@(() => _exportMenuOpen = false)"></div>
+                    <div class="type-menu export-menu">
+                        <button type="button" class="export-opt" @onclick="@(() => ExportAsync("csv"))" disabled="@_exporting">CSV</button>
+                        <button type="button" class="export-opt" @onclick="@(() => ExportAsync("json"))" disabled="@_exporting">JSON</button>
+                        <button type="button" class="export-opt" @onclick="@(() => ExportAsync("xlsx"))" disabled="@_exporting">Excel (XLSX)</button>
+                        <button type="button" class="export-opt" @onclick="@(() => ExportAsync("pdf"))" disabled="@_exporting">PDF</button>
+                    </div>
+                }
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_exportMsg))
+        {
+            <div class="export-msg">@_exportMsg</div>
+        }
+            </div>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <p>Loading transactions…</p>
+    }
+    else if (_txs is null || _txs.Count == 0)
+    {
+        <p>No transactions yet.</p>
+    }
+    else
+    {
+        <div class="card tx-table-card">
+            <div class="status-header"><span>Ledger</span></div>
+            <div class="card-body">
+        @* Column visibility toggles — pick which table columns show. *@
+        <div class="col-toggles">
+            @foreach (var col in _columns)
+            {
+                <label class="col-toggle">
+                    <input type="checkbox" checked="@_visibleCols.Contains(col.Key)"
+                           @onchange="@(e => ToggleCol(col.Key, (bool)(e.Value ?? false)))" />
+                    <span>@col.Label</span>
+                </label>
+            }
+        </div>
+        <div class="tx-summary">
+            @foreach (var seg in CategoryCountSegments())
+            {
+                <span class="@seg.Css">@seg.Text</span>
+            }
+            <span class="@NetCss">net @NetDisplay</span>
+            <span class="@FeesCss">fees @FeesDisplay</span>
+        </div>
+        @* CSS-grid "table" so <Virtualize> can window the rows for smooth infinite
+           scroll. --tx-cols (built from the visible columns) drives the
+           grid-template-columns of the header + every row, so hidden columns
+           collapse cleanly. *@
+        <div class="tx-grid" style="--tx-cols: @GridCols">
+            <div class="tx-grid-inner">
+            <div class="tx-grid-head">
+                @if (IsCol("date")) { <div class="th sortable @SortClass(SortCol.Date)" @onclick="@(() => SortBy(SortCol.Date))">Date <span class="sort-arrow">@SortArrow(SortCol.Date)</span></div> }
+                @if (IsCol("type")) { <div class="th">Type</div> }
+                @if (IsCol("address")) { <div class="th">Address</div> }
+                @if (IsCol("label")) { <div class="th">Label</div> }
+                @if (IsCol("amount")) { <div class="th num sortable @SortClass(SortCol.Amount)" @onclick="@(() => SortBy(SortCol.Amount))">Amount <span class="sort-arrow">@SortArrow(SortCol.Amount)</span></div> }
+                @if (IsCol("fee")) { <div class="th num sortable @SortClass(SortCol.Fee)" @onclick="@(() => SortBy(SortCol.Fee))">Fee <span class="sort-arrow">@SortArrow(SortCol.Fee)</span></div> }
+                @if (IsCol("balance")) { <div class="th num">Balance</div> }
+                @if (IsCol("conf")) { <div class="th num sortable @SortClass(SortCol.Conf)" @onclick="@(() => SortBy(SortCol.Conf))">Conf. <span class="sort-arrow">@SortArrow(SortCol.Conf)</span></div> }
+                @if (IsCol("block")) { <div class="th num">Block</div> }
+                @if (IsCol("status")) { <div class="th">Status</div> }
+            </div>
+            <div class="tx-grid-body">
+                @if (_filtered.Count == 0)
+                {
+                    <div class="tx-nomatch">No transactions match the filters.</div>
+                }
+                else
+                {
+                    @* _filtered is already sorted newest-first. *@
+                    <Virtualize Items="_filtered" Context="tx" ItemSize="38">
+                        <div class="tx-row @(IsAltRow(tx) ? "row-alt" : "")">
+                            @if (IsCol("date")) { <div class="td white-col">@FormatTime(tx.Time)</div> }
+                            @if (IsCol("type")) { <div class="td tx-type @TxDisplay.ColourClass(tx.Category)">@TxDisplay.TypeLabel(tx.Category)</div> }
+                            @if (IsCol("address"))
+                            {
+                                <div class="td mono white-col" title="@tx.Address">
+                                    @if (!string.IsNullOrEmpty(_explorerUrl) && !string.IsNullOrEmpty(tx.Address))
+                                    {
+                                        <a class="explorer-link" @onclick="@(() => OpenExplorerAsync($"address/{tx.Address}"))">@Highlight(tx.Address)</a>
+                                    }
+                                    else
+                                    {
+                                        @Highlight(tx.Address)
+                                    }
+                                </div>
+                            }
+                            @if (IsCol("label")) { <div class="td @(string.IsNullOrEmpty(LabelFor(tx.Address)) ? "white-col" : "label-col")">@Highlight(LabelDisplay(tx.Address))</div> }
+                            @if (IsCol("amount")) { <div class="td num @TxDisplay.ColourClass(tx.Category)">@AmountFormat.Format(tx.Amount, _amtUnit, _amtDecimals)</div> }
+                            @if (IsCol("fee")) { <div class="td num @TxDisplay.ColourClass(tx.Category)">@(tx.Fee != 0 ? AmountFormat.Format(tx.Fee, _amtUnit, _amtDecimals) : "—")</div> }
+                            @if (IsCol("balance")) { <div class="td num white-col">@AmountFormat.Format(BalanceAfter(tx), _amtUnit, _amtDecimals)</div> }
+                            @if (IsCol("conf")) { <div class="td num white-col">@tx.Confirmations</div> }
+                            @if (IsCol("block"))
+                            {
+                                <div class="td num white-col">
+                                    @if (tx.BlockHeight > 0)
+                                    {
+                                        @if (!string.IsNullOrEmpty(_explorerUrl))
+                                        {
+                                            <a class="explorer-link" @onclick="@(() => OpenExplorerAsync($"block/{tx.BlockHeight}"))">@tx.BlockHeight.ToString("N0")</a>
+                                        }
+                                        else
+                                        {
+                                            @tx.BlockHeight.ToString("N0")
+                                        }
+                                    }
+                                    else
+                                    {
+                                        @("—")
+                                    }
+                                </div>
+                            }
+                            @if (IsCol("status"))
+                            {
+                                <div class="td">
+                                    <span class="conf-badge @(tx.Confirmations >= _confThreshold ? "confirmed" : "pending")">
+                                        @(tx.Confirmations >= _confThreshold ? "Confirmed" : "Pending")
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    </Virtualize>
+                }
+            </div>
+            </div>
+        </div>
+            </div>
+        </div>
+    }
+    }
+</div>
+
+@code {
+    private List<Transaction>? _txs;                  // full history, newest-first
+    private List<Transaction> _filtered = new();      // _txs after the active filters
+    private Dictionary<Transaction, int> _rowIndex = new();  // tx -> absolute row index (stable zebra)
+    private Dictionary<Transaction, decimal> _runningBalance = new();  // tx -> cumulative balance after it (chronological)
+    private bool _loading = true;
+    private int _confThreshold = 30; // confs before "Confirmed" (set on Preferences)
+    private string _amtUnit = AmountFormat.DefaultUnit;
+    private int _amtDecimals = AmountFormat.DefaultDecimals;
+    private string _explorerUrl = "";
+
+    // --- filter state (all combine with AND; empty/null = ignored) ---
+    private HashSet<string> _selectedTypes = new();   // empty = all; else the chosen categories
+    private bool _typeMenuOpen;
+    private static readonly (string Cat, string Label)[] _typeOptions =
+    {
+        ("receive", "Receive"), ("send", "Send"), ("generate", "Mined"),
+        ("immature", "Immature"), ("orphan", "Orphan"),
+    };
+    private string _statusFilter = "";      // "" = all, "confirmed", "pending"
+    private string _directionFilter = "";   // "" = all, "in" (amount > 0), "out" (amount < 0)
+    private bool _excludeMined;             // hide generate (matured coinbase) rows
+    private bool _excludeImmature;          // hide immature (maturing coinbase) rows
+    private bool _feePaidOnly;              // only rows that paid a fee (|fee| > 0)
+    private decimal? _amtMin;               // in the displayed unit (_amtUnit)
+    private decimal? _amtMax;               // in the displayed unit (_amtUnit)
+    private decimal? _feeMin;               // in the displayed unit (_amtUnit)
+    private decimal? _feeMax;               // in the displayed unit (_amtUnit)
+    private DateTime? _dateFrom;
+    private DateTime? _dateTo;
+    private string _search = "";            // matches address OR txid (substring, case-insensitive)
+
+    // --- sort state ---
+    private enum SortCol { Date, Amount, Fee, Conf }
+    private SortCol _sortCol = SortCol.Date;
+    private bool _sortDesc = true;          // default: newest first
+
+    private bool HasActiveFilter =>
+        _selectedTypes.Count > 0 || !string.IsNullOrEmpty(_statusFilter) || !string.IsNullOrEmpty(_directionFilter)
+        || _excludeMined || _excludeImmature || _feePaidOnly
+        || _amtMin is not null || _amtMax is not null || _feeMin is not null || _feeMax is not null
+        || _dateFrom is not null || _dateTo is not null || !string.IsNullOrWhiteSpace(_search);
+
+    private string FilteredCountLabel =>
+        _txs is null ? ""
+        : HasActiveFilter ? $"Showing {_filtered.Count} of {_txs.Count}"
+        : $"{_txs.Count} transaction{(_txs.Count == 1 ? "" : "s")}";
+
+    // Typed amount is in the display unit; convert to chain BLZ for comparison.
+    private decimal ToBlz(decimal displayValue) => _amtUnit == "mBLZ" ? displayValue / 1000m : displayValue;
+
+    // --- Type multi-select dropdown ---
+    private string TypeSummary =>
+        _selectedTypes.Count == 0 ? "All"
+        : _selectedTypes.Count == 1 ? _typeOptions.First(o => _selectedTypes.Contains(o.Cat)).Label
+        : $"{_selectedTypes.Count} types";
+    private void ToggleTypeMenu() => _typeMenuOpen = !_typeMenuOpen;
+    private void CloseTypeMenu() => _typeMenuOpen = false;
+    private void ToggleType(string cat, bool on)
+    {
+        if (on) _selectedTypes.Add(cat); else _selectedTypes.Remove(cat);
+        ApplyFilters();
+    }
+
+    // --- Column visibility ---
+    // Key, header label, and the grid-track width used when the column is shown.
+    // Fixed widths sized to each column's content (so every column hugs its text
+    // with the same padding as Date — no flexible "fr" columns floating wide).
+    // Address is wide enough for a full legacy address (no truncation).
+    private static readonly (string Key, string Label, string Track)[] _columns =
+    {
+        ("date",    "Date",    "150px"),
+        ("type",    "Type",    "95px"),
+        ("address", "Address", "290px"),
+        ("label",   "Label",   "160px"),
+        ("amount",  "Amount",  "155px"),
+        ("fee",     "Fee",     "150px"),
+        ("balance", "Balance", "185px"),
+        ("conf",    "Conf.",   "75px"),
+        ("block",   "Block",   "110px"),
+        ("status",  "Status",  "115px"),
+    };
+    // Shown by default on launch (Label / Fee / Balance / Block start hidden, still toggleable).
+    private HashSet<string> _visibleCols = new() { "date", "type", "address", "amount", "conf", "status" };
+    private bool IsCol(string key) => _visibleCols.Contains(key);
+    // grid-template-columns for the currently visible columns (in declared order).
+    private string GridCols => string.Join(" ", _columns.Where(c => _visibleCols.Contains(c.Key)).Select(c => c.Track));
+    private void ToggleCol(string key, bool on)
+    {
+        if (on) _visibleCols.Add(key); else _visibleCols.Remove(key);
+        // pure render change — no re-filter needed
+    }
+
+    // --- filtered-set summary (the totals bar above the Ledger table) ---
+    private int CountOf(string cat) =>
+        _filtered.Count(t => string.Equals(t.Category, cat, StringComparison.OrdinalIgnoreCase));
+    private decimal NetAmount => _filtered.Sum(t => t.Amount);     // signed net flow
+    private decimal TotalFees => _filtered.Sum(t => Math.Abs(t.Fee));
+
+    private IEnumerable<(string Text, string Css)> CategoryCountSegments()
+    {
+        foreach (var cat in new[] { "receive", "send", "generate", "immature", "orphan" })
+        {
+            var n = CountOf(cat);
+            if (n == 0) continue;
+            var text = cat switch
+            {
+                "send"     => $"{n} send{(n == 1 ? "" : "s")}",
+                "receive"  => $"{n} receive{(n == 1 ? "" : "s")}",
+                "generate" => $"{n} mined",
+                "immature" => $"{n} immature",
+                "orphan"   => $"{n} orphan{(n == 1 ? "" : "s")}",
+                _          => $"{n} {cat}",
+            };
+            yield return (text, TxDisplay.ColourClass(cat));   // same colours as the table cells
+        }
+    }
+
+    private string NetDisplay => (NetAmount > 0 ? "+" : "") + AmountFormat.Format(NetAmount, _amtUnit, _amtDecimals);
+    private string FeesDisplay => AmountFormat.Format(TotalFees, _amtUnit, _amtDecimals);
+
+    // Net coloured by sign (green +, red −, white at 0); the whole "net X" segment.
+    private string NetCss => NetAmount > 0 ? "sum-pos" : NetAmount < 0 ? "sum-neg" : "sum-zero";
+    // Fees: a fee is money out, so colour it the send colour when > 0; default at 0.
+    private string FeesCss => TotalFees > 0 ? "send-cell" : "";
+
+    // --- Address Book labels (address -> label), loaded from localStorage ---
+    // Same schema/key the Address Book + Send pages use ("blz_addressbook").
+    private Dictionary<string, string> _labels = new();
+    private string LabelFor(string? address) =>
+        !string.IsNullOrEmpty(address) && _labels.TryGetValue(address, out var l) ? l : "";
+    // Cumulative wallet balance right after this tx (chronological running ledger).
+    private decimal BalanceAfter(Transaction tx) => _runningBalance.TryGetValue(tx, out var b) ? b : 0m;
+
+    // Wrap the part of `text` matching the active search in a .search-hl span so you
+    // can see why a row matched. Each text part is HTML-encoded (labels are
+    // user-defined) before building the MarkupString, so it's injection-safe.
+    private MarkupString Highlight(string? text)
+    {
+        var s = text ?? "";
+        var needle = _search?.Trim() ?? "";
+        if (string.IsNullOrEmpty(needle) || s.Length == 0)
+            return (MarkupString)System.Net.WebUtility.HtmlEncode(s);
+        var sb = new System.Text.StringBuilder();
+        int i = 0;
+        while (i < s.Length)
+        {
+            int idx = s.IndexOf(needle, i, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) { sb.Append(System.Net.WebUtility.HtmlEncode(s.Substring(i))); break; }
+            if (idx > i) sb.Append(System.Net.WebUtility.HtmlEncode(s.Substring(i, idx - i)));
+            sb.Append("<span class=\"search-hl\">")
+              .Append(System.Net.WebUtility.HtmlEncode(s.Substring(idx, needle.Length)))
+              .Append("</span>");
+            i = idx + needle.Length;
+        }
+        return (MarkupString)sb.ToString();
+    }
+
+    // ---- Export (CSV / JSON / XLSX / PDF) — respects active filters + visible columns ----
+    private bool _exportMenuOpen;
+    private bool _exporting;
+    private string? _exportMsg;
+
+    private List<(string Key, string Label, string Track)> VisibleCols() =>
+        _columns.Where(c => _visibleCols.Contains(c.Key)).ToList();
+
+    private decimal ToDisplayUnit(decimal blz) => _amtUnit == "mBLZ" ? blz * 1000m : blz;
+
+    private string ColHeader(string key) => key switch
+    {
+        "amount"  => $"Amount ({_amtUnit})",
+        "fee"     => $"Fee ({_amtUnit})",
+        "balance" => $"Balance ({_amtUnit})",
+        _ => _columns.First(c => c.Key == key).Label,
+    };
+
+    // Typed value per cell (decimal/int/string) — used directly by JSON/XLSX.
+    private object CellValue(Transaction tx, string key) => key switch
+    {
+        "date"    => FormatTime(tx.Time),
+        "type"    => TxDisplay.TypeLabel(tx.Category),
+        "address" => tx.Address ?? "",
+        "label"   => LabelFor(tx.Address),
+        "amount"  => ToDisplayUnit(tx.Amount),
+        "fee"     => ToDisplayUnit(tx.Fee),
+        "balance" => ToDisplayUnit(BalanceAfter(tx)),
+        "conf"    => tx.Confirmations,
+        "block"   => tx.BlockHeight,
+        "status"  => tx.Confirmations >= _confThreshold ? "Confirmed" : "Pending",
+        _ => "",
+    };
+
+    // Build the format-agnostic table the export service serializes. Done on the UI
+    // thread because the cells read page state (filters, units, labels); the heavy
+    // serialization then runs off-thread in ExportAsync.
+    private ExportTable BuildExportTable()
+    {
+        var cols = VisibleCols();
+        var headers = cols.Select(c => ColHeader(c.Key)).ToList();
+        var rows = _filtered
+            .Select(tx => (IReadOnlyList<object>)cols.Select(c => CellValue(tx, c.Key)).ToList())
+            .ToList();
+        return new ExportTable($"Blazecoin Transactions — {_filtered.Count} rows", headers, rows);
+    }
+
+    private async Task ExportAsync(string format)
+    {
+        if (_exporting) return;
+        _exporting = true;
+        _exportMenuOpen = false;
+        _exportMsg = $"Exporting {_filtered.Count} rows…";
+        StateHasChanged();
+        try
+        {
+            var table = BuildExportTable();
+            // Off-thread: XLSX/PDF generation can be slow on large exports.
+            var (ext, bytes) = await Task.Run(() => Export.Build(format, table));
+            var suggested = $"blazecoin-transactions-{DateTime.Now:yyyyMMdd-HHmmss}";
+#if WINDOWS
+            // Native "Save As" dialog (choose folder + filename).
+            var picker = new Windows.Storage.Pickers.FileSavePicker
+            {
+                SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary,
+                SuggestedFileName = suggested,
+            };
+            picker.FileTypeChoices.Add($"{format.ToUpperInvariant()} file", new List<string> { "." + ext });
+            var nativeWindow = Microsoft.Maui.Controls.Application.Current?.Windows
+                .FirstOrDefault()?.Handler?.PlatformView as Microsoft.UI.Xaml.Window;
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(nativeWindow));
+            var file = await picker.PickSaveFileAsync();
+            if (file is null) { _exportMsg = "Export cancelled."; return; }
+            await Windows.Storage.FileIO.WriteBytesAsync(file, bytes);
+            _exportMsg = $"Exported {_filtered.Count} rows → {file.Path}";
+#else
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"{suggested}.{ext}");
+            await File.WriteAllBytesAsync(path, bytes);
+            _exportMsg = $"Exported {_filtered.Count} rows → {path}";
+#endif
+        }
+        catch (Exception ex)
+        {
+            _exportMsg = $"Export failed: {ex.Message}";
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+    // Display version: an em-dash placeholder when there's no saved label (matches
+    // the Fee column's no-value convention). LabelFor stays "" so search isn't polluted.
+    private string LabelDisplay(string? address)
+    {
+        var l = LabelFor(address);
+        return string.IsNullOrEmpty(l) ? "—" : l;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connError = await RpcService.CheckConnectionAsync();
+        if (_connError == null)
+        {
+            await Load();
+        }
+        else
+        {
+            _loading = false;   // nothing to load while offline — show the DaemonError panel
+        }
+        StateHasChanged();
+    }
+
+    // Re-run the page's normal daemon data load after a retry.
+    protected override Task OnDaemonReconnectedAsync() => Load();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                if (await Settings.GetConfThresholdAsync() is int n) _confThreshold = n;
+                if (await Settings.GetAmountUnitAsync() is string au) _amtUnit = au;
+                if (await Settings.GetAmountDecimalsAsync() is int dec) _amtDecimals = dec;
+                _explorerUrl = await Settings.GetExplorerUrlAsync();
+                StateHasChanged();
+            }
+            catch { /* default 30 */ }
+
+            // Address Book labels (address -> label) for the Label column + label search.
+            var entries = await AddrBook.GetEntriesAsync();
+            if (entries.Count > 0)
+            {
+                _labels = entries
+                    .Where(e => !string.IsNullOrWhiteSpace(e.Address))
+                    .GroupBy(e => e.Address)
+                    .ToDictionary(g => g.Key, g => g.Last().Label ?? "");
+                StateHasChanged();   // re-render the Label column with the loaded labels
+            }
+
+            try
+            {
+                // Paint the vertical coin-pile columns background. Idempotent.
+                await JS.InvokeVoidAsync("initTransactionsBackground");
+            }
+            catch { /* WebView not ready — background just won't appear */ }
+        }
+    }
+
+    private async Task Load()
+    {
+        _loading = true;
+        _connError = null;
+        StateHasChanged();
+        try
+        {
+            // Full history, paged. Pages are overlapping recency windows, so sort
+            // the combined list newest-first for display.
+            var all = await RpcService.ListAllTransactionsAsync();
+            _txs = (all ?? new List<Transaction>())
+                .OrderByDescending(t => t.Time)
+                .ToList();
+
+            // Running balance: cumulative net (amount + fee) in chronological order
+            // (oldest first). Stored per-tx so each row shows the balance right
+            // after that tx, regardless of the current sort/filter.
+            _runningBalance = new Dictionary<Transaction, decimal>(_txs.Count);
+            decimal bal = 0m;
+            for (int i = _txs.Count - 1; i >= 0; i--)   // _txs is newest-first → iterate oldest-first
+            {
+                bal += _txs[i].Amount + _txs[i].Fee;
+                _runningBalance[_txs[i]] = bal;
+            }
+
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            // A load failure here is a daemon/connection problem — surface it through
+            // the shared DaemonError panel (with Retry) rather than an inline alert.
+            _connError = $"Failed to load transactions: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        if (_txs is null) { _filtered = new(); return; }
+        IEnumerable<Transaction> q = _txs;
+
+        if (_selectedTypes.Count > 0)
+            q = q.Where(t => _selectedTypes.Contains((t.Category ?? "").ToLowerInvariant()));
+
+        if (_excludeMined)
+            q = q.Where(t => !string.Equals(t.Category, "generate", StringComparison.OrdinalIgnoreCase));
+
+        if (_excludeImmature)
+            q = q.Where(t => !string.Equals(t.Category, "immature", StringComparison.OrdinalIgnoreCase));
+
+        if (_statusFilter == "confirmed")
+            q = q.Where(t => t.Confirmations >= _confThreshold);
+        else if (_statusFilter == "pending")
+            q = q.Where(t => t.Confirmations < _confThreshold);
+
+        // Direction by amount sign: incoming (receive/mined/immature) > 0, outgoing (send) < 0.
+        if (_directionFilter == "in")
+            q = q.Where(t => t.Amount > 0);
+        else if (_directionFilter == "out")
+            q = q.Where(t => t.Amount < 0);
+
+        // Amount filters match on magnitude (|amount|) so a send (negative) and a
+        // receive of the same size both qualify. Typed values are in the display unit.
+        if (_amtMin is decimal lo)
+            q = q.Where(t => Math.Abs(t.Amount) >= ToBlz(lo));
+        if (_amtMax is decimal hi)
+            q = q.Where(t => Math.Abs(t.Amount) <= ToBlz(hi));
+
+        // Fee filters — only sends carry a fee; |fee| is used so the sign convention
+        // (fee stored negative) doesn't matter.
+        if (_feePaidOnly)
+            q = q.Where(t => Math.Abs(t.Fee) > 0);
+        if (_feeMin is decimal flo)
+            q = q.Where(t => Math.Abs(t.Fee) >= ToBlz(flo));
+        if (_feeMax is decimal fhi)
+            q = q.Where(t => Math.Abs(t.Fee) <= ToBlz(fhi));
+
+        if (_dateFrom is DateTime df)
+        {
+            var from = df.Date;
+            q = q.Where(t => t.Time != 0 &&
+                DateTimeOffset.FromUnixTimeSeconds(t.Time).LocalDateTime.Date >= from);
+        }
+        if (_dateTo is DateTime dt)
+        {
+            var to = dt.Date;
+            q = q.Where(t => t.Time != 0 &&
+                DateTimeOffset.FromUnixTimeSeconds(t.Time).LocalDateTime.Date <= to);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var needle = _search.Trim();
+            q = q.Where(t => (t.Address ?? "").Contains(needle, StringComparison.OrdinalIgnoreCase)
+                          || (t.TxId ?? "").Contains(needle, StringComparison.OrdinalIgnoreCase)
+                          || LabelFor(t.Address).Contains(needle, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Sort the filtered set by the chosen column/direction.
+        q = _sortCol switch
+        {
+            SortCol.Amount => _sortDesc ? q.OrderByDescending(t => Math.Abs(t.Amount)) : q.OrderBy(t => Math.Abs(t.Amount)),
+            SortCol.Fee    => _sortDesc ? q.OrderByDescending(t => Math.Abs(t.Fee))    : q.OrderBy(t => Math.Abs(t.Fee)),
+            SortCol.Conf   => _sortDesc ? q.OrderByDescending(t => t.Confirmations)    : q.OrderBy(t => t.Confirmations),
+            _              => _sortDesc ? q.OrderByDescending(t => t.Time)             : q.OrderBy(t => t.Time),
+        };
+
+        _filtered = q.ToList();
+
+        // Absolute index per row so zebra striping stays put while Virtualize
+        // recycles rows (nth-child would flip parity as you scroll).
+        _rowIndex = new Dictionary<Transaction, int>(_filtered.Count);
+        for (int i = 0; i < _filtered.Count; i++) _rowIndex[_filtered[i]] = i;
+    }
+
+    // Odd absolute rows get the darker zebra stripe.
+    private bool IsAltRow(Transaction tx) => _rowIndex.TryGetValue(tx, out var i) && (i & 1) == 1;
+
+    private void ClearFilters()
+    {
+        _selectedTypes.Clear();
+        _typeMenuOpen = false;
+        _statusFilter = "";
+        _directionFilter = "";
+        _excludeMined = false;
+        _excludeImmature = false;
+        _feePaidOnly = false;
+        _amtMin = null;
+        _amtMax = null;
+        _feeMin = null;
+        _feeMax = null;
+        _dateFrom = null;
+        _dateTo = null;
+        _search = "";
+        ApplyFilters();
+    }
+
+    private void SetDatePreset(string preset)
+    {
+        var today = DateTime.Today;
+        _dateTo = today;
+        _dateFrom = preset switch
+        {
+            "today" => today,
+            "7d"    => today.AddDays(-6),
+            "30d"   => today.AddDays(-29),
+            "year"  => new DateTime(today.Year, 1, 1),
+            _       => _dateFrom,
+        };
+        ApplyFilters();
+    }
+
+    private void SortBy(SortCol col)
+    {
+        if (_sortCol == col) _sortDesc = !_sortDesc;   // same column -> flip direction
+        else { _sortCol = col; _sortDesc = true; }     // new column -> default descending
+        ApplyFilters();
+    }
+
+    // Active column shows its direction (▼ desc / ▲ asc); other sortable columns
+    // show a dimmed ▼ (CSS fades it) so it's clear they're toggleable too.
+    private string SortArrow(SortCol col) => _sortCol == col ? (_sortDesc ? "▼" : "▲") : "▼";
+    private string SortClass(SortCol col) => _sortCol == col ? "sorted" : "";
+
+    private static string FormatTime(long unix) =>
+        unix == 0 ? "" : DateTimeOffset.FromUnixTimeSeconds(unix).LocalDateTime.ToString("yyyy-MM-dd HH:mm");
+
+    private async Task OpenExplorerAsync(string path)
+    {
+        if (string.IsNullOrWhiteSpace(_explorerUrl)) return;
+        var url = _explorerUrl.TrimEnd('/') + "/" + path;
+        try { await Browser.Default.OpenAsync(url, BrowserLaunchMode.SystemPreferred); }
+        catch { /* ignore */ }
+    }
+}

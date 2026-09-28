@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Desktop-only export features (CSV/JSON/XLSX/PDF) split out of BlazecoinWallet.Core
+       so the mobile heads stop carrying QuestPDF + ClosedXML (APK bloat + Android-16
+       16KB-page-size warnings from QuestPDF's native libs). The INTERFACE
+       (ITransactionExportService + ExportTable) stays in Core; only this implementation
+       and its heavy dependencies live here. Referenced by the desktop app head, never by
+       the Lite/Droid projects. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazecoinWallet.Core.Services.Export</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
+    <PackageReference Include="QuestPDF" Version="2026.5.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlazecoinWallet.Core\BlazecoinWallet.Core.csproj" />
+  </ItemGroup>
+
+</Project>

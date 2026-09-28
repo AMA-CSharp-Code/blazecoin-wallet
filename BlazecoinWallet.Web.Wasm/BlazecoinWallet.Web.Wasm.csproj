@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <!-- The WEB head of the lite wallet — Blazor WebAssembly, so every page and all of
+       Lite.Core (keys, signing, the C1/M3 verifier) run INSIDE the browser and keys
+       never leave it. This is the production-shaped successor to Web.DevHost, whose
+       Blazor Server circuit executes server-side and therefore must never front real
+       coins (SOLID_AUDIT security round 2). STEP-1 SCAFFOLD: session-only in-memory
+       vault (a refresh forgets the wallet) — the encrypted WebCrypto vault is the
+       step-3 work before this head ever holds real value. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazecoinWallet.Web.Wasm</RootNamespace>
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <!-- AOT is what makes the trustless header-chain sync viable in a browser:
+         measured 2026-08-03 on /perf, scrypt(1024,1,1) is ~56 ms/header interpreted
+         vs ~0.6 ms/header AOT (93×) — a 250-header batch drops from a 14 s tab freeze
+         to 0.15 s. Costs bundle size (6.9 → 19.3 MB brotli, cached after first load)
+         and slow publishes (LLVM); dev-server runs stay interpreted, which is why
+         Program.cs keeps header sync off in Development. Needs the wasm-tools
+         workload installed to publish. -->
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <!-- Required by the [JSImport] source generator (SYSLIB1074) — the generated
+         marshalling stubs are unsafe; no hand-written unsafe code exists here. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- /perf is a DEV-ONLY diagnostic (the scrypt ms/header benchmark behind the AOT
+       decision). It is stripped from Release so the shipped bundle carries no benchmark
+       page: the .razor is removed from the compile in Release, so the route, the page
+       class and its BouncyCastle call site never reach the published assembly. Dev-server
+       (Debug) runs keep it. -->
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <Content Remove="Pages\Perf.razor" />
+    <None Include="Pages\Perf.razor" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlazecoinWallet.Lite.Core\BlazecoinWallet.Lite.Core.csproj" />
+    <ProjectReference Include="..\BlazecoinWallet.Lite.UI\BlazecoinWallet.Lite.UI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.10" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.10" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

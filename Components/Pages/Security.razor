@@ -1,0 +1,256 @@
+@page "/security"
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.Settings
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject ISettingsService Settings
+@inject IJSRuntime JS
+
+<PageTitle>Security - Blazecoin Wallet V2.0</PageTitle>
+
+@* Ken Burns pan/zoom grid background, painted by initSecurityBackground. *@
+<div class="security-bg" id="securityTileBg"></div>
+
+<div class="wallet-page">
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                @* Scramble header flanked by crimson SVG keys, each with a white
+                   beam (key-trace dash) tracing around the key's outline. The keys
+                   are siblings of the scramble target so they stay static. *@
+                @{
+                    const string keyOuter = "M0 8a4 4 0 0 1 7.465-2H14a.5.5 0 0 1 .354.146l1.5 1.5a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0L13 9.207l-.646.647a.5.5 0 0 1-.708 0L11 9.207l-.646.647a.5.5 0 0 1-.708 0L9 9.207l-.646.647A.5.5 0 0 1 8 10h-.535A4 4 0 0 1 0 8";
+                    const string keyHole = "M4 5a1 1 0 1 0 0 2 1 1 0 0 0 0-2";
+                }
+                <h1 class="banner-title" aria-label="Security">
+                    <svg class="key-svg" viewBox="0 0 16 16" aria-hidden="true"><path class="key-body" fill-rule="evenodd" d="@(keyOuter + keyHole)" /><path class="key-trace" pathLength="100" d="@keyOuter" /></svg><span id="securityScrambleTitle">Security</span><svg class="key-svg" viewBox="0 0 16 16" aria-hidden="true"><path class="key-body" fill-rule="evenodd" d="@(keyOuter + keyHole)" /><path class="key-trace" pathLength="100" d="@keyOuter" /></svg>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger">@_loadError</div>
+    }
+    else
+    {
+        <div class="sec-status @StatusClass">
+            <span class="sec-dot"></span>
+            <span>@StatusText</span>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_msg)) { <div class="alert alert-success">@_msg</div> }
+        @if (!string.IsNullOrEmpty(_err)) { <div class="alert alert-danger">@_err</div> }
+
+        @if (!IsEncrypted)
+        {
+            <section class="sec-section sec-encrypt">
+                <div class="sec-header"><span>Encrypt Wallet</span></div>
+                <div class="sec-body">
+                    <p class="sec-hint">
+                        Set a passphrase to encrypt <code>wallet.dat</code>. You'll need it to send
+                        coins. <strong>There is no recovery if you forget it.</strong> Make a fresh
+                        backup afterwards — encrypting replaces the keypool.
+                    </p>
+                    <input type="password" class="sec-input" placeholder="Passphrase" @bind="_encPass" />
+                    <input type="password" class="sec-input" placeholder="Confirm passphrase" @bind="_encConfirm" />
+                    <button class="btn btn-primary enc-btn" @onclick="EncryptAsync" disabled="@_busy">Encrypt Wallet</button>
+                </div>
+            </section>
+        }
+        else
+        {
+            <section class="sec-section sec-unlock">
+                <div class="sec-header"><span>@(IsUnlocked ? "Lock Wallet" : "Unlock Wallet")</span></div>
+                <div class="sec-body">
+                    @if (IsUnlocked)
+                    {
+                        <p class="sec-hint">The wallet is unlocked. It re-locks automatically after the auto-lock timeout, or lock it now:</p>
+                        <button class="btn btn-secondary" @onclick="LockAsync" disabled="@_busy">Lock now</button>
+                    }
+                    else
+                    {
+                        <p class="sec-hint">Unlock to send coins. It re-locks automatically after the auto-lock timeout below.</p>
+                        <input type="password" class="sec-input" placeholder="Passphrase" @bind="_unlockPass" @onkeydown="OnUnlockKey" />
+                        <button class="btn btn-primary sec-bordered" @onclick="UnlockAsync" disabled="@_busy">Unlock</button>
+                    }
+                </div>
+            </section>
+
+            <section class="sec-section sec-change">
+                <div class="sec-header"><span>Change Passphrase</span></div>
+                <div class="sec-body">
+                    <input type="password" class="sec-input" placeholder="Current passphrase" @bind="_oldPass" />
+                    <input type="password" class="sec-input" placeholder="New passphrase" @bind="_newPass" />
+                    <input type="password" class="sec-input" placeholder="Confirm new passphrase" @bind="_newConfirm" />
+                    <button class="btn btn-primary sec-bordered" @onclick="ChangeAsync" disabled="@_busy">Change Passphrase</button>
+                </div>
+            </section>
+        }
+
+        <section class="sec-section">
+            <div class="sec-header"><span>Auto-Lock Timeout</span></div>
+            <div class="sec-body">
+                <p class="sec-hint">How long the wallet stays unlocked after you enter your passphrase.</p>
+                <div class="opt-row">
+                    @foreach (var opt in _lockOptions)
+                    {
+                        <button class="opt-btn @(opt.Secs == _autoLockSecs ? "active" : "")"
+                                @onclick="@(() => SetAutoLockAsync(opt.Secs))">@opt.Label</button>
+                    }
+                </div>
+            </div>
+        </section>
+    }
+    }
+</div>
+
+@code {
+    private WalletInfo? _info;
+    private string? _loadError;
+    private string? _msg;
+    private string? _err;
+    private bool _busy;
+
+    private string _encPass = "", _encConfirm = "";
+    private string _oldPass = "", _newPass = "", _newConfirm = "";
+    private string _unlockPass = "";
+
+    private record LockOption(int Secs, string Label);
+    private static readonly LockOption[] _lockOptions =
+    {
+        new LockOption(60, "1 min"),
+        new LockOption(300, "5 min"),
+        new LockOption(600, "10 min"),
+        new LockOption(3600, "1 hour"),
+    };
+    private int _autoLockSecs = 300;
+
+    private bool IsEncrypted => _info?.UnlockedUntil is not null;
+    private bool IsUnlocked => (_info?.UnlockedUntil ?? 0) > 0;
+
+    private string StatusClass => !IsEncrypted ? "warn" : (IsUnlocked ? "open" : "locked");
+    // MarkupString so the locked state can emphasise its hyphen via a styled span.
+    // All branches are static/controlled text (no user input → no XSS risk).
+    private MarkupString StatusText => (MarkupString)(!IsEncrypted
+        ? "WALLET IS NOT ENCRYPTED"
+        : IsUnlocked
+            ? $"Encrypted — unlocked until {DateTimeOffset.FromUnixTimeSeconds(_info!.UnlockedUntil!.Value).LocalDateTime:HH:mm:ss}"
+            : "ENCRYPTED <span class=\"sec-dash\">-</span> LOCKED");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connError = await RpcService.CheckConnectionAsync();
+        if (_connError == null) { await LoadAsync(); }
+        StateHasChanged();
+    }
+
+    protected override Task OnDaemonReconnectedAsync() => LoadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                if (await Settings.GetAutoLockSecsAsync() is int n) { _autoLockSecs = n; StateHasChanged(); }
+            }
+            catch { /* default 300 */ }
+            await JS.InvokeVoidAsync("initScrambleTitle", "#securityScrambleTitle", "Security", 150, null, 5000);
+
+            try
+            {
+                // Paint the Ken Burns pan/zoom grid background. Idempotent.
+                await JS.InvokeVoidAsync("initSecurityBackground");
+            }
+            catch { /* WebView not ready — background just won't appear */ }
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        try { _info = await RpcService.GetWalletInfoAsync(); _loadError = null; }
+        catch (Exception ex) { _loadError = $"Couldn't read wallet status: {ex.Message}"; }
+    }
+
+    private async Task EncryptAsync()
+    {
+        _msg = _err = null;
+        if (string.IsNullOrEmpty(_encPass)) { _err = "Enter a passphrase."; return; }
+        if (_encPass != _encConfirm) { _err = "Passphrases don't match."; return; }
+        _busy = true; StateHasChanged();
+        try
+        {
+            var result = await RpcService.EncryptWalletAsync(_encPass);
+            _msg = string.IsNullOrWhiteSpace(result)
+                ? "Wallet encrypted. Make a fresh backup now."
+                : result.Replace("wallet encrypted;", "WALLET ENCRYPTED;");
+            _encPass = _encConfirm = "";
+            await LoadAsync();
+        }
+        catch (RpcException rex) { _err = $"Encrypt failed (code {rex.Code}): {rex.Message}"; }
+        catch (Exception ex) { _err = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task UnlockAsync()
+    {
+        _msg = _err = null;
+        if (string.IsNullOrEmpty(_unlockPass)) { _err = "Enter your passphrase."; return; }
+        _busy = true; StateHasChanged();
+        try
+        {
+            await RpcService.UnlockWalletAsync(_unlockPass, _autoLockSecs);
+            _unlockPass = "";
+            _msg = $"Unlocked for {_autoLockSecs / 60} min.";
+            await LoadAsync();
+        }
+        catch (RpcException rex) { _err = rex.Code == -14 ? "Incorrect passphrase." : $"Unlock failed: {rex.Message}"; }
+        catch (Exception ex) { _err = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task LockAsync()
+    {
+        _msg = _err = null;
+        _busy = true; StateHasChanged();
+        try { await RpcService.LockWalletAsync(); _msg = "Wallet locked."; await LoadAsync(); }
+        catch (Exception ex) { _err = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task ChangeAsync()
+    {
+        _msg = _err = null;
+        if (string.IsNullOrEmpty(_oldPass) || string.IsNullOrEmpty(_newPass)) { _err = "Fill in both passphrases."; return; }
+        if (_newPass != _newConfirm) { _err = "New passphrases don't match."; return; }
+        _busy = true; StateHasChanged();
+        try
+        {
+            await RpcService.ChangeWalletPassphraseAsync(_oldPass, _newPass);
+            _oldPass = _newPass = _newConfirm = "";
+            _msg = "Passphrase changed.";
+        }
+        catch (RpcException rex) { _err = rex.Code == -14 ? "Current passphrase is incorrect." : $"Change failed: {rex.Message}"; }
+        catch (Exception ex) { _err = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task SetAutoLockAsync(int secs)
+    {
+        _autoLockSecs = secs;
+        await Settings.SetAutoLockSecsAsync(secs);
+    }
+
+    private async Task OnUnlockKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await UnlockAsync();
+    }
+}

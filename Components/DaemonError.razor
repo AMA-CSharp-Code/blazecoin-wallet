@@ -1,0 +1,31 @@
+@* Shared "daemon unreachable" panel. Daemon-dependent pages render this (in place
+   of their live content) when the RPC connection check fails, so the user always
+   gets the same clear offline state + a Retry — instead of blank data, a silent
+   failure, or being able to trigger actions (send, export) that can't work. *@
+<div class="card daemon-error-card">
+    <div class="status-header"><span>@Title</span></div>
+    <div class="card-body daemon-error-body">
+        <div class="daemon-error-icon">⚠️</div>
+        <p class="daemon-error-msg">@Message</p>
+        @if (OnRetry.HasDelegate)
+        {
+            <button class="btn btn-primary daemon-error-retry" @onclick="OnRetry" disabled="@Busy">
+                @(Busy ? "Retrying…" : "Retry")
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Header bar text. Defaults to "Connection Error".</summary>
+    [Parameter] public string Title { get; set; } = "Connection Error";
+
+    /// <summary>The error message to show (typically from CheckConnectionAsync()).</summary>
+    [Parameter] public string? Message { get; set; }
+
+    /// <summary>Invoked when the user clicks Retry. Omit to hide the button.</summary>
+    [Parameter] public EventCallback OnRetry { get; set; }
+
+    /// <summary>Disables the Retry button and shows "Retrying…" while a retry runs.</summary>
+    [Parameter] public bool Busy { get; set; }
+}
