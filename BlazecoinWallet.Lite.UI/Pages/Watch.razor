@@ -1,0 +1,113 @@
+@page "/watch"
+@layout LiteLayout
+@inject IWatchList Watches
+@inject BlazecoinWallet.Lite.Data.IChainReader Reader
+@inject IUnitSettings Units
+@inject NavigationManager Nav
+@using BlazecoinWallet.Lite.Data
+
+@* Watch-only: monitor a balance with NO keys on the device — a single address (cold
+   storage, a friend's), or a whole account by pasting its xpub (gap-scanned). Read-only. *@
+<div class="lite-card">
+    <h2>Watch an Address</h2>
+    <p class="lite-sub">Track a balance without holding its keys — a single address, or a whole
+        account by pasting its <strong>xpub</strong>. Look-only; nothing here can spend.</p>
+    <label class="lite-sub">Label</label>
+    <input class="lite-input" placeholder="e.g. Cold storage" @bind="_label" />
+    <label class="lite-sub">Address or xpub</label>
+    <input class="lite-input" placeholder="B… or xpub…" @bind="_value" />
+    <button class="lite-btn" @onclick="AddAsync">👁️ Watch</button>
+    @if (_error != null) { <div class="lite-error">@_error</div> }
+</div>
+
+@if (_rows.Count > 0)
+{
+    <div class="lite-card">
+        <h2>Watched</h2>
+        <ul class="lite-history">
+            @foreach (var r in _rows)
+            {
+                <li>
+                    <span>
+                        <strong>@r.Entry.Label</strong>@if (r.Entry.IsXpub) { <span class="lite-sub"> · xpub</span> }<br />
+                        <span class="lite-txid">@Short(r.Entry.Address)</span>
+                    </span>
+                    <span style="text-align:right">
+                        <span class="in">@AmountText(r.Balance) @_sym</span><br />
+                        <button class="lite-btn lite-btn-ghost" style="width:auto;padding:2px 8px;font-size:.8rem"
+                                @onclick="() => RemoveAsync(r.Entry.Address)">Remove</button>
+                    </span>
+                </li>
+            }
+        </ul>
+    </div>
+}
+
+<button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("settings"))">← Back to Settings</button>
+
+@code {
+    private const int XpubGapLimit = 20;
+
+    private sealed record Row(WatchEntry Entry, long Balance);
+
+    private string _label = string.Empty;
+    private string _value = string.Empty;
+    private string? _error;
+    private List<Row> _rows = [];
+    private string _sym => LiteUnits.Symbol(Units.Unit);
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task AddAsync()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_label)) { _error = "Give it a label."; return; }
+
+        if (WatchXpub.IsXpub(_value))
+            Watches.Add(_label, _value, kind: "xpub");
+        else if (BlazecoinAddress.IsValid(_value))
+            Watches.Add(_label, _value);
+        else { _error = "That's not a valid Blazecoin address or xpub."; return; }
+
+        _label = _value = string.Empty;
+        await RefreshAsync();
+    }
+
+    private async Task RemoveAsync(string address)
+    {
+        Watches.Remove(address);
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        var rows = new List<Row>();
+        foreach (var e in Watches.Entries)
+            rows.Add(new Row(e, e.IsXpub ? await XpubBalanceAsync(e.Address) : await AddressBalanceAsync(e.Address)));
+        _rows = rows;
+    }
+
+    private async Task<long> AddressBalanceAsync(string address)
+        => (await Reader.GetAddressAsync(address))?.Balance ?? 0;
+
+    /// <summary>Sum the external-chain balances derived from an xpub, gap-scanning (stop after
+    /// 20 consecutive addresses with no activity) — the same discipline as wallet restore.</summary>
+    private async Task<long> XpubBalanceAsync(string xpub)
+    {
+        long total = 0;
+        var unused = 0;
+        var index = 0;
+        while (unused < XpubGapLimit && index < 1000)
+        {
+            var addr = WatchXpub.ExternalAddresses(xpub, index + 1).Last();
+            var s = await Reader.GetAddressAsync(addr);
+            if (s is { TxCount: > 0 }) { total += s.Balance; unused = 0; }
+            else unused++;
+            index++;
+        }
+        return total;
+    }
+
+    private string AmountText(long sats) => LiteUnits.Format(sats, Units.Unit);
+    private static string Short(string s) => s.Length <= 18 ? s : $"{s[..9]}…{s[^7..]}";
+}
