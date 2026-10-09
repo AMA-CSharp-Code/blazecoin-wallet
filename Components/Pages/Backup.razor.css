@@ -1,0 +1,287 @@
+/* =========================================================================
+   Backup background — diagonal-drift tile grid. Like the Transactions diagonal
+   scroll (tiled grid 2x the viewport whose pattern repeats every viewport
+   block, translating by exactly one block so the wrap is seamless), but drifts
+   NORTHEAST (right & up) where Transactions drifts SE, with larger tiles
+   (5 cols vs Transactions' 6). The .bk-diag-grid + .bk-cell + img
+   children are created by initBackupBackground in mining-background.js (need
+   ::deep); the keyframe is local (scoped @keyframes don't cross components).
+   Grid tracks and the per-loop shift (--bk-diag-x/y) are set inline from JS.
+   ========================================================================= */
+.backup-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: #000;
+}
+
+.backup-bg ::deep .bk-diag-grid {
+    display: grid;
+    width: max-content;
+    will-change: transform;
+    animation: bkDiagNE 60s linear infinite;
+}
+
+.backup-bg ::deep .bk-cell {
+    overflow: hidden;
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.backup-bg ::deep .bk-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    animation: bkPulse 6s ease-in-out infinite;  /* per-tile breathing */
+}
+
+/* @keyframes bkDiagNE and bkPulse are defined globally in wallet.css so the
+   .skin-backup dashboard skin shares them with the page (same as secKenBurns). */
+
+/* =========================================================================
+   Vault scanner beam — a wide gold diagonal beam continually sweeping across
+   the page above the tile grid. The beam is a single gradient strip rotated
+   ~20° and translated across the viewport on an 11s linear loop. screen blend
+   so it brightens the imagery beneath it rather than tinting black. Sits at
+   z-index 0 like .backup-bg but is later in DOM, so it stacks above the grid;
+   .wallet-page (z-index 1) sits above both.
+   ========================================================================= */
+.bk-scanner {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.bk-scanner::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: 0;
+    width: 28%;
+    height: 200%;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 193, 7, 0.00) 0%,
+        rgba(255, 193, 7, 0.18) 35%,
+        rgba(255, 215, 130, 0.55) 48%,
+        rgba(255, 240, 200, 0.90) 50%,    /* bright core */
+        rgba(255, 215, 130, 0.55) 52%,
+        rgba(255, 193, 7, 0.18) 65%,
+        rgba(255, 193, 7, 0.00) 100%
+    );
+    transform-origin: center center;
+    animation: bkScan 16s linear infinite;
+    /* No blend mode or filter: screen-blending a full-height strip and re-blurring it every
+       frame ran as a software convolution in WebKit's GPU process on Intel Macs (2026-09-24);
+       the gradient's transparent edges already read as a soft glow. */
+    will-change: transform;
+}
+
+/* @keyframes bkScan is defined globally in wallet.css so the .skin-backup
+   dashboard variant (::after) shares it with the page. */
+
+/* Transparent wrapper (like the Preferences / Import pages) — the .send-form
+   container below now carries the dark panel + border that keeps content
+   readable above the moving grid + scanner beam. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* Main header — nested red→black two-container chrome copied from the
+   Dashboard / Import title banner: outer dark-red box and inner black box,
+   each with a 2px white border and square corners. */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+
+.banner-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5rem;               /* space between the flanking folder icons and the title text */
+    margin: 0;
+    padding: 12px 0;
+    color: white;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    font-weight: 500;
+    perspective: 800px;      /* 3D depth for the folder icons' rotateY flip */
+    /* The whole title row (floppies + text) rises up from below into place and
+       loops together as one. It fades out at the end so the reset back below is
+       invisible — a clean looping entrance. */
+    animation: groupRise 8s ease-in-out infinite;
+    will-change: transform, opacity;
+}
+
+@keyframes groupRise {
+    0%   { transform: translateY(60px); opacity: 0; }   /* below the header, hidden */
+    45%  { transform: translateY(0);    opacity: 1; }   /* slow rise into place (~3.6s) */
+    86%  { transform: translateY(0);    opacity: 1; }   /* hold in place */
+    100% { transform: translateY(0);    opacity: 0; }   /* fade out; loop snaps back below */
+}
+
+/* Floppy-disk emojis flanking the title. Color emoji renders in its own colours
+   (CSS color is ignored), so size it with font-size. They no longer float on
+   their own — they ride the title row's groupRise with the text. */
+.banner-icon {
+    font-size: 1.6rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+/* Square the foreground panel, inputs, buttons and alert boxes (matching the
+   square chrome on Mining / Console / Address Book). The animated background
+   tiles keep their soft corners. */
+.wallet-page .btn,
+.wallet-page .form-control,
+.wallet-page .alert,
+.wallet-page .address-box,
+.wallet-page input,
+.wallet-page select {
+    border-radius: 0;
+}
+
+/* Container styled like a Preferences section: full content width, dark
+   translucent fill, 2px white border, square corners. Scoped, so the Send
+   page's .send-form is unaffected. */
+.send-form {
+    max-width: none;
+    border-radius: 0;
+    text-align: left;
+    background-color: rgba(0, 0, 0, 0.65);
+    border: 2px solid white;
+    padding: 1.5rem;
+    overflow: hidden;          /* clip the edge-to-edge black header bar to the square corners */
+}
+
+/* The animated tile grid + gold scanner beam behind the form shows through the
+   nearly-transparent global .form-control fill (rgba(255,255,255,0.1)), washing
+   out the white input text as you type. Give the Backup fields a solid dark fill
+   so typing stays legible against the moving background. */
+.send-form .form-control {
+    background: rgba(12, 12, 12, 0.92);
+}
+
+.send-form .form-control:focus {
+    background: rgba(12, 12, 12, 0.96);
+}
+
+/* Destination path + Browse button on one row; the input flexes, the button
+   hugs its label. */
+.bk-dest-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+}
+
+.bk-dest-row .form-control {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.bk-browse {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    background: #9E000F;
+    color: #fff;
+    border: 1px solid #fff;
+}
+
+.bk-browse:hover:not(:disabled) {
+    background: #c40615;
+}
+
+/* Save Backup action button — solid top-nav-bar red (#9E000F, see
+   NavMenu.razor.css .topnav) with a 1px white border. No gradient. */
+.bk-btn {
+    background: #9E000F;
+    color: #fff;
+    border: 1px solid #fff;
+}
+
+.bk-btn:hover:not(:disabled) {
+    background: #c40615;
+}
+
+/* Green success tick in the "Backup Complete" header bar. */
+.send-form h2 .tick {
+    color: #06d6a0;
+    margin-right: 0.4rem;
+}
+
+/* Success container: no black header bar — centre all text and colour the
+   "Backup Complete" heading the same green as the tick. The .send-form
+   prefix raises specificity above the generic ".send-form h2" black-bar rule
+   below (equal specificity would otherwise lose on source order). */
+.send-form.backup-success {
+    text-align: center;
+}
+
+.send-form.backup-success h2 {
+    background-color: transparent;
+    color: #06d6a0;
+    height: auto;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    justify-content: center;
+    text-transform: none;
+    font-size: 1.8rem;
+}
+
+/* Scale the tick up with the heading. */
+.send-form.backup-success h2 .tick {
+    font-size: 2.2rem;
+}
+
+/* Override the global ".form-help { text-align: left }" so the saved-path line
+   centres with the rest of the success container. */
+.send-form.backup-success .form-help {
+    text-align: center;
+}
+
+/* Let the saved-path wrap so it can never be clipped by the container's
+   overflow:hidden on a narrow window. */
+.send-form .form-help code {
+    word-break: break-all;
+}
+
+/* Edge-to-edge black header bar at the top of the container, matching the
+   Preferences/Dashboard headers. Negative margins break the bar out of the
+   container's 1.5rem padding; capitalize each header word. */
+.send-form h2 {
+    background-color: #000;
+    color: #fff;
+    font-size: 11pt;
+    font-weight: 600;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    margin: -1.5rem -1.5rem 1.5rem;
+    padding: 0 13px;
+    text-transform: capitalize;
+}

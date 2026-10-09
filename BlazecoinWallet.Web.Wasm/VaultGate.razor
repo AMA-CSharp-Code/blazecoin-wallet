@@ -1,0 +1,193 @@
+@using Microsoft.AspNetCore.Components.Routing
+@inject BrowserEncryptedSeedVault Vault
+@inject BrowserIdleLock IdleLock
+@inject NavigationManager Nav
+@implements IDisposable
+
+@* The root-level vault ceremony for the web head. While an encrypted wallet exists and
+   nothing is unlocked, NOTHING else renders — pages can never observe a locked vault.
+   After a create/restore puts a seed in memory, this offers to set the wallet password
+   (deferred off /setup so it doesn't interrupt the write-down/quiz ceremony); declining
+   is an explicit, honestly-worded session-only choice. *@
+
+@if (_locked)
+{
+    <div class="lite-modal">
+        <div class="lite-modal-card">
+            <h2>🔒 Unlock Wallet</h2>
+            <p class="lite-sub">@(_relocked
+                ? "The wallet locked itself (inactivity or the lock button). Enter the wallet password to continue."
+                : "This browser holds an encrypted Blazecoin wallet. Enter its wallet password to open it.")</p>
+            <input class="lite-input" type="password" placeholder="Wallet password"
+                   @bind="_password" @bind:event="oninput" />
+            <button class="lite-btn" @onclick="UnlockAsync" disabled="@_busy">
+                @(_busy ? "Unlocking…" : "Unlock")
+            </button>
+            @if (_error != null)
+            {
+                <div class="lite-error">@_error</div>
+            }
+            <p class="lite-sub" style="margin-top:14px">Forgot the password? The wallet
+                can only be recovered from its 12-word phrase.</p>
+            <button class="lite-btn lite-btn-ghost" @onclick="ForgetAsync">
+                Forget this wallet — I'll restore from my recovery phrase
+            </button>
+        </div>
+    </div>
+}
+else
+{
+    @ChildContent
+
+    @if (_evictionWarning)
+    {
+        @* The browser declined persistent storage: the encrypted wallet CAN be evicted
+           with other site data. Not fatal — the phrase restores anywhere — but the
+           user must hear it from us, not discover it. *@
+        <div class="lite-modal">
+            <div class="lite-modal-card">
+                <h2>⚠️ Saved — with a caveat</h2>
+                <p class="lite-sub" style="color:#ffb347">This browser declined permanent
+                    storage for this site, so it may evict site data under storage
+                    pressure — which would delete the encrypted wallet from this
+                    browser.</p>
+                <p class="lite-sub">Your funds are never at risk from that: the 12-word
+                    recovery phrase restores this wallet anywhere. Just make sure it is
+                    written down and safe.</p>
+                <button class="lite-btn" @onclick="() => _evictionWarning = false">Understood</button>
+            </div>
+        </div>
+    }
+    else if (_offerProtection && !OnSetupRoute)
+    {
+        <div class="lite-modal">
+            <div class="lite-modal-card">
+                <h2>🛡️ Protect This Wallet</h2>
+                <p class="lite-sub">Set a wallet password and this browser will remember
+                    the wallet, encrypted with it. Without one, closing the tab forgets
+                    the wallet — only the recovery phrase brings it back. There is no
+                    password reset: forgetting it means restoring from the phrase.</p>
+                <input class="lite-input" type="password" placeholder="Wallet password (8+ characters)"
+                       @bind="_password" @bind:event="oninput" />
+                <input class="lite-input" type="password" placeholder="Confirm password"
+                       @bind="_confirm" @bind:event="oninput" />
+                <button class="lite-btn" @onclick="ProtectAsync" disabled="@_busy">
+                    @(_busy ? "Encrypting…" : "🛡️ Encrypt & remember this wallet")
+                </button>
+                @if (_error != null)
+                {
+                    <div class="lite-error">@_error</div>
+                }
+                <button class="lite-btn lite-btn-ghost" @onclick="StaySessionOnly">
+                    Not now — keep this session only
+                </button>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool _locked;
+    private bool _relocked;          // this lock came from idle/manual relock, not a cold load
+    private bool _hasBeenOpen;       // the app has rendered unlocked at least once this page-load
+    private bool _offerProtection;
+    private bool _evictionWarning;
+    private bool _busy;
+    private string _password = string.Empty;
+    private string _confirm = string.Empty;
+    private string? _error;
+
+    private bool OnSetupRoute =>
+        new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').EndsWith("/setup", StringComparison.OrdinalIgnoreCase)
+        || new Uri(Nav.Uri).AbsolutePath.TrimEnd('/') == "/setup";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Vault.StateChanged += OnVaultChanged;
+        Nav.LocationChanged += OnLocationChanged;
+        IdleLock.IdleLocked += OnRelocked;
+        await EvaluateAsync();
+        IdleLock.Start();   // idle auto-lock poll (no-op while locked / when the policy is 0)
+    }
+
+    private void OnRelocked() => _relocked = true;
+
+    public void Dispose()
+    {
+        Vault.StateChanged -= OnVaultChanged;
+        Nav.LocationChanged -= OnLocationChanged;
+        IdleLock.IdleLocked -= OnRelocked;
+    }
+
+    private void OnVaultChanged() => _ = InvokeAsync(EvaluateAsync);
+
+    // The protect offer is deferred while the setup ceremony runs; re-evaluate when the
+    // user navigates away from it (typically to Home).
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => _ = InvokeAsync(EvaluateAsync);
+
+    private async Task EvaluateAsync()
+    {
+        var wasLocked = _locked;
+        _locked = await Vault.IsLockedAsync();
+        // Unlocked → locked inside one page lifetime = a re-lock (manual 🔒 or idle), not a cold
+        // load: word the prompt accordingly (the IdleLocked hook covers the idle case too).
+        if (_locked && !wasLocked && _hasBeenOpen) _relocked = true;
+        if (!_locked) _hasBeenOpen = true;
+        _offerProtection = !_locked && await Vault.NeedsProtectionAsync();
+        StateHasChanged();
+    }
+
+    private async Task UnlockAsync()
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            if (!await Vault.UnlockWithPasswordAsync(_password))
+            {
+                _error = "Wrong password — nothing was decrypted.";
+                return;
+            }
+            _password = string.Empty;
+            _relocked = false;
+            // Re-ask silently: an origin that lost (or never got) the persistence grant
+            // can gain it as engagement grows; already-granted resolves true instantly.
+            _ = Vault.RequestPersistenceAsync();
+            await EvaluateAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ProtectAsync()
+    {
+        _error = null;
+        if (_password.Length < 8) { _error = "Use at least 8 characters."; return; }
+        if (_password != _confirm) { _error = "The passwords don't match."; return; }
+        _busy = true;
+        try
+        {
+            await Vault.ProtectWithPasswordAsync(_password);
+            _password = _confirm = string.Empty;
+            // The blob now exists — ask the browser not to evict it. Declined is
+            // survivable (the phrase restores anywhere) but must be said out loud.
+            _evictionWarning = !await Vault.RequestPersistenceAsync();
+            await EvaluateAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private void StaySessionOnly()
+    {
+        Vault.KeepSessionOnly();
+        _offerProtection = false;
+    }
+
+    private async Task ForgetAsync()
+    {
+        await Vault.ClearAsync();
+        await EvaluateAsync();
+        Nav.NavigateTo("setup");
+    }
+}

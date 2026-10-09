@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <title>Blazecoin Wallet (dev host)</title>
+    <ResourcePreloader />
+    <!-- The lite wallet's crimson theme ships in the shared Lite.UI library. -->
+    <link rel="stylesheet" href="_content/BlazecoinWallet.Lite.UI/lite.css" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <ImportMap />
+    <HeadOutlet />
+</head>
+
+<body>
+    @* Global interactive-server rendering: the shared Lite.UI pages declare no render
+       mode of their own (they also run under BlazorWebView on the phone, which has no
+       such concept), so the host decides. *@
+    <Routes @rendermode="InteractiveServer" />
+    <ReconnectModal />
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+
+    @* Dev-host self-heal: the framework's reconnect UI, once it reaches the "failed" state,
+       only retries on tab-visibility change or a manual Retry click — so restarting the dev
+       host (to run a build) leaves an already-visible tab stuck on "Failed to rejoin". Poll
+       for the server in the background and hard-reload the instant it's back, so a restarted
+       dev host reconnects seamlessly with no click. Dev-only (this project is the dev host). *@
+    <script>
+        (function () {
+            const modal = document.getElementById('components-reconnect-modal');
+            if (!modal) return;
+            let timer = null;
+            modal.addEventListener('components-reconnect-state-changed', function (e) {
+                const state = e.detail && e.detail.state;
+                if (state === 'failed' && !timer) {
+                    timer = setInterval(function () {
+                        fetch('/', { method: 'GET', cache: 'no-store' })
+                            .then(function (r) { if (r.ok) { clearInterval(timer); location.reload(); } })
+                            .catch(function () { /* dev host still down — keep polling */ });
+                    }, 1000);
+                } else if (state === 'hide' && timer) {
+                    clearInterval(timer); timer = null;
+                }
+            });
+        })();
+    </script>
+</body>
+
+</html>

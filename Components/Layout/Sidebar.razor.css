@@ -1,0 +1,152 @@
+/* V1.5-style left nav: each item is its own crimson "bar" (a separate rounded
+   rectangle), stacked with visible gaps so the background shows through between
+   them. The .side-bar class is on the NavLink-rendered <a>, so it needs ::deep;
+   the inner spans are this component's own markup and are scoped normally. */
+.wallet-sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 210px;
+    flex-shrink: 0;
+    gap: 1.2rem;          /* the visible gaps between bars */
+    /* No left padding: bars sit flush against the left window edge. Extra top
+       padding drops the bars down, clear of the header. */
+    padding: 5rem 0.75rem 0.75rem 0;
+    /* Transparent: the gaps (and the surround) reveal whatever is behind the
+       sidebar — the dashboard shield skin, or the page background. */
+    background: transparent;
+    /* Sit above the Dashboard skin background (position:fixed; z-index:0), and
+       stay pinned while the page scrolls so the nav bars never slide out of
+       view. sticky (not fixed) keeps the 210px column in normal flow, so
+       main's margin-based centring is preserved. top:3.5rem parks it directly
+       under the sticky .topnav header (which is 3.5rem tall). align-self:
+       flex-start is required: .body-row uses align-items:stretch, and a
+       sidebar stretched to the row's full height has no slack to stick. */
+    position: sticky;
+    top: 3.5rem;
+    align-self: flex-start;
+    z-index: 50;
+}
+
+::deep .side-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.7rem 0.9rem;
+    color: #fff;
+    text-decoration: none;
+    font-size: 0.95rem;
+    border-radius: 0;     /* square corners */
+    position: relative;   /* anchor for the .active marching-ants ::after overlay */
+    /* each bar is its own black rectangle, with a thin crimson outline so it
+       stays visible against the dark background. Mostly opaque, with just a
+       hint of the skin showing through the bars. */
+    background-image: linear-gradient(135deg, rgba(22, 22, 22, 0.8) 0%, rgba(0, 0, 0, 0.8) 100%);
+    border: 1px solid #9E000F;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+    transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+::deep .side-bar:hover {
+    background-image: linear-gradient(135deg, rgba(120, 14, 16, 0.92) 0%, rgba(48, 6, 7, 0.92) 100%);
+    box-shadow: 0 0 10px rgba(158, 0, 15, 0.6);
+}
+
+/* Selected bar: a single bright "comet" of light glides smoothly around the
+   bar's edge (an ::after ring painted by a rotating conic-gradient), plus a soft
+   light-red backlight glow behind the bar. A faint static crimson edge sits
+   under the comet so the outline never looks bare between passes. */
+::deep .side-bar.active {
+    border-color: rgba(158, 0, 15, 0.55);
+    /* Light-red backlight: a soft, wide red halo behind the selected bar. */
+    box-shadow:
+        0 0 12px 2px rgba(255, 90, 90, 0.55),
+        0 0 34px 10px rgba(255, 90, 90, 0.3),
+        0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+::deep .side-bar.active::after {
+    content: "";
+    position: absolute;
+    inset: -1px;          /* sit on the bar's outer edge (over the 1px border) */
+    pointer-events: none;
+    padding: 2px;         /* thickness of the glowing ring */
+    /* a bright white comet head fading through red to a transparent tail,
+       rotated around the bar by the animated --comet-angle. */
+    background: conic-gradient(
+        from var(--comet-angle),
+        #ffffff 0deg,
+        rgba(255, 120, 120, 0.85) 18deg,
+        rgba(255, 70, 70, 0.25) 55deg,
+        transparent 100deg,
+        transparent 360deg
+    );
+    /* clip the gradient to just the padding ring so the glow rides the edge. */
+    -webkit-mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    animation: side-bar-comet 2.4s linear infinite;
+}
+
+/* --comet-angle must be registered as an <angle> so it can be interpolated
+   (a plain custom property would jump, not sweep). */
+@property --comet-angle {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+}
+
+/* one smooth lap of the comet head around the bar's edge per loop. */
+@keyframes side-bar-comet {
+    to { --comet-angle: 360deg; }
+}
+
+.side-ico {
+    width: 1.4rem;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 1.0rem;
+    color: #e02424;
+}
+
+/* Inline line-art icons (address book, console monitor) drawn with
+   stroke="currentColor" so they pick up the .side-ico red and sit a touch
+   larger than the text glyphs to match their visual weight. */
+.side-ico-svg {
+    width: 1.45rem;
+    height: 1.45rem;
+}
+
+/* Transactions icon: two SEPARATE filled triangles, each rotated 45° so they
+   point along opposite diagonals — ▲ up-right in the top-right corner, ▼
+   down-left in the bottom-left corner — with a gap between them so they read as
+   two diagonal arrows (out / in), not a fused diamond. */
+.side-ico-tx {
+    position: relative;
+    display: inline-block;
+    width: 1.4rem;
+    height: 1.15rem;
+    font-size: 0.7rem;
+    line-height: 1;
+}
+.side-ico-tx > span {
+    position: absolute;
+    line-height: 1;
+    transform: rotate(45deg);   /* ▲ → up-right, ▼ → down-left */
+}
+.side-ico-tx > span:first-child {   /* outgoing */
+    top: 0;
+    right: 0.12rem;
+}
+.side-ico-tx > span:last-child {    /* incoming */
+    bottom: 0;
+    left: 0.12rem;
+}
+
+.side-label {
+    white-space: nowrap;
+}
