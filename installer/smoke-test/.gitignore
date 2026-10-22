@@ -1,0 +1,5 @@
+# Generated at runtime by Launch-Sandbox.ps1 / Run-SmokeTest.ps1
+Blazecoin-SmokeTest.wsb
+results/
+*.log
+smoke-result.json

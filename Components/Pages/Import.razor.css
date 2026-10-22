@@ -1,0 +1,335 @@
+/* =========================================================================
+   Import background — three concentric rings of tiles orbiting the viewport
+   centre. Outer ring rotates CW (slow), middle CCW (medium), inner CW (fast).
+   Tiles rotate with their ring (wheel-style) which reads as "data converging".
+   The .im-ring + .im-tile children are created by initImportBackground in
+   mining-background.js (need ::deep); radius and tile size come in as CSS
+   custom properties set inline by JS.
+   ========================================================================= */
+.import-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: #000;
+}
+
+/* Background field — dimmed rows of tiles filling the viewport beneath the
+   rings. Alternate rows scroll left vs. right; each row is one set + an exact
+   clone, translating by precisely one set width, so the loop is seamless
+   (same trick as Mining/DFF). Painted first by JS so it sits beneath the
+   rings in DOM order. */
+.import-bg ::deep .im-field {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    opacity: 0.6;                     /* dimmed so the rings remain the focal point */
+    display: flex;
+    flex-direction: column;
+}
+.import-bg ::deep .im-field-row {
+    display: flex;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+    will-change: transform;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+}
+.import-bg ::deep .im-field-row img {
+    flex-shrink: 0;
+    object-fit: cover;
+    display: block;
+    /* No per-image pulse: ~150 concurrent animations for a 0.8-1.0 flicker under a 0.6 dim
+       cost a style recalc per frame on Intel Macs (2026-09-24). */
+}
+/* @keyframes imFieldScrollLeft / imFieldScrollRight / imFieldPulse are defined
+   globally in wallet.css. The scroll keyframes have to be global because JS
+   sets animationName by plain string (Blazor scoped @keyframes get a suffix
+   JS can't anticipate); the pulse moves with them so the .skin-import variant
+   can reference it too. */
+
+.import-bg ::deep .im-ring {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    transform-origin: center center;
+    will-change: transform;
+}
+.import-bg ::deep .im-ring-outer  { animation: imRingCW  var(--ring-dur, 80s) linear infinite; }
+.import-bg ::deep .im-ring-middle { animation: imRingCCW var(--ring-dur, 60s) linear infinite; }
+.import-bg ::deep .im-ring-inner  { animation: imRingCW  var(--ring-dur, 40s) linear infinite; }
+
+/* Each tile is positioned at the ring's centre, then offset outward by --radius
+   along its --angle. Negative margins centre the tile box on its anchor point
+   so the radius measures from viewport centre to tile centre. */
+.import-bg ::deep .im-tile {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: var(--tile, 120px);
+    height: var(--tile, 120px);
+    margin-left: calc(var(--tile, 120px) / -2);
+    margin-top: calc(var(--tile, 120px) / -2);
+    transform: rotate(var(--angle, 0deg)) translateY(calc(-1 * var(--radius, 200px)));
+    overflow: hidden;
+    border-radius: 8px;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+        0 0 14px rgba(0, 0, 0, 0.5);
+    animation: imTilePulse 7s ease-in-out infinite;
+}
+
+.import-bg ::deep .im-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* @keyframes imRingCW / imRingCCW / imTilePulse are defined globally in
+   wallet.css so the .skin-import dashboard variant shares them with the page. */
+
+/* =========================================================================
+   Sonar pulse — two expanding cyan rings emanating from viewport centre,
+   offset 2s apart so a new pulse begins each ~2s. Reads as "incoming signal".
+   Pure CSS; no JS.
+   ========================================================================= */
+.im-sonar {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.im-sonar::before,
+.im-sonar::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    /* Fixed 50vmax ring scaled 0 -> 5 by the imSonar keyframes (compositor-only; see wallet.css).
+       The glow is rasterised once at this size and scaled by the GPU, so no filter. */
+    width: 50vmax;
+    height: 50vmax;
+    border: 2px solid rgba(160, 230, 255, 1);
+    border-radius: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    /* Three stacked shadows — tight core, medium bloom, wide corona — give
+       the ring a soft glowing body rather than a hairline edge. */
+    box-shadow:
+        0 0 8px  rgba(120, 220, 255, 0.95),
+        0 0 22px rgba( 80, 200, 255, 0.70),
+        0 0 50px rgba( 80, 200, 255, 0.40);
+    animation: imSonar 4s ease-out infinite;
+    will-change: transform, opacity;
+}
+
+.im-sonar::after {
+    animation-delay: 2s;     /* second ring offset so a pulse begins each ~2s */
+}
+
+/* @keyframes imSonar is defined globally in wallet.css so the .skin-import
+   dashboard variant's ::after pseudo can share it with the page's .im-sonar. */
+
+/* Transparent wrapper (like the Preferences page) — the .send-form container
+   below now carries the dark panel + border that keeps content readable above
+   the rotating rings + sonar pulses. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* Main header — nested red→black two-container chrome copied from the
+   Dashboard title banner (Dashboard.razor.css): outer dark-red box and inner
+   black box, each with a 2px white border and square corners. */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+
+.banner-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5rem;               /* space between the flanking folder icons and the title text */
+    margin: 0;
+    padding: 12px 0;
+    color: white;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    font-weight: 500;
+    perspective: 800px;      /* 3D depth for the folder icons' rotateY flip */
+}
+
+/* Red-outlined folder icons flanking the title — same treatment as the
+   Address Book header SVGs: stroked in #d10000 via currentColor with a
+   stroke-draw-in animation (pathLength="100" normalises the dash units). */
+.banner-icon {
+    width: 1.4em;
+    height: 1.4em;
+    color: #d10000;          /* feeds stroke="currentColor" on the SVG */
+    flex-shrink: 0;
+    /* 3D flip on the vertical axis (like the Receive page's coin flip):
+       spins a full 360° quickly, then holds flat for the rest of the cycle. */
+    animation: folderFlip 4s ease-in-out infinite;
+}
+
+@keyframes folderFlip {
+    0%   { transform: rotateY(0deg);   }
+    20%  { transform: rotateY(360deg); }   /* flip in the first ~0.8s */
+    100% { transform: rotateY(360deg); }   /* hold flat for the rest */
+}
+
+/* Title text — warm ember glow that swells and fades over the navy/red base
+   drop shadow. Runs on the SAME 4s period as the folder icons' flip so the two
+   stay in lockstep: the glow stays dim while the folders flip (0–20%, ~0.8s),
+   then swells to its peak while they rest (~50%) and fades back by the loop. */
+.banner-text {
+    animation: emberGlow 4s ease-in-out infinite;
+}
+
+@keyframes emberGlow {
+    0%, 20% {
+        /* folders are mid-flip — glow held dim */
+        text-shadow: 3px 3px navy, 3px 4px red;
+    }
+    55% {
+        /* folders at rest — glow at full swell */
+        text-shadow:
+            3px 3px navy,
+            3px 4px red,
+            0 0 8px rgba(255, 120, 0, 0.9),
+            0 0 18px rgba(255, 60, 0, 0.7),
+            0 0 30px rgba(255, 40, 0, 0.5);
+    }
+    100% {
+        text-shadow: 3px 3px navy, 3px 4px red;
+    }
+}
+
+/* Square the foreground panel, inputs, buttons and alert boxes (matching the
+   square chrome on Mining / Console / Address Book). The animated background
+   tiles and the round sonar rings keep their existing corners. */
+.wallet-page .btn,
+.wallet-page .form-control,
+.wallet-page .alert,
+.wallet-page .address-box,
+.wallet-page input,
+.wallet-page select {
+    border-radius: 0;
+}
+
+/* "Import Wallet" submit button — 2px white border to match the page's square
+   white chrome (.send-form / .file-picker-box). */
+.import-submit {
+    border: 2px solid white;
+}
+
+/* Container styled like a Preferences section: full content width, dark
+   translucent fill, 2px white border, square corners. Scoped, so the Send
+   page's .send-form is unaffected. */
+.send-form {
+    max-width: none;
+    border-radius: 0;
+    text-align: left;
+    background-color: rgba(0, 0, 0, 0.65);
+    border: 2px solid white;
+    padding: 1.5rem;
+    overflow: hidden;          /* clip the edge-to-edge black header bar to the square corners */
+}
+
+/* Sub-container around the "Wallet file" label + "Choose wallet.dat..." button,
+   nested inside the .send-form Import panel. Darker translucent fill + 2px white
+   border + square corners so it reads as a distinct inset panel against the
+   container's own dark fill. The label sits flush at the top; the button row
+   keeps its own spacing below. */
+.file-picker-box {
+    background-color: rgba(0, 0, 0, 0.55);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 1rem;
+}
+
+.file-picker-box label {
+    display: block;
+    margin-bottom: 0.75rem;
+}
+
+/* Edge-to-edge black header bar at the top of the container, matching the
+   Preferences/Dashboard headers (.pref-section h2 / .status-header: solid
+   black, 32px tall, 13px inset, white 11pt 600). Negative margins break the
+   bar out of the container's 1.5rem padding; capitalize each header word. */
+.send-form h2 {
+    background-color: #000;
+    color: #fff;
+    font-size: 11pt;
+    font-weight: 600;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    margin: -1.5rem -1.5rem 1.5rem;
+    padding: 0 13px;
+    text-transform: capitalize;
+}
+
+/* Indeterminate progress shown during a long restore/migrate rescan. No real %
+   is available (a legacy wallet's getwalletinfo errors out mid-scan), so the
+   fill just sweeps left-to-right to signal "still working", paired with the
+   live elapsed-time counter in Import.razor. Brand-red to match the app's
+   action-button standard (#d10000 → #ff4d3a). */
+.import-progress {
+    margin: 1rem 0 0;
+}
+
+.im-progress-bar {
+    position: relative;
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    overflow: hidden;
+}
+
+.im-progress-fill {
+    position: absolute;
+    top: 0;
+    left: -35%;
+    height: 100%;
+    width: 35%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #d10000, #ff4d3a);
+    animation: imProgressSweep 1.4s ease-in-out infinite;
+}
+
+@keyframes imProgressSweep {
+    0%   { left: -35%; }
+    100% { left: 100%; }
+}
+
+.im-progress-msg {
+    margin: 0.5rem 0 0.25rem;
+    font-weight: 600;
+    color: #ff4d3a;
+}

@@ -1,0 +1,250 @@
+@page "/provenance"
+@using System.Globalization
+@layout LiteLayout
+@implements IDisposable
+@inject LiteWalletService Wallet
+@inject IChainReader Data
+@inject NavigationManager Nav
+
+@* Mint ancestry for the lite wallet. The wallet has no node to walk, so the GATEWAY runs
+   the desktop wallet's AncestryTracer over this wallet's coins (one trace per funded
+   address, merged here). Unlike balances (C1/M3-verified) this is trusted display data —
+   a wrong answer can mislabel lineage but can never move funds. *@
+<div class="lite-card">
+    <h2>Provenance</h2>
+    <p class="lite-sub">
+        Every satoshi traces back to the block that minted it. Trace your coins' mint
+        ancestry — by year, by month, and by special vintage block — computed by your
+        gateway with the same tracer the desktop wallet runs on its own node.
+    </p>
+
+    @if (_reader is null)
+    {
+        <p class="lite-sub">
+            Not available in personal-node mode — but your node can run the desktop
+            wallet's Provenance page, which traces locally and trustlessly.
+        </p>
+    }
+    else
+    {
+        <button class="lite-btn" @onclick="TraceAsync" disabled="@_busy">
+            @(_busy ? "Tracing…" : _merged is null ? "🪙 Trace provenance" : "↻ Re-trace")
+        </button>
+        @if (_busy)
+        {
+            @* The running clock is the difference between "working" and "hung" to
+               anyone watching — same reason the desktop page has one. *@
+            <p class="lite-sub">@(_progress ?? "Tracing…") · <span class="lite-prov-elapsed">@Elapsed</span></p>
+        }
+        @if (_error != null)
+        {
+            <div class="lite-error">@_error</div>
+        }
+        @if (_emptyWallet)
+        {
+            <p class="lite-sub">No confirmed coins to trace yet.</p>
+        }
+    }
+</div>
+
+@if (_merged is { } m)
+{
+    var model = _fifo ? m.Fifo : m.Haircut;
+    <div class="lite-card">
+        <h2>Mint Ancestry</h2>
+        @* Two ways of counting the same coins: Pedigree gives every satoshi ONE minting
+           block; Proportional is the website engine's maths, so its numbers reconcile
+           with the collector claims board. *@
+        <div class="lite-prov-models">
+            <button class="lite-prov-model @(_fifo ? "on" : null)" @onclick="() => _fifo = true">Pedigree (FIFO)</button>
+            <button class="lite-prov-model @(!_fifo ? "on" : null)" @onclick="() => _fifo = false">Proportional</button>
+        </div>
+        <p class="lite-sub">
+            @Blz(m.Total) BLZ held · @Blz(model.AttributedSatoshis) BLZ traced to a minting block@(
+            model.AttributedSatoshis < m.Total
+                ? $" · {Blz(m.Total - model.AttributedSatoshis)} BLZ unproven — lineage that couldn't be read is never guessed"
+                : "")
+        </p>
+        @if (_lastRun > TimeSpan.Zero)
+        {
+            <p class="lite-sub">Traced in @Format(_lastRun) · @m.Reads.ToString("N0") transactions read by the gateway</p>
+        }
+        @if (m.Truncated)
+        {
+            <p class="lite-prov-truncated">
+                ⚠ The trace hit the server's depth limit — ancestry beyond it counts as
+                unproven, so these figures are a minimum, not the whole story.
+            </p>
+        }
+
+        @if (model.Years.Count == 0 && model.Specials.Count == 0)
+        {
+            <p class="lite-sub">No lineage traced.</p>
+        }
+        @if (model.Years.Count > 0)
+        {
+            <table class="lite-prov-table">
+                <thead><tr><th>Vintage</th><th>Mined</th><th class="num">BLZ</th></tr></thead>
+                <tbody>
+                    @foreach (var y in model.Years)
+                    {
+                        <tr class="lite-prov-year">
+                            <td>@y.Label</td>
+                            <td>@MonthsLabel(y)</td>
+                            <td class="num">@Blz(y.Satoshis)</td>
+                        </tr>
+                        @foreach (var mo in m.MonthsOf(model, y))
+                        {
+                            <tr class="lite-prov-month">
+                                <td></td>
+                                <td>@mo.FirstTimeUtc.ToString("MMMM", CultureInfo.InvariantCulture)</td>
+                                <td class="num">@Blz(mo.Satoshis)</td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        }
+        @if (model.Specials.Count > 0)
+        {
+            <h3 class="lite-prov-h">Special Vintages</h3>
+            <table class="lite-prov-table lite-prov-gold">
+                <thead><tr><th>Vintage</th><th>Block</th><th class="num">BLZ</th></tr></thead>
+                <tbody>
+                    @foreach (var s in model.Specials)
+                    {
+                        <tr>
+                            <td>@s.Label</td>
+                            <td>@s.FirstHeight.ToString("N0")</td>
+                            <td class="num">@Blz(s.Satoshis)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+}
+
+<button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo(""))">← Back to Home</button>
+
+@code {
+    private IAncestryReader? _reader;
+    private bool _busy;
+    private string? _progress;
+    private string? _error;
+    private bool _emptyWallet;
+    private bool _fifo = true;
+    private Merged? _merged;
+
+    // ── elapsed clock ── ticks once a second while a trace runs, so a slow gateway
+    // reads as "working" rather than "locked up". Same construction as the desktop page.
+    private readonly System.Diagnostics.Stopwatch _watch = new();
+    private System.Threading.Timer? _ticker;
+    private TimeSpan _lastRun;
+
+    private string Elapsed => Format(_watch.Elapsed);
+
+    private static string Format(TimeSpan t) =>
+        t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+
+    /// <summary>Stops the clock ticker if the page is left mid-trace.</summary>
+    public void Dispose() => _ticker?.Dispose();
+
+    /// <summary>One model's merged catalogue across every funded address.</summary>
+    private sealed record MergedModel(long AttributedSatoshis,
+        IReadOnlyList<LiteVintageRow> Years,
+        IReadOnlyList<LiteVintageRow> Months,
+        IReadOnlyList<LiteVintageRow> Specials);
+
+    private sealed record Merged(long Total, int Reads, MergedModel Fifo, MergedModel Haircut,
+        bool Truncated)
+    {
+        public IEnumerable<LiteVintageRow> MonthsOf(MergedModel model, LiteVintageRow year) =>
+            model.Months.Where(x => x.Key.StartsWith(year.Key + "-", StringComparison.Ordinal));
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await Wallet.UnlockAsync()) { Nav.NavigateTo("setup"); return; }
+        _reader = Data as IAncestryReader;   // gateway capability; personal node → null
+    }
+
+    private async Task TraceAsync()
+    {
+        if (_reader is null) return;
+        _busy = true; _error = null; _emptyWallet = false; _merged = null;
+        _watch.Restart();
+        _ticker = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000);
+        try
+        {
+            // One UTXO sweep tells us which addresses actually hold coins — the gateway
+            // is only asked about those (its trace limit is sized for a wallet's burst).
+            var owned = await Wallet.GetAllUtxosAsync();
+            var funded = owned.Where(o => o.Utxo.Confirmations > 0)
+                              .Select(o => o.Address).Distinct().ToList();
+            if (funded.Count == 0) { _emptyWallet = true; return; }
+
+            var reports = new List<LiteAncestryReport>(funded.Count);
+            for (var i = 0; i < funded.Count; i++)
+            {
+                _progress = $"Tracing address {i + 1} of {funded.Count}…";
+                StateHasChanged();
+                var result = await _reader.GetAncestryAsync(funded[i]);
+                if (result.Report is null)
+                {
+                    // All-or-nothing: a partial catalogue would silently under-report.
+                    _error = result.Error ?? "The trace failed — try again.";
+                    return;
+                }
+                reports.Add(result.Report);
+            }
+
+            _merged = new Merged(
+                reports.Sum(r => r.TotalSatoshis),
+                reports.Sum(r => r.TransactionsRead),
+                MergeModels(reports.Select(r => r.Fifo)),
+                MergeModels(reports.Select(r => r.Haircut)),
+                reports.Any(r => r.Truncated));
+        }
+        finally
+        {
+            _watch.Stop();
+            _lastRun = _watch.Elapsed;
+            _ticker?.Dispose();
+            _ticker = null;
+            _busy = false;
+            _progress = null;
+        }
+    }
+
+    private static MergedModel MergeModels(IEnumerable<LiteVintageModel> models)
+    {
+        var list = models.ToList();
+        return new MergedModel(
+            list.Sum(x => x.AttributedSatoshis),
+            MergeRows(list.SelectMany(x => x.Years)).OrderBy(r => r.Key, StringComparer.Ordinal).ToList(),
+            MergeRows(list.SelectMany(x => x.Months)).OrderBy(r => r.Key, StringComparer.Ordinal).ToList(),
+            MergeRows(list.SelectMany(x => x.Specials)).OrderBy(r => r.FirstHeight).ToList());
+    }
+
+    /// <summary>Rows sharing a key (the same year/month/special across addresses) fold
+    /// into one: satoshis and counts sum, the time/height span widens.</summary>
+    private static List<LiteVintageRow> MergeRows(IEnumerable<LiteVintageRow> rows) =>
+        rows.GroupBy(r => r.Key)
+            .Select(g => new LiteVintageRow(g.Key, g.First().Label, g.First().Kind,
+                g.Sum(r => r.Satoshis), g.Sum(r => r.OutputCount), g.Min(r => r.FirstHeight),
+                g.Min(r => r.FirstTimeUtc), g.Max(r => r.LastTimeUtc)))
+            .ToList();
+
+    /// <summary>"May–Dec 2014", "Nov 2015" — the desktop VintageRow.MonthsLabel rule.</summary>
+    private static string MonthsLabel(LiteVintageRow r)
+    {
+        var (a, b) = (r.FirstTimeUtc, r.LastTimeUtc);
+        var ci = CultureInfo.InvariantCulture;
+        if (a.Year == b.Year && a.Month == b.Month) return a.ToString("MMM yyyy", ci);
+        if (a.Year == b.Year) return $"{a.ToString("MMM", ci)}–{b.ToString("MMM", ci)} {a.Year}";
+        return $"{a.ToString("MMM yyyy", ci)}–{b.ToString("MMM yyyy", ci)}";
+    }
+
+    private static string Blz(long sats) => (sats / 100_000_000m).ToString("0.########");
+}

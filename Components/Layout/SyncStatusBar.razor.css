@@ -1,0 +1,193 @@
+.syncbar {
+    position: fixed;
+    /* Edge-to-edge full window width. The DWMWCP_DONOTROUND window-corner
+       opt-out (re-applied on window Activated in MauiProgram.cs) stops
+       Windows 11 rounding the window, so the bar stays a true rectangle at
+       full width. It can't get wider horizontally — that's the whole
+       window — so "wider" is applied as a taller band. */
+    left: 0;
+    right: 0;
+    bottom: 16px;
+    /* Slim footer band; the sync progress bar (.track) carries the width. */
+    height: 50px;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 0 28px;
+    font-size: 13px;
+    /* Roomy enough that descenders (y, g in "Synchronizing") aren't clipped. */
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.85);
+    /* Solid black fill + crisp top/bottom red rules, zero radius — a
+       hard-edged band, no translucency or blur. (Was a #1a0608→#0a0a0a
+       maroon gradient that read as a reddish haze.) No left/right
+       borders: the bar is flush to x:0 and full width, so the window's
+       red DWM perimeter border already supplies the vertical lines and
+       our own would just double up against it. */
+    background: #000;
+    /* Same deeper crimson as the meridian / network icon (#9E000F). */
+    border: 2px solid #9E000F;
+    border-left: 0;
+    border-right: 0;
+    border-radius: 0;
+    /* No drop shadow — the soft halo feathered the edges and made a
+       square-cornered bar read as a rounded floating card. Flat = crisp
+       rectangle. */
+    box-shadow: none;
+    z-index: 50;
+    user-select: none;
+}
+
+.syncbar-seg {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+/* The main sync info takes the free space between the peer count and the
+   chain label and centers itself within it, instead of clinging left. */
+.syncbar-seg.status {
+    flex: 1;
+    min-width: 0;
+    justify-content: center;
+}
+
+/* Meridian (wireframe globe) — blinking sync-activity indicator that sits
+   right of the network icon. Only in the DOM while syncing, so it stops
+   when the chain is synced. 2s cycle = 1s visible, 1s hidden. */
+.meridian {
+    flex: 0 0 auto;
+    fill: none;
+    /* V1.5 meridian red. */
+    stroke: #9E000F;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    /* No glow — flat crimson so it reads as the same #9E000F as the nav. */
+}
+
+/* Blink only while syncing; without this class (synced) it stays solid. */
+.meridian.blinking {
+    animation: meridianBlink 2s linear infinite;
+}
+
+@keyframes meridianBlink {
+    0%, 49.999% { opacity: 1; }
+    50%, 100%   { opacity: 0; }
+}
+
+/* Reusable 1s-on / 1s-off blink (e.g. Case B "Daemon starting…"). */
+.blink {
+    animation: meridianBlink 2s linear infinite;
+}
+
+.muted {
+    color: rgba(255, 255, 255, 0.55);
+}
+
+/* "elapsed Nm SSs" stands out in white against the muted description. */
+.elapsed {
+    color: #fff;
+    font-weight: 600;
+}
+
+.ok {
+    color: #06d6a0;
+    font-weight: 600;
+}
+
+.syncing {
+    color: #ff4d3a;
+    font-weight: 600;
+}
+
+/* Windows-style network fan. Inactive arcs/dot are dim; active ones take
+   the state colour and a matching glow. */
+.neticon {
+    flex: 0 0 auto;
+    overflow: visible;
+    /* The Wi-Fi glyph is top-light (big arcs, tiny dangling dot), so it
+       reads as sitting low even when its box is flex-centred. Nudge it up
+       a few px to optically centre it with the globe. */
+    transform: translateY(-3px);
+}
+
+/* Dim by default; the dot fills, the arcs stroke. */
+.netdot {
+    fill: rgba(255, 255, 255, 0.18);
+}
+
+.netarc {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.18);
+    stroke-width: 1.9;
+    stroke-linecap: round;
+}
+
+/* Connected → V1.5 red (#9E000F), no peers → amber, offline → grey. */
+.neticon.on .netdot.active {
+    fill: #9E000F;
+}
+
+.neticon.on .netarc.active {
+    stroke: #9E000F;
+}
+
+.neticon.warn .netdot.active {
+    fill: #e0a800;
+}
+
+.neticon.warn .netarc.active {
+    stroke: #e0a800;
+}
+
+.neticon.off .netdot.active {
+    fill: #9aa0a6;
+}
+
+.neticon.off .netarc.active {
+    stroke: #9aa0a6;
+}
+
+/* No drop-shadow glow on the network icon in any state — the icon reads
+   as the same crisp flat colour as the nav (connected = #9E000F). */
+
+.track {
+    /* Grows to fill the space between the "Synchronizing…" label and the
+       block-count text, so it reads as a genuinely long progress bar
+       (was a fixed ~280px that barely changed visually). */
+    flex: 1 1 auto;
+    min-width: 220px;
+    max-width: 900px;
+    /* Tall enough to hold the sync text inside the bar. */
+    height: 22px;
+    /* Square ends — a rectangular progress bar, not a rounded pill. */
+    border-radius: 0;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.fill {
+    /* Background progress layer; the label sits on top of it. */
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, #cf2013, #ff4d3a);
+    transition: width 0.4s ease;
+}
+
+/* Sync info now lives inside the bar, centered, in white. */
+.track-label {
+    position: relative;
+    z-index: 1;
+    color: #fff;
+    font-weight: 600;
+    font-size: 12px;
+    white-space: nowrap;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}

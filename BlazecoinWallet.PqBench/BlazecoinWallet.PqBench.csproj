@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Blazecoin PQ benchmark library (post-quantum plan item 4, 2026-09-14): measures key/signature
+       sizes and keygen/sign/verify times for the wallet's current ECDSA path (NBitcoin secp256k1, the
+       code the lite wallet signs with) against the FIPS 204/205 candidates in PQ_SIGNATURES.md
+       (ML-DSA-44/65/87, SLH-DSA-128s/128f) via BouncyCastle 2.6.2 (already a wallet dependency) and,
+       where the platform supports it, the .NET 10 BCL MLDsa type. Also carries the spec's
+       transaction-size model so the numbers in its section 4 are computed, not typed.
+       LIBRARY ONLY: no address type, no wallet integration — by decision, nothing spendable exists
+       before the PQ_SIGNATURES fork. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazecoinWallet.PqBench</RootNamespace>
+    <!-- System.Security.Cryptography.MLDsa is [Experimental] in .NET 10 (SYSLIB5006); we opt in knowingly. -->
+    <NoWarn>$(NoWarn);SYSLIB5006</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+    <PackageReference Include="NBitcoin" Version="10.0.7" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,259 @@
+@page "/send"
+@layout LiteLayout
+@inject LiteWalletService Wallet
+@inject NavigationManager Nav
+@inject IQrScanner Scanner
+@inject IUnitSettings Units
+@inject IExplorerSettings Explorer
+@inject IAddressBook Book
+@inject IBiometricAuth Biometric
+@inject CometPulse Comet
+@inject IForkStatusService Fork
+@implements IDisposable
+@using BlazecoinWallet.Lite.Data
+@using BlazecoinWallet.Lite.Fork
+
+@* Send: address + amount → REVIEW → client-side sign → gateway relay. Free sends are the
+   chain's normal case, so there is no fee field to confuse anyone. The camera scan button
+   appears only when the app head registered an IQrScanner (the Droid head does). *@
+<div class="lite-card">
+    <h2>Send BLZ</h2>
+
+    @* PQ_SIGNATURES §7.1 Stopped: the fork height has passed and this build lacks the rules,
+       so nothing it signs is guaranteed to follow the chain — Review and Confirm are disabled
+       and the banner's message is repeated inline. Funds are unaffected; the mnemonic restores
+       into the new build. *@
+    @if (Stopped && Fork.Current is { IsAnnounced: true } fork)
+    {
+        <div class="lite-error lite-send-stopped" role="alert">
+            <b>@ForkBanner.StoppedHeadline(fork.ForkHeight!.Value)</b>
+            @ForkBanner.StoppedBody(fork, ForkBanner.LastVerifiedHeight(fork.ForkHeight!.Value, null))
+            <a href="@ForkBanner.DownloadUrl" target="_blank" rel="noopener" style="color:inherit;font-weight:600">@ForkBanner.DownloadHost</a>
+        </div>
+    }
+
+    @if (!_reviewing)
+    {
+        <label class="lite-sub">To address</label>
+        <input class="lite-input" placeholder="B…" @bind="_destination" />
+        @if (Scanner.IsAvailable)
+        {
+            <button class="lite-btn lite-btn-success" title="Scan a QR code" @onclick="ScanAsync">Scan QR Code</button>
+            <div style="height:8px"></div>
+        }
+        @if (Book.Entries.Count > 0)
+        {
+            <select class="lite-input" @onchange="OnPayeePicked">
+                <option value="">📇 Pick a saved payee…</option>
+                @foreach (var e in Book.Entries)
+                {
+                    <option value="@e.Address">@e.Name</option>
+                }
+            </select>
+        }
+
+        <label class="lite-sub">Amount (@_sym) — spendable: @AmountText(_spendable)</label>
+        <input class="lite-input" type="text" inputmode="decimal" placeholder="0.00000000"
+               value="@_amountText" @oninput="OnAmountInput" disabled="@_sendMax" />
+
+        <button class="lite-btn" @onclick="Review" disabled="@Stopped">Review Send</button>
+        <div style="height:8px"></div>
+        <button class="lite-btn @(_sendMax ? "" : "lite-btn-ghost")" title="Send your entire spendable balance"
+                @onclick="ToggleMax">@(_sendMax ? "✓ Sending Max" : "Send Max")</button>
+    }
+    else
+    {
+        @* Confirmation screen — the standard mis-send guard: the user re-reads exactly what
+           will be signed before any key is touched. *@
+        <p class="lite-sub">Please confirm — this cannot be undone once broadcast.</p>
+        <div class="lite-address" style="text-align:left">
+            <div class="lite-sub">Sending@(_sendMax ? " (entire balance)" : "")</div>
+            <div class="lite-balance" style="font-size:1.6rem">@AmountText(_reviewSats) <small>@_sym</small></div>
+            @if (_sendMax)
+            {
+                <div class="lite-sub" style="margin-top:4px">Empties your wallet — the exact amount is confirmed on-chain at send.</div>
+            }
+            <div class="lite-sub" style="margin-top:10px">To</div>
+            <div>@_destination.Trim()</div>
+        </div>
+        @* Plain "&" here: these are C# strings, so Razor HTML-encodes them on render —
+           writing &amp; in the string shows literally as "&amp;" in the button. *@
+        <button class="lite-btn" @onclick="ConfirmSendAsync" disabled="@(_busy || Stopped)">@(_busy ? "Signing & broadcasting…" : "Confirm & Send")</button>
+        <div style="height:8px"></div>
+        <button class="lite-btn lite-btn-ghost" @onclick="() => _reviewing = false" disabled="@_busy">← Back</button>
+    }
+
+    @if (_error != null)
+    {
+        <div class="lite-error">@_error</div>
+    }
+    @if (_sentTxId != null)
+    {
+        <div class="lite-success">
+            Sent! The network accepted transaction<br />
+            @{ var txUrl = LiteExplorer.TxUrl(Explorer.BaseUrl, _sentTxId); }
+            @if (txUrl != null)
+            {
+                <a href="@txUrl" target="_blank" rel="noopener" class="lite-link"><strong>@_sentTxId</strong></a>
+            }
+            else
+            {
+                <strong>@_sentTxId</strong>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private string _destination = string.Empty;
+    private string _amountText = string.Empty;
+    private long _spendable;
+    private long _reviewSats;
+    private bool _reviewing;
+    private bool _sendMax;
+    private bool _busy;
+    private string? _error;
+    private string? _sentTxId;
+    private string _sym => LiteUnits.Symbol(Units.Unit);
+
+    private void OnAmountInput(ChangeEventArgs e)
+    {
+        _amountText = e.Value?.ToString() ?? string.Empty;
+        _sendMax = false; // typing an amount cancels a pending max
+    }
+
+    private void OnPayeePicked(ChangeEventArgs e)
+    {
+        var addr = e.Value?.ToString();
+        if (!string.IsNullOrEmpty(addr)) _destination = addr;
+    }
+
+    /// <summary>Toggle "send everything": fills the field with the current spendable balance.</summary>
+    private void ToggleMax()
+    {
+        _sendMax = !_sendMax;
+        _amountText = _sendMax ? AmountText(_spendable) : string.Empty;
+    }
+
+    // ── §7.1 Stopped gate ─────────────────────────────────────────────────────────────
+    private bool Stopped => Fork.State == ForkBannerState.Stopped;
+    private static string StoppedError =>
+        "This wallet has stopped following the chain — install the new version from " +
+        ForkBanner.DownloadHost + " and restore from your recovery phrase to send.";
+    private void OnForkChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Fork.Changed -= OnForkChanged;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Fork.Changed += OnForkChanged; // a tip poll can flip Warning → Stopped while this page is open
+        if (!await Wallet.UnlockAsync())
+        {
+            Nav.NavigateTo("setup");
+            return;
+        }
+        _spendable = await Wallet.GetSpendableAsync();
+    }
+
+    private async Task ScanAsync()
+    {
+        var scanned = await Scanner.ScanAsync();
+        if (string.IsNullOrWhiteSpace(scanned)) return;
+        // Accept a bare address or a blazecoin:/BIP21 URI (the desktop wallet's convention).
+        var text = scanned.Trim();
+        if (text.StartsWith("blazecoin:", StringComparison.OrdinalIgnoreCase))
+        {
+            var body = text["blazecoin:".Length..];
+            var q = body.IndexOf('?');
+            _destination = (q < 0 ? body : body[..q]);
+            // Honour a BIP21 amount= so a scanned payment request doesn't force a re-type
+            // (and can't be silently dropped, a mis-pay risk).
+            if (q >= 0)
+            {
+                foreach (var part in body[(q + 1)..].Split('&'))
+                {
+                    // BIP21 amounts are ALWAYS in BLZ — convert to the user's display unit.
+                    if (part.StartsWith("amount=", StringComparison.OrdinalIgnoreCase) &&
+                        decimal.TryParse(part["amount=".Length..], System.Globalization.NumberStyles.Number,
+                            System.Globalization.CultureInfo.InvariantCulture, out var amtBlz) && amtBlz > 0)
+                    {
+                        var sats = (long)Math.Round(amtBlz * BlazecoinChain.Coin);
+                        _amountText = LiteUnits.Format(sats, Units.Unit);
+                    }
+                }
+            }
+        }
+        else
+        {
+            _destination = text;
+        }
+    }
+
+    /// <summary>Validate + parse, then show the confirmation screen — no keys touched yet.</summary>
+    private void Review()
+    {
+        _error = null; _sentTxId = null;
+
+        if (Stopped)
+        {
+            _error = StoppedError;
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_destination))
+        {
+            _error = "Enter a destination address.";
+            return;
+        }
+        // Parse in the user's display unit; the helper also bounds to the money supply and
+        // rejects fractional satoshis. The wallet math stays in satoshis throughout.
+        if (!LiteUnits.TryParseToSats(_amountText, Units.Unit, out var sats))
+        {
+            _error = $"Enter a valid amount in {_sym} (within the total supply).";
+            return;
+        }
+
+        _reviewSats = sats;
+        _reviewing = true;
+    }
+
+    private async Task ConfirmSendAsync()
+    {
+        // Defence in depth behind the disabled button: a Stopped build never signs.
+        if (Stopped) { _error = StoppedError; return; }
+        _busy = true;
+        _error = null;
+        try
+        {
+            // Biometric gate: when the device supports it, require a fingerprint/face check
+            // before any coins move. Unavailable (default seam) → straight through.
+            if (await Biometric.IsAvailableAsync() && !await Biometric.AuthenticateAsync("Authorise this payment"))
+            {
+                _error = "Authentication failed — the payment was not sent.";
+                return;
+            }
+
+            // A max send sweeps everything (the service computes the exact verified total);
+            // a fixed send pays the reviewed amount.
+            var result = _sendMax
+                ? await Wallet.SendMaxAsync(_destination.Trim())
+                : await Wallet.SendAsync(_destination.Trim(), _reviewSats);
+            if (result.Success)
+            {
+                _sentTxId = result.TxId;
+                // The Home balance-card comet runs orange for a window after a send.
+                Comet.Pulse(CometPulseKind.Sent);
+                _amountText = string.Empty;
+                _sendMax = false;
+                _reviewing = false;
+                _spendable = await Wallet.GetSpendableAsync();
+            }
+            else
+            {
+                _error = result.Error;
+            }
+        }
+        finally { _busy = false; }
+    }
+
+    private string AmountText(long sats) => LiteUnits.Format(sats, Units.Unit);
+}

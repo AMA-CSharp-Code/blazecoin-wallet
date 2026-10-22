@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Wallet hardening:
+         allowBackup=false + fullBackupContent/dataExtractionRules(none) — the seed's
+           encrypted blob must NEVER leave the device via adb backup / auto-backup / D2D
+           transfer (defence in depth: the Keystore key isn't backed up either, but we
+           don't ship the ciphertext off-device at all).
+         usesCleartextTraffic=false — the wallet talks only HTTPS to the gateway; any
+           plaintext HTTP is a bug, so forbid it at the platform level. -->
+    <application android:allowBackup="false"
+                 android:fullBackupContent="false"
+                 android:dataExtractionRules="@xml/data_extraction_rules"
+                 android:usesCleartextTraffic="false"
+                 android:icon="@mipmap/appicon" android:roundIcon="@mipmap/appicon_round" android:supportsRtl="true"></application>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Camera: QR scanning on the Send page -->
+    <uses-permission android:name="android.permission.CAMERA" />
+</manifest>

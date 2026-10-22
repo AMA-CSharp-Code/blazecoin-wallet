@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The Lite Mobile Indexer appliance (ROADMAP §F, 2026-07-24 plan): a purpose-built
+       public gateway serving ONLY the surfaces the lite wallet uses — broadcast / raw-tx /
+       merkle-proof as daemon-RPC passthroughs plus a minimal SQLite address→UTXO index.
+       Runs beside blazecoind on the VPS (Kestrel on loopback behind Caddy HTTPS).
+       URL contract is IDENTICAL to the full Indexer/gateway routes so the wallet's
+       failover list can mix lite and full sites with zero client changes. Trust posture:
+       the client fail-closed-verifies every input (C1/M3), so a bug here is
+       availability-only, never theft. Dev on Windows, runs on Ubuntu — no platform forks:
+       Path.Combine everywhere, case-consistent names, LF endings. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazecoinWallet.Lite.Gateway</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlazecoinWallet.Lite.Core\BlazecoinWallet.Lite.Core.csproj" />
+    <!-- The desktop wallet's shared Core, for AncestryTracer — the /ancestry endpoint runs
+         the EXACT tracer the desktop Provenance page runs, so the two can never drift.
+         Safe for the linux-x64 self-contained publish: Core is plain net10.0 (the
+         QuestPDF/ClosedXML weight lives in the desktop-only Core.Export). -->
+    <ProjectReference Include="..\BlazecoinWallet.Core\BlazecoinWallet.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.2" />
+    <!-- Pin the native SQLite bundle past the GHSA-2m69-gcr7-jv3q advisory that the
+         transitive 2.1.11 carries (this stack's CVE gate is warning-clean by policy). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BlazecoinWallet.Lite.Gateway.Tests" />
+  </ItemGroup>
+
+</Project>

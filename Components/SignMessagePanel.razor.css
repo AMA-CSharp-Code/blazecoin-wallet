@@ -1,0 +1,105 @@
+/* The Preferences section look, repeated here because scoped CSS does not cross component
+   boundaries: the same translucent black card, white border, edge-to-edge black header bar. */
+.pref-section {
+    text-align: left;
+    margin: 0 0 1.5rem;
+    background-color: rgba(0, 0, 0, 0.65);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 1.5rem;
+    overflow: hidden;
+    scroll-margin-top: 12px;   /* the sidebar deep-link lands with the header bar fully in view */
+}
+
+.pref-section h2 {
+    background-color: #000;
+    color: #fff;
+    font-size: 11pt;
+    font-weight: 600;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    margin: -1.5rem -1.5rem 1.5rem;
+    padding: 0 13px;
+    text-transform: capitalize;
+}
+
+.pref-hint {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.9rem;
+    margin: 0 0 1rem;
+}
+
+.pref-hint code {
+    color: #ffb3b3;
+}
+
+.pref-input {
+    width: 100%;
+    max-width: 640px;
+    box-sizing: border-box;
+    padding: 0.5rem 0.7rem;
+    border-radius: 0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(0, 0, 0, 0.9);
+    color: #fff;
+    margin-bottom: 0.5rem;
+    display: block;
+}
+
+.pref-input:focus {
+    outline: none;
+    border-color: #ff4d4d;
+}
+
+.sm-label {
+    display: block;
+    margin: 0.6rem 0 0.25rem;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.9rem;
+}
+
+.sm-mono {
+    font-family: Consolas, "Courier New", monospace;
+    word-break: break-all;
+}
+
+.sm-sig {
+    color: #ff6b6b;
+    font-size: 0.8rem;
+    max-width: 100%;
+}
+
+.sm-unlock {
+    border: 1px dashed #ff4d4d;
+    padding: 0.75rem;
+    margin: 0.5rem 0 0.75rem;
+    max-width: 640px;
+}
+
+.sm-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.sm-bordered {
+    border: 2px solid white;
+    border-radius: 0;
+}
+
+.sm-found {
+    color: #9fe29f;
+    font-size: 0.9rem;
+}
+
+.sm-alert {
+    margin-top: 0.75rem;
+    max-width: 640px;
+}
+
+.sm-result {
+    margin-top: 1rem;
+}

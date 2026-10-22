@@ -1,0 +1,24 @@
+# Build output
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+build-debug.log
+
+# Local scratch scripts / sync-fix notes (kept out of the repo).
+# Scoped to specific filenames so README.md and future scripts/docs
+# aren't ignored by a blanket *.ps1 / *.md.
+Check-BlazecoinV2-TEST.ps1
+Get-BlockHeight.ps1
+Quick-Status.ps1
+SYNC-FIX-SUMMARY.md
+SYNC-FIXES-APPLIED.md
+
+# Android release signing - the upload keystore + its password config live OUTSIDE
+# the repo (C:\Users\<you>\BlazecoinSigning\); these rules are a safety net so a
+# stray copy can never be committed.
+*.keystore
+*.jks
+signing.json
+BlazecoinWallet.App.Droid/artifacts/
+bin-test/

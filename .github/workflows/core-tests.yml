@@ -1,0 +1,46 @@
+name: Core tests
+
+# Builds BlazecoinWallet.Core and runs the BlazecoinWallet.Core.Tests unit suite
+# (test-plan M4), plus the lite-wallet suites (Lite.Core / Lite.UI / Lite.Gateway, added
+# 2026-08-22). Only the libraries + test projects are built — the MAUI app heads are NOT
+# referenced by any of these tests (all plain net10.0), so no MAUI workload is needed.
+# windows-latest is used so QuestPDF/SkiaSharp (PDF export test) works without extra
+# native font deps.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore BlazecoinWallet.Core.Tests/BlazecoinWallet.Core.Tests.csproj
+
+      - name: Test
+        run: dotnet test BlazecoinWallet.Core.Tests/BlazecoinWallet.Core.Tests.csproj -c Release --no-restore --verbosity normal
+
+      - name: Restore (Lite suites)
+        run: |
+          dotnet restore BlazecoinWallet.Lite.Core.Tests/BlazecoinWallet.Lite.Core.Tests.csproj
+          dotnet restore BlazecoinWallet.Lite.UI.Tests/BlazecoinWallet.Lite.UI.Tests.csproj
+          dotnet restore BlazecoinWallet.Lite.Gateway.Tests/BlazecoinWallet.Lite.Gateway.Tests.csproj
+
+      - name: Test (Lite.Core)
+        run: dotnet test BlazecoinWallet.Lite.Core.Tests/BlazecoinWallet.Lite.Core.Tests.csproj -c Release --no-restore --verbosity normal
+
+      - name: Test (Lite.UI)
+        run: dotnet test BlazecoinWallet.Lite.UI.Tests/BlazecoinWallet.Lite.UI.Tests.csproj -c Release --no-restore --verbosity normal
+
+      - name: Test (Lite.Gateway)
+        run: dotnet test BlazecoinWallet.Lite.Gateway.Tests/BlazecoinWallet.Lite.Gateway.Tests.csproj -c Release --no-restore --verbosity normal

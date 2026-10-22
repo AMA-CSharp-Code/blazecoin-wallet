@@ -1,0 +1,14 @@
+@* The wallet pages live in the shared Lite.UI library — the SAME pages the Android
+   head renders (they declare their own LiteLayout, so no DefaultLayout here). This
+   head adds the VaultGate (the encrypted-vault unlock/protect ceremony — nothing
+   renders while the vault is locked), /perf (the scrypt benchmark) and not-found. *@
+<VaultGate>
+    <Router AppAssembly="@typeof(App).Assembly"
+            AdditionalAssemblies="new[] { typeof(BlazecoinWallet.Lite.UI.Shared.LiteLayout).Assembly }"
+            NotFoundPage="typeof(Pages.NotFound)">
+        <Found Context="routeData">
+            <RouteView RouteData="@routeData" />
+            <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+        </Found>
+    </Router>
+</VaultGate>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>1</integer>
+        <integer>2</integer>
+    </array>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>XSAppIconAssets</key>
+    <string>Assets.xcassets/appicon.appiconset</string>
+    <!-- Camera: the Send screen's QR scan (jsQR in the WebView) + its image-upload fallback. -->
+    <key>NSCameraUsageDescription</key>
+    <string>Blazecoin Wallet uses the camera to scan Blazecoin address QR codes on the Send screen.</string>
+    <!-- Face ID: the app-lock / send-authorization gate (IosBiometricAuth). Touch ID needs no entry. -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>Blazecoin Wallet uses Face ID to unlock the app and authorize sends.</string>
+    <!-- Photo library (read): the QR scan overlay's image-upload fallback picks a saved QR photo. -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Blazecoin Wallet reads a photo you choose to decode a Blazecoin address QR code.</string>
+</dict>
+</plist>

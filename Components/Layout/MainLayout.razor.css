@@ -1,0 +1,31 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    /* Reserve space for the SyncStatusBar (50px tall, 16px off the bottom)
+       so page content is never hidden behind it. */
+    padding-bottom: 76px;
+}
+
+.body-row {
+    display: flex;
+    flex: 1;
+    align-items: stretch;
+}
+
+main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    /* Allow content (wide tables, console output) to shrink instead of
+       forcing the sidebar narrower or overflowing the window. */
+    min-width: 0;
+    /* Balance the 210px left sidebar with an equal right gutter so page
+       content stays centred in the window, not in the area beside the bars. */
+    margin-right: 210px;
+}
+
+article.content {
+    padding: 1.5rem;
+    flex: 1;
+}

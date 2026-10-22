@@ -1,0 +1,10 @@
+@* Route over BOTH assemblies: the pages live in the shared Lite.UI library (so the iOS/web
+   heads reuse them verbatim); this head contributes only the shell. Pages declare their own
+   LiteLayout, so no DefaultLayout here. *@
+<Router AppAssembly="typeof(MauiProgram).Assembly"
+        AdditionalAssemblies="new[] { typeof(BlazecoinWallet.Lite.UI.Shared.LiteLayout).Assembly }">
+    <Found Context="routeData">
+        <RouteView RouteData="routeData" />
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

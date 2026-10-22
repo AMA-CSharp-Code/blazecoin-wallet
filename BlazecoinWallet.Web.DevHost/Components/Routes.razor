@@ -1,0 +1,10 @@
+@* The wallet pages live in the shared Lite.UI library — same pages the Android head
+   renders; this host is the desktop/browser way to see them. *@
+<Router AppAssembly="typeof(Program).Assembly"
+        AdditionalAssemblies="new[] { typeof(BlazecoinWallet.Lite.UI.Shared.LiteLayout).Assembly }"
+        NotFoundPage="typeof(Pages.NotFound)">
+    <Found Context="routeData">
+        <RouteView RouteData="routeData" />
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>
