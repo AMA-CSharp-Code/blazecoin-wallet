@@ -54,7 +54,8 @@ internal sealed class LiteSendPipeline
         // ── Trustless verification (C1/M3) ──────────────────────────────────────────────
         // Before signing, confirm each selected input against the chain: the funding tx must
         // hash to its claimed txid (binding the real output value) AND carry a merkle+PoW
-        // inclusion proof (proving it's really mined). Build with the VERIFIED value so a
+        // inclusion proof whose block is proven on the chain at the coin's height (proving it's
+        // really mined). Build with the VERIFIED value so a
         // lying indexer can't inflate the fee. Skipped when no verifier (trusted personal
         // node) is wired.
         long inputTotal = inputs.Sum(u => u.Satoshis);
@@ -65,7 +66,7 @@ internal sealed class LiteSendPipeline
             foreach (var u in inputs)
             {
                 var v = await _verifier.VerifyAsync(u.TxId, u.Vout, u.Satoshis,
-                    requireInclusionProof: true, expectedAddress: u.Address, ct);
+                    requireInclusionProof: true, expectedAddress: u.Address, claimedBlockHeight: u.BlockHeight, ct: ct);
                 if (!v.Verified)
                     return new LiteSendResult(false, null,
                         $"Could not verify your coins against the chain: {v.Error} Refresh and try again.");

@@ -245,9 +245,11 @@ public class HeaderChainTests
     }
 
     [Fact]
-    public async Task Chain_inclusion_stands_on_pow_when_the_block_isnt_verified_yet()
+    public async Task Chain_inclusion_is_unconfirmed_when_the_block_isnt_verified_yet()
     {
-        // Proof valid, but no header chain has placed the block → height unknown, proof still holds.
+        // Proof well-formed, but no header chain has placed the block → not on the verified
+        // chain, height unknown. ProofValid alone is not verification (a standalone header is
+        // cheap to forge) — the UI must show this as unconfirmed.
         var verifier = new LiteTxVerifier(new ProofReader()); // no header chain
         var inc = await verifier.VerifyChainInclusionAsync(HeaderChainFixture.ProofTxId);
 

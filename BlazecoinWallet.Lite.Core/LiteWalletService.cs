@@ -29,12 +29,14 @@ public sealed record LiteWifCheck(bool Valid, string? Error, string? Address,
     long SpendableSatoshis, long ImmatureSatoshis, int UtxoCount);
 
 /// <summary>A transaction checked against the wallet's own PoW-verified header chain.</summary>
-/// <param name="ProofValid">The merkle+PoW inclusion proof verified.</param>
+/// <param name="ProofValid">The merkle+PoW inclusion proof is well-formed against its own header
+/// (not a trust signal alone — see <see cref="LiteTxVerifier.ChainInclusion"/>).</param>
 /// <param name="OnVerifiedChain">The proof's block sits on the verified header chain (trustless).</param>
 /// <param name="Height">Trustless block height from the proof (null when outside the verified window).</param>
 /// <param name="Confirmations">verifiedTip − Height + 1 when on-chain; null otherwise.</param>
 /// <param name="Error">Why no proof could be established, when applicable.</param>
-public sealed record LiteChainProof(bool ProofValid, bool OnVerifiedChain, long? Height, int? Confirmations, string? Error);
+/// <param name="OffChain">The proof's block was proven NOT to be the chain's block — the gateway's data is wrong.</param>
+public sealed record LiteChainProof(bool ProofValid, bool OnVerifiedChain, long? Height, int? Confirmations, string? Error, bool OffChain = false);
 
 /// <summary>The wallet view the payment watcher needs — nothing more (2026-07-25 audit F2:
 /// the watcher must not depend on the whole wallet service).</summary>
@@ -180,10 +182,13 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// polish): its merkle proof is verified, then the proof's block is located in the verified
     /// chain, yielding a TRUSTLESS block height and confirmation count that trust no gateway
     /// claim. The tx-detail view surfaces this. Available only in gateway mode (a personal node's
-    /// own chainstate is already authoritative). When the block isn't in the verified window yet,
-    /// <see cref="LiteChainProof.OnVerifiedChain"/> is false but the proof itself still stands.
+    /// own chainstate is already authoritative). <paramref name="claimedBlockHeight"/> is the
+    /// gateway's height for the tx (from history; checked, never trusted) — it lets a block the
+    /// sync hasn't placed be linked to a trusted anchor. When the chain can't place the block,
+    /// <see cref="LiteChainProof.OnVerifiedChain"/> is false and the tx is NOT independently
+    /// confirmed — a standalone proof is cheap to forge, so never present ProofValid alone as verified.
     /// </summary>
-    public async Task<LiteChainProof> VerifyTransactionOnChainAsync(string txId, CancellationToken ct = default)
+    public async Task<LiteChainProof> VerifyTransactionOnChainAsync(string txId, long claimedBlockHeight = 0, CancellationToken ct = default)
     {
         if (_verifier == null)
             return new LiteChainProof(false, false, null, null, "This wallet trusts its own node here, so no proof is needed.");
@@ -191,11 +196,11 @@ public sealed class LiteWalletService : IWalletUtxoSource
         // Make sure the verified window is as current as it can be before we look the block up.
         if (_headerSync != null) await _headerSync.SyncAsync(ct);
 
-        var inc = await _verifier.VerifyChainInclusionAsync(txId, ct);
+        var inc = await _verifier.VerifyChainInclusionAsync(txId, claimedBlockHeight, ct);
         int? confs = inc.Height is long h && _headerSync != null
             ? _headerSync.ConfirmationsForVerifiedHeight(h)
             : null;
-        return new LiteChainProof(inc.ProofValid, inc.OnVerifiedChain, inc.Height, confs, inc.Error);
+        return new LiteChainProof(inc.ProofValid, inc.OnVerifiedChain, inc.Height, confs, inc.Error, inc.OffChain);
     }
 
     /// <summary>Confirmations to trust for maturity: capped to the PoW-verified tip when header
@@ -542,7 +547,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
     }
 
     private static LiteUtxo ToInput(LiteOwnedUtxo u)
-        => new(u.Utxo.TxId, u.Utxo.OutputIndex, u.Utxo.Amount, u.Address, u.Utxo.ScriptPubKey);
+        => new(u.Utxo.TxId, u.Utxo.OutputIndex, u.Utxo.Amount, u.Address, u.Utxo.ScriptPubKey, u.Utxo.BlockHeight);
 
     /// <summary>Where a spend's change goes (2026-09-28: it was legacy-only, so every spend of a BQ…
     /// coin returned its change to an ECDSA address).</summary>
@@ -673,7 +678,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
             if (holding.Spendable.Count == 0)
                 return new LiteSendResult(false, null, "That key holds no spendable coins (freshly mined coins need 30 confirmations first).");
 
-            var inputs = holding.Spendable.Select(u => new LiteUtxo(u.TxId, u.OutputIndex, u.Amount, holding.Address)).ToList();
+            var inputs = holding.Spendable.Select(u => new LiteUtxo(u.TxId, u.OutputIndex, u.Amount, holding.Address, BlockHeight: u.BlockHeight)).ToList();
             return await _pipeline.ExecuteAsync(destination, inputs, amountSatoshis: null, destination,
                 keyResolver: _ => holding.Key, ct);
         }

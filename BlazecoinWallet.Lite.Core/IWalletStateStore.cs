@@ -27,6 +27,14 @@ public interface IWalletStateStore
     Task<string?> GetVerifiedCheckpointAsync() => Task.FromResult<string?>(null);
     Task SetVerifiedCheckpointAsync(string value) => Task.CompletedTask;
 
+    /// <summary>Header anchors the wallet has verified ABOVE the shipped table
+    /// ("height:hash,height:hash…", one per 1,000 blocks — about 190 bytes a day). Lets a merkle
+    /// proof's block be linked to a nearby trusted hash after a restart. Losing it is safe (a
+    /// proof then links to the verified tip instead, and the anchors are re-learned). Default
+    /// no-op so a store that predates anchors keeps compiling.</summary>
+    Task<string?> GetHeaderAnchorsAsync() => Task.FromResult<string?>(null);
+    Task SetHeaderAnchorsAsync(string value) => Task.CompletedTask;
+
     /// <summary>Whether the recovery-phrase backup has been PROVEN — the quiz passed, or the
     /// wallet was restored from a typed phrase (possession is proof). False drives the Home
     /// warning chip and the verify-backup flow. Default TRUE so a store that predates the
@@ -52,6 +60,7 @@ public sealed class InMemoryWalletStateStore : IWalletStateStore
     private int _change;
     private int _pq;
     private string? _checkpoint;
+    private string? _anchors;
     private bool _backupVerified = true;   // no wallet yet = nothing to warn about
     public Task<int> GetRevealedAddressCountAsync() => Task.FromResult(_revealed);
     public Task SetRevealedAddressCountAsync(int count) { _revealed = count; return Task.CompletedTask; }
@@ -59,9 +68,11 @@ public sealed class InMemoryWalletStateStore : IWalletStateStore
     public Task SetChangeAddressCountAsync(int count) { _change = count; return Task.CompletedTask; }
     public Task<string?> GetVerifiedCheckpointAsync() => Task.FromResult(_checkpoint);
     public Task SetVerifiedCheckpointAsync(string value) { _checkpoint = value; return Task.CompletedTask; }
+    public Task<string?> GetHeaderAnchorsAsync() => Task.FromResult(_anchors);
+    public Task SetHeaderAnchorsAsync(string value) { _anchors = value; return Task.CompletedTask; }
     public Task<bool> GetBackupVerifiedAsync() => Task.FromResult(_backupVerified);
     public Task SetBackupVerifiedAsync(bool verified) { _backupVerified = verified; return Task.CompletedTask; }
     public Task<int> GetPqAddressCountAsync() => Task.FromResult(_pq);
     public Task SetPqAddressCountAsync(int count) { _pq = count; return Task.CompletedTask; }
-    public Task ClearAsync() { _revealed = 0; _change = 0; _pq = 0; _checkpoint = null; _backupVerified = true; return Task.CompletedTask; }
+    public Task ClearAsync() { _revealed = 0; _change = 0; _pq = 0; _checkpoint = null; _anchors = null; _backupVerified = true; return Task.CompletedTask; }
 }

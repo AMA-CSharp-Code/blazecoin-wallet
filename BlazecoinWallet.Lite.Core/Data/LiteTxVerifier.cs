@@ -7,7 +7,8 @@ namespace BlazecoinWallet.Lite.Data;
 /// <param name="Verified">True when the real value was cryptographically confirmed.</param>
 /// <param name="RealSatoshis">The TRUE output value parsed from the txid-committed raw tx
 /// (equals the claim when honest; the value the wallet must build with).</param>
-/// <param name="IncludedInBlock">True when a merkle proof placed the tx in a PoW-valid block.</param>
+/// <param name="IncludedInBlock">True when a merkle proof placed the tx in a block — proven to be on
+/// the chain whenever a header feed is wired (see <see cref="LiteTxVerifier"/>).</param>
 /// <param name="Error">Why verification failed, when it did.</param>
 public sealed record UtxoVerification(bool Verified, long RealSatoshis, bool IncludedInBlock, string? Error);
 
@@ -21,8 +22,14 @@ public sealed record UtxoVerification(bool Verified, long RealSatoshis, bool Inc
 ///      the indexer lied, and the wallet builds with the REAL value (so no excess can leak
 ///      to miner fee, closing C1);
 ///   3. (M3) optionally verifies a merkle proof: the tx's branch must reproduce the block
-///      header's merkle root AND the header must satisfy its own PoW — proving the tx is
-///      really mined (a fabricated "confirmed" tx has no such proof).
+///      header's merkle root AND the header must satisfy its own in-range PoW — and, whenever
+///      a header feed is wired, the block must be PROVEN on the chain at its claimed height
+///      (<see cref="HeaderChainSync.LocateAsync"/>: its hash links forward to a trusted anchor).
+///      The chain check is the part that matters: a standalone header that meets its own target
+///      costs only ~2^20 scrypt hashes to forge (bug-bounty report 2026-10-25), so without a
+///      header feed the proof is a sanity check, not proof of mining.
+/// Steps 1–2 are what protect funds: a forged proof could at worst make the wallet sign a
+/// spend of a coin that doesn't exist, which the network rejects — nothing can be stolen.
 /// Personal-node mode skips this (own-chainstate values are already authoritative).
 /// </summary>
 public sealed class LiteTxVerifier
@@ -41,7 +48,9 @@ public sealed class LiteTxVerifier
     /// <summary>
     /// Verifies the claimed value of one output. On success returns the REAL value to build
     /// with. <paramref name="requireInclusionProof"/> also demands a valid merkle+PoW proof
-    /// (M3 — proves the tx is genuinely mined, not fabricated). When
+    /// whose block is proven on the chain at <paramref name="claimedBlockHeight"/> (the
+    /// gateway's height for the coin, checked, never trusted) when a header feed is wired —
+    /// M3: proves the tx is genuinely mined, not fabricated. When
     /// <paramref name="expectedAddress"/> is supplied, the output's scriptPubKey must belong
     /// to it — closing the latent M1: a lying indexer can't slip a real THIRD-PARTY output
     /// into the wallet's input list (which the wallet couldn't sign, so the whole tx would
@@ -50,7 +59,7 @@ public sealed class LiteTxVerifier
     /// </summary>
     public async Task<UtxoVerification> VerifyAsync(
         string txId, int vout, long claimedSatoshis, bool requireInclusionProof,
-        string? expectedAddress = null, CancellationToken ct = default)
+        string? expectedAddress = null, long claimedBlockHeight = 0, CancellationToken ct = default)
     {
         // 1. Fetch the raw funding tx and bind it to the claimed txid.
         var hex = await _reader.GetRawTransactionHexAsync(txId, ct);
@@ -94,8 +103,15 @@ public sealed class LiteTxVerifier
             var proofHex = await _reader.GetTxOutProofAsync(txId, ct);
             if (string.IsNullOrWhiteSpace(proofHex))
                 return new UtxoVerification(false, realSatoshis, false, "No merkle inclusion proof was available for the funding transaction.");
-            if (!VerifyInclusion(proofHex, txId))
+            var (proofOk, blockHash) = CheckProof(proofHex, txId);
+            if (!proofOk || blockHash == null)
                 return new UtxoVerification(false, realSatoshis, false, "The merkle inclusion proof did not verify — the transaction may not be mined.");
+            if (_headerChain is { Available: true })
+            {
+                var where = await _headerChain.LocateAsync(blockHash, claimedBlockHeight, ct);
+                if (where.Membership != ChainMembership.OnChain)
+                    return new UtxoVerification(false, realSatoshis, false, ChainError(where.Membership));
+            }
             included = true;
         }
 
@@ -109,16 +125,18 @@ public sealed class LiteTxVerifier
     public static byte[]? ScriptForAddress(string address, Network? network = null)
         => BlazecoinAddress.ScriptPubKeyFor(address, network);
 
-    /// <summary>
-    /// Verifies a serialized MerkleBlock proof: the branch reproduces the header's merkle
-    /// root AND the header meets its own proof-of-work target. Forging this requires real
-    /// mining work, so a semi-trusted indexer cannot fabricate it.
-    /// </summary>
-    private bool VerifyInclusion(string proofHex, string txId) => CheckProof(proofHex, txId).Ok;
+    /// <summary>Why a proof's block didn't count, in the words the send/tx pages show.</summary>
+    private static string ChainError(ChainMembership membership) => membership switch
+    {
+        ChainMembership.NotOnChain => "The coin's block is not on your verified chain — the data source is untrustworthy.",
+        ChainMembership.NotYetVerified => "Your wallet is still verifying the newest blocks — try again in a minute.",
+        _ => "Could not check the coin's block against your verified chain.",
+    };
 
-    /// <summary>Shared proof check: parses the MerkleBlock, verifies scrypt-PoW + merkle root +
-    /// txid membership, and returns the proof's block hash (SHA256d) on success so a caller can
-    /// locate it in the verified header chain.</summary>
+    /// <summary>Shared proof check: parses the MerkleBlock, verifies in-range scrypt-PoW + merkle
+    /// root + txid membership, and returns the proof's block hash (SHA256d) on success so a
+    /// caller can locate it on the verified chain. Rejects junk and absurd-difficulty headers,
+    /// but an in-range standalone header is cheap to forge — chain membership is the real test.</summary>
     private (bool Ok, string? BlockHash) CheckProof(string proofHex, string txId)
     {
         try
@@ -130,8 +148,7 @@ public sealed class LiteTxVerifier
             };
             merkleBlock.ReadWrite(stream);
 
-            // Header PoW: the header's SCRYPT hash must satisfy the target in nBits. This is
-            // the anchor — a fake header with a chosen merkle root can't clear it. (NBitcoin's
+            // Header PoW: nBits in range and the header's SCRYPT hash meeting it. (NBitcoin's
             // CheckProofOfWork checks SHA256d, which is wrong for this scrypt chain.)
             if (!BlazecoinPoW.MeetsTarget(merkleBlock.Header))
                 return (false, null);
@@ -152,23 +169,29 @@ public sealed class LiteTxVerifier
     }
 
     /// <summary>Where a confirmed tx sits relative to the wallet's OWN verified header chain.</summary>
-    /// <param name="ProofValid">The merkle+PoW inclusion proof itself verified.</param>
+    /// <param name="ProofValid">The merkle+PoW inclusion proof is well-formed against its own
+    /// header. NOT a trust signal on its own (a standalone header is cheap to forge) — only
+    /// <paramref name="OnVerifiedChain"/> is.</param>
+    /// <param name="OffChain">The proof's block was proven NOT to be the chain's block at the
+    /// claimed height — the gateway's data contradicts the real chain.</param>
     /// <param name="OnVerifiedChain">The proof's block is a block on the PoW-verified header
     /// chain (not just any header meeting its own target) — the strongest guarantee.</param>
     /// <param name="Height">The tx's TRUSTLESS block height, derived purely from the proof's
     /// header matched into the verified chain (never the gateway's claim); null when the block
     /// isn't in the verified window.</param>
-    public sealed record ChainInclusion(bool ProofValid, bool OnVerifiedChain, long? Height, string? Error);
+    public sealed record ChainInclusion(bool ProofValid, bool OnVerifiedChain, long? Height, string? Error, bool OffChain = false);
 
     /// <summary>
     /// Per-tx trustless height (the M3 polish): fetch the tx's merkle proof, verify it
-    /// (scrypt-PoW + merkle + txid), then LOCATE the proof's block in the wallet's own verified
-    /// header chain. If found, the tx's height is known with zero gateway trust — the gateway
-    /// never gets to assert which block, or which height, a coin is in. When the header chain is
-    /// absent or hasn't verified this block's height yet, the proof still stands on its own PoW
-    /// (OnVerifiedChain = false) — this only ever ADDS certainty, never rejects a valid coin.
+    /// (scrypt-PoW + merkle + txid), then LOCATE the proof's block on the wallet's own verified
+    /// chain — directly when the sync has placed it, else by linking it from
+    /// <paramref name="claimedBlockHeight"/> (the gateway's height, checked, never trusted) to a
+    /// trusted anchor. If found, the tx's height is known with zero gateway trust. When the
+    /// chain can't place it (no header feed, no height, not synced that far), OnVerifiedChain =
+    /// false and the tx is simply NOT independently confirmed — callers must not present
+    /// ProofValid alone as verification; a proven contradiction sets OffChain.
     /// </summary>
-    public async Task<ChainInclusion> VerifyChainInclusionAsync(string txId, CancellationToken ct = default)
+    public async Task<ChainInclusion> VerifyChainInclusionAsync(string txId, long claimedBlockHeight = 0, CancellationToken ct = default)
     {
         var proofHex = await _reader.GetTxOutProofAsync(txId, ct);
         if (string.IsNullOrWhiteSpace(proofHex))
@@ -178,7 +201,18 @@ public sealed class LiteTxVerifier
         if (!ok || blockHash == null)
             return new ChainInclusion(false, false, null, "The merkle inclusion proof did not verify.");
 
-        var height = _headerChain?.VerifiedHeightOf(blockHash);
-        return new ChainInclusion(true, height != null, height, null);
+        if (_headerChain is not { Available: true })
+        {
+            var placed = _headerChain?.VerifiedHeightOf(blockHash);
+            return new ChainInclusion(true, placed != null, placed, null);
+        }
+
+        var where = await _headerChain.LocateAsync(blockHash, claimedBlockHeight, ct);
+        return where.Membership switch
+        {
+            ChainMembership.OnChain => new ChainInclusion(true, true, where.Height, null),
+            ChainMembership.NotOnChain => new ChainInclusion(true, false, null, ChainError(where.Membership), OffChain: true),
+            _ => new ChainInclusion(true, false, null, ChainError(where.Membership)),
+        };
     }
 }

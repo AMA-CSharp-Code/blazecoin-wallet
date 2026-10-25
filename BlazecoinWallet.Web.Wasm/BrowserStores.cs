@@ -60,6 +60,11 @@ public sealed class BrowserWalletStateStore : IWalletStateStore
     public Task SetVerifiedCheckpointAsync(string value)
     { BrowserKv.Set("verified_header_checkpoint", value); return Task.CompletedTask; }
 
+    public Task<string?> GetHeaderAnchorsAsync()
+        => Task.FromResult(BrowserKv.GetOrNull("header_anchors"));
+    public Task SetHeaderAnchorsAsync(string value)
+    { BrowserKv.Set("header_anchors", value); return Task.CompletedTask; }
+
     public Task<bool> GetBackupVerifiedAsync()
         => Task.FromResult(!bool.TryParse(BrowserKv.GetOrNull("backup_verified"), out var v) || v);
     public Task SetBackupVerifiedAsync(bool verified)
@@ -75,6 +80,7 @@ public sealed class BrowserWalletStateStore : IWalletStateStore
         BrowserKv.Remove("revealed_address_count");
         BrowserKv.Remove("change_address_count");
         BrowserKv.Remove("verified_header_checkpoint");
+        BrowserKv.Remove("header_anchors");
         BrowserKv.Remove("backup_verified");
         BrowserKv.Remove("pq_address_count");
         return Task.CompletedTask;

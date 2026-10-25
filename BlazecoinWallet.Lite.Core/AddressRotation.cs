@@ -234,8 +234,10 @@ internal sealed class AddressRotation
     }
 
     /// <summary>Reveal-grade "used": in gateway mode, require a coin the wallet can PROVE is
-    /// mined and owned by the address (merkle+PoW proof) — a lying gateway can't fabricate
-    /// that, so it can't unlock reveals past a real gap (H1). Personal node → own chainstate
+    /// mined and owned by the address (merkle proof whose block is proven on the chain) — a
+    /// lying gateway can't fabricate that, so it can't unlock reveals past a real gap (H1).
+    /// With no header feed the proof stands alone and only raises the bar (a standalone header
+    /// costs ~2^20 scrypt hashes to forge). Personal node → own chainstate
     /// is authoritative, so plain activity suffices. NOTE the accepted edge (documented): an
     /// address received-then-fully-spent has no UTXO to prove, so it reads as unused for
     /// reveal-gating — harmless (reveals stay conservative; restore still finds it by
@@ -247,7 +249,7 @@ internal sealed class AddressRotation
         foreach (var u in await _reader.GetUtxosAsync(address, ct))
         {
             var v = await _verifier.VerifyAsync(u.TxId, u.OutputIndex, u.Amount,
-                requireInclusionProof: true, expectedAddress: address, ct);
+                requireInclusionProof: true, expectedAddress: address, claimedBlockHeight: u.BlockHeight, ct: ct);
             if (v.Verified) return true;
         }
         return false;

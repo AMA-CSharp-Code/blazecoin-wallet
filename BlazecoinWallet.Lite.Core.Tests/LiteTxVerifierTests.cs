@@ -223,4 +223,86 @@ public class LiteTxVerifierTests
         Assert.Contains("verify", result.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, relay.Calls); // fail-closed — never broadcast
     }
+
+    // ── Forged inclusion proofs (bug-bounty report 2026-10-25) ───────────────────────────
+
+    /// <summary>A gateway that fabricates a proof: serves one tx's raw hex AND a chosen
+    /// merkle proof for it.</summary>
+    private sealed class ForgedProofReader : IChainReader
+    {
+        private readonly string _txId;
+        private readonly string _hex;
+        private readonly string _proofHex;
+        public ForgedProofReader(Transaction tx, string proofHex) { _txId = tx.GetHash().ToString(); _hex = tx.ToHex(); _proofHex = proofHex; }
+
+        public bool SupportsChainVerification => true;
+        public Task<string?> GetRawTransactionHexAsync(string txId, CancellationToken ct = default) =>
+            Task.FromResult<string?>(string.Equals(txId, _txId, StringComparison.OrdinalIgnoreCase) ? _hex : null);
+        public Task<string?> GetTxOutProofAsync(string txId, CancellationToken ct = default) =>
+            Task.FromResult<string?>(string.Equals(txId, _txId, StringComparison.OrdinalIgnoreCase) ? _proofHex : null);
+        public bool SupportsHistory => true;
+        public Task<LiteAddressSummary?> GetAddressAsync(string a, CancellationToken ct = default) => Task.FromResult<LiteAddressSummary?>(null);
+        public Task<IReadOnlyList<LiteChainUtxo>> GetUtxosAsync(string a, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LiteChainUtxo>>([]);
+        public Task<IReadOnlyList<LiteHistoryEntry>> GetHistoryAsync(string a, int p = 1, int ps = 25, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LiteHistoryEntry>>([]);
+    }
+
+    /// <summary>The scrypt PoW hash of a header as a 256-bit number (what the miner computes).</summary>
+    private static System.Numerics.BigInteger ScryptHash(BlockHeader header)
+    {
+        var bytes = header.ToBytes();
+        var scrypt = Org.BouncyCastle.Crypto.Generators.SCrypt.Generate(bytes, bytes, N: 1024, r: 1, p: 1, dkLen: 32);
+        return new System.Numerics.BigInteger(scrypt, isUnsigned: true, isBigEndian: false);
+    }
+
+    /// <summary>Forges a one-tx block whose header claims <paramref name="bits"/>, grinding the
+    /// nonce until its scrypt hash meets that claimed target, and returns its merkle proof.</summary>
+    private static (string ProofHex, BlockHeader Header) ForgeProof(Transaction tx, uint bits)
+    {
+        var block = BlazecoinNetwork.Instance.Consensus.ConsensusFactory.CreateBlock();
+        block.Transactions.Add(tx);
+        block.UpdateMerkleRoot();
+        block.Header.Bits = new Target(bits);
+        block.Header.BlockTime = DateTimeOffset.FromUnixTimeSeconds(1_790_000_000);
+        var target = BlazecoinDifficulty.CompactToTarget(bits);
+        for (uint nonce = 0; ScryptHash(block.Header) > target; nonce++)
+            block.Header.Nonce = nonce;
+
+        var proof = new MerkleBlock(block, [tx.GetHash()]);
+        return (NBitcoin.DataEncoders.Encoders.Hex.EncodeData(proof.ToBytes()), block.Header);
+    }
+
+    [Fact]
+    public async Task A_forged_proof_claiming_a_target_easier_than_powLimit_is_rejected()
+    {
+        // The report's step 1–2: a header whose nBits encodes an absurdly easy target "meets"
+        // it within a couple of nonces. The branch and merkle root are genuine for this tx, so
+        // the out-of-range nBits is the ONLY thing wrong with the proof.
+        var tx = FundingTx(1_000_000);
+        var (proofHex, header) = ForgeProof(tx, 0x207fffff);
+        Assert.True(ScryptHash(header) <= BlazecoinDifficulty.CompactToTarget(0x207fffff)); // its own target IS met
+        Assert.False(BlazecoinPoW.MeetsTarget(header));
+
+        var verifier = new LiteTxVerifier(new ForgedProofReader(tx, proofHex));
+
+        var v = await verifier.VerifyAsync(tx.GetHash().ToString(), 0, 1_000_000, requireInclusionProof: true);
+        Assert.False(v.Verified);
+        Assert.False(v.IncludedInBlock);
+        Assert.Contains("inclusion proof did not verify", v.Error);
+
+        var inc = await verifier.VerifyChainInclusionAsync(tx.GetHash().ToString());
+        Assert.False(inc.ProofValid);
+        Assert.False(inc.OnVerifiedChain);
+    }
+
+    [Theory]
+    [InlineData(0x1e0fffffu, true)]  // exactly powLimit
+    [InlineData(0x1c3a6a29u, true)]  // the shipped checkpoint's real nBits
+    [InlineData(0x1e100000u, false)] // one step easier than powLimit
+    [InlineData(0x207fffffu, false)] // regtest-style "anything goes"
+    [InlineData(0x1e8fffffu, false)] // sign bit set: masked off it would read as powLimit
+    [InlineData(0x00000000u, false)] // zero target
+    public void Target_range_is_core_CheckProofOfWork_range_rule(uint bits, bool inRange)
+    {
+        Assert.Equal(inRange, BlazecoinDifficulty.TargetInRange(bits));
+    }
 }

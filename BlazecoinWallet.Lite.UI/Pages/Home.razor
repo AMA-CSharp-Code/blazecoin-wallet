@@ -129,7 +129,7 @@ else
             <ul class="lite-history">
                 @foreach (var h in _history)
                 {
-                    <li class="lite-history-row" @onclick="() => OpenTx(h.TxId)">
+                    <li class="lite-history-row" @onclick="() => OpenTx(h.TxId, h.BlockHeight)">
                         <span class="@(h.Type == "received" ? "in" : "out")">
                             @(h.Type == "received" ? "▼" : "▲") @AmountText(Math.Abs(h.Amount)) @_sym
                             @{ var label = Labels.Get(h.TxId); }
@@ -261,7 +261,9 @@ else
         finally { _moving = false; }
     }
 
-    private void OpenTx(string txId) => Nav.NavigateTo($"tx/{txId}");
+    // The height rides along so the tx page can prove the block on the chain (checked, never trusted).
+    private void OpenTx(string txId, long blockHeight) =>
+        Nav.NavigateTo(blockHeight > 0 ? $"tx/{txId}?h={blockHeight}" : $"tx/{txId}");
     private string AmountText(long sats) => LiteUnits.Format(sats, Units.Unit);
     private static string Short(string s) => s.Length <= 16 ? s : $"{s[..8]}…{s[^6..]}";
 }

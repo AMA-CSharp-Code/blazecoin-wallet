@@ -61,7 +61,13 @@ else
     {
         <div class="lite-card">
             <h2>Chain Verification</h2>
-            @if (p.OnVerifiedChain)
+            @if (p.OffChain)
+            {
+                <p class="lite-sub">⚠️ <strong>Not on the real chain.</strong> The gateway's proof places this
+                    transaction in a block that your wallet's verified chain does not contain. Treat it as
+                    unconfirmed and consider switching gateway in Settings.</p>
+            }
+            else if (p.OnVerifiedChain)
             {
                 <p class="lite-sub">🔒 <strong>Verified on your own chain.</strong> This wallet checked the
                     block headers' proof-of-work itself — the height below is not taken on the gateway's word.</p>
@@ -71,8 +77,9 @@ else
             }
             else
             {
-                <p class="lite-sub">✓ Inclusion proof is valid (scrypt proof-of-work + merkle branch). Your verified
-                    header chain hasn't reached this block yet, so its exact height isn't independently confirmed.</p>
+                <p class="lite-sub">Not yet independently confirmed. The gateway's inclusion proof is well-formed,
+                    but this block isn't on your verified header chain yet, so the wallet can't confirm the
+                    transaction is mined or at what height.</p>
             }
         </div>
     }
@@ -82,6 +89,10 @@ else
 
 @code {
     [Parameter] public string TxId { get; set; } = string.Empty;
+
+    /// <summary>The gateway's block height for the tx (from history) — checked against the
+    /// verified chain, never trusted.</summary>
+    [SupplyParameterFromQuery(Name = "h")] public long? ClaimedHeight { get; set; }
 
     private LiteTxDetails? _tx;
     private LiteChainProof? _proof;
@@ -111,7 +122,7 @@ else
         if (!firstRender || _tx == null) return;
         try
         {
-            var proof = await Wallet.VerifyTransactionOnChainAsync(TxId);
+            var proof = await Wallet.VerifyTransactionOnChainAsync(TxId, ClaimedHeight ?? 0);
             if (proof.OnVerifiedChain || proof.ProofValid)
             {
                 _proof = proof;

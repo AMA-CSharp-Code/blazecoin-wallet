@@ -56,9 +56,12 @@ public static class BlazecoinDifficulty
     }
 
     /// <summary>True when the target is in range (0 &lt; target ≤ powLimit) — the range half of
-    /// CheckProofOfWork, before the scrypt hash is compared.</summary>
+    /// CheckProofOfWork, before the scrypt hash is compared. A set sign bit (0x00800000) is
+    /// rejected as Core's fNegative is; <see cref="CompactToTarget"/> masks it off, so without
+    /// this check a "negative" nBits would read as a positive in-range target.</summary>
     public static bool TargetInRange(uint bits)
     {
+        if ((bits & 0x00800000) != 0) return false;
         var target = CompactToTarget(bits);
         return target > BigInteger.Zero && target <= PowLimit;
     }

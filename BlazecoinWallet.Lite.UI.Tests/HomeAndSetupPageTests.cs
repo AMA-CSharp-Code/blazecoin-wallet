@@ -19,7 +19,8 @@ public class HomeAndSetupPageTests : LiteUiTestBase
     [Fact]
     public void Home_history_rows_navigate_to_the_transaction_detail_view()
     {
-        // History rows are now tappable → /tx/{id} (the explorer link moved to the detail page).
+        // History rows are now tappable → /tx/{id} (the explorer link moved to the detail page),
+        // carrying the gateway's height so the page can prove the block on the chain.
         var reader = new FakeReader { History = [new BlazecoinWallet.Lite.Data.LiteHistoryEntry("deadbeef01", 100, DateTime.UtcNow, 5_000_000, "received")] };
         Wire(new LoadedVault(), reader, new FakeRelay());
         var cut = RenderComponent<Home>();
@@ -27,7 +28,7 @@ public class HomeAndSetupPageTests : LiteUiTestBase
         cut.WaitForAssertion(() => Assert.NotEmpty(cut.FindAll(".lite-history-row")));
         cut.Find(".lite-history-row").Click();
         var nav = Services.GetRequiredService<NavigationManager>();
-        Assert.EndsWith("/tx/deadbeef01", nav.Uri);
+        Assert.EndsWith("/tx/deadbeef01?h=100", nav.Uri);
     }
 
     [Fact]

@@ -64,8 +64,8 @@
         <ApplicationId Condition="$(TargetFramework.Contains('-maccatalyst'))">uk.co.blazecoin.wallet</ApplicationId>
 
         <!-- Versions -->
-        <ApplicationDisplayVersion>2.0.13</ApplicationDisplayVersion>
-        <ApplicationVersion>14</ApplicationVersion>
+        <ApplicationDisplayVersion>2.0.14</ApplicationDisplayVersion> <!-- 2.0.14 = Core + Lite.Core packages for the lite 1.3.1 security release; no desktop installer was built at this version -->
+        <ApplicationVersion>15</ApplicationVersion>
 
         <!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
         <WindowsPackageType>None</WindowsPackageType>

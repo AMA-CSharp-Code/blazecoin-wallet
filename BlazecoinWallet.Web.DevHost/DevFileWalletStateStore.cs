@@ -14,6 +14,7 @@ public sealed class DevFileWalletStateStore : IWalletStateStore
     private static readonly string RevealedPath = System.IO.Path.Combine(Dir, "dev-revealed-count.txt");
     private static readonly string ChangePath = System.IO.Path.Combine(Dir, "dev-change-count.txt");
     private static readonly string CheckpointPath = System.IO.Path.Combine(Dir, "dev-verified-checkpoint.txt");
+    private static readonly string AnchorsPath = System.IO.Path.Combine(Dir, "dev-header-anchors.txt");
     private static readonly string BackupVerifiedPath = System.IO.Path.Combine(Dir, "dev-backup-verified.txt");
     private static readonly string PqPath = System.IO.Path.Combine(Dir, "dev-pq-count.txt");
 
@@ -33,6 +34,15 @@ public sealed class DevFileWalletStateStore : IWalletStateStore
         await File.WriteAllTextAsync(CheckpointPath, value);
     }
 
+    public async Task<string?> GetHeaderAnchorsAsync()
+        => File.Exists(AnchorsPath) ? (await File.ReadAllTextAsync(AnchorsPath)).Trim() : null;
+
+    public async Task SetHeaderAnchorsAsync(string value)
+    {
+        Directory.CreateDirectory(Dir);
+        await File.WriteAllTextAsync(AnchorsPath, value);
+    }
+
     public async Task<bool> GetBackupVerifiedAsync()
         => !File.Exists(BackupVerifiedPath) || (await File.ReadAllTextAsync(BackupVerifiedPath)).Trim() == "1";
 
@@ -47,6 +57,7 @@ public sealed class DevFileWalletStateStore : IWalletStateStore
         if (File.Exists(RevealedPath)) File.Delete(RevealedPath);
         if (File.Exists(ChangePath)) File.Delete(ChangePath);
         if (File.Exists(CheckpointPath)) File.Delete(CheckpointPath);
+        if (File.Exists(AnchorsPath)) File.Delete(AnchorsPath);
         if (File.Exists(BackupVerifiedPath)) File.Delete(BackupVerifiedPath);
         if (File.Exists(PqPath)) File.Delete(PqPath);
         return Task.CompletedTask;

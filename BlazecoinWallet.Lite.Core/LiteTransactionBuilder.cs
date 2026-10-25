@@ -12,7 +12,9 @@ namespace BlazecoinWallet.Lite;
 /// <param name="ScriptPubKey">The output's scriptPubKey hex when the data source served it;
 /// null → derived from <paramref name="Address"/>. When present it MUST agree with the address
 /// (the builder checks), so a gateway can't steer a signature at the wrong template.</param>
-public sealed record LiteUtxo(string TxId, int Vout, long Satoshis, string Address, string? ScriptPubKey = null)
+/// <param name="BlockHeight">The gateway's height for the funding block (0 = unknown). Untrusted:
+/// the send pipeline PROVES the coin's block is on the chain at this height before signing.</param>
+public sealed record LiteUtxo(string TxId, int Vout, long Satoshis, string Address, string? ScriptPubKey = null, long BlockHeight = 0)
 {
     /// <summary>True when this coin sits on a P2PQH output (spending it needs an ML-DSA signature).</summary>
     public bool IsPostQuantum => Pq.PqAddress.TryDecode(Address) != null;

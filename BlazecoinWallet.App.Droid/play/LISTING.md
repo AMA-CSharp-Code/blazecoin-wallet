@@ -128,6 +128,7 @@ guidance"; accept whatever IARC returns).
 
 - bump `ApplicationDisplayVersion` / `ApplicationVersion` in `BlazecoinWallet.App.Droid.csproj`
 - refresh `HeaderChainSync.MainnetCheckpoint` (Lite.Core) to a recent retarget boundary
+- refresh the header-anchor table: `Tools/Build-HeaderAnchors.ps1` (from a synced mainnet node)
 - `.\Build-AndroidRelease.ps1 -OutDir <explicit path>` (PS 5.1 `-File` leaves `$PSScriptRoot`
   empty in `param()` defaults)
 - `aapt dump badging artifacts\com.blazecoin.wallet-Signed.apk | findstr versionCode`

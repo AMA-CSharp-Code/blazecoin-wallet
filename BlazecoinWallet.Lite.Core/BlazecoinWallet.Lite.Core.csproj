@@ -33,6 +33,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Trusted block hash every 1,000 heights (HeaderAnchors.cs); regenerate at each lite
+         release with Tools/Build-HeaderAnchors.ps1 from a synced mainnet node. -->
+    <EmbeddedResource Include="Data\mainnet-header-anchors.bin" LogicalName="BlazecoinWallet.Lite.Data.mainnet-header-anchors.bin" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\BlazecoinWallet.Core\BlazecoinWallet.Core.csproj" />
   </ItemGroup>
 

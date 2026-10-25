@@ -12,6 +12,7 @@ public sealed class PreferencesWalletStateStore : IWalletStateStore
     private const string RevealedKey = "revealed_address_count";
     private const string ChangeKey = "change_address_count";
     private const string CheckpointKey = "verified_header_checkpoint";
+    private const string AnchorsKey = "header_anchors";
     private const string BackupVerifiedKey = "backup_verified";
     private const string PqKey = "pq_address_count";
 
@@ -42,6 +43,15 @@ public sealed class PreferencesWalletStateStore : IWalletStateStore
         return Task.CompletedTask;
     }
 
+    public Task<string?> GetHeaderAnchorsAsync()
+        => Task.FromResult(Preferences.Default.Get<string?>(AnchorsKey, null));
+
+    public Task SetHeaderAnchorsAsync(string value)
+    {
+        Preferences.Default.Set(AnchorsKey, value);
+        return Task.CompletedTask;
+    }
+
     public Task<bool> GetBackupVerifiedAsync()
         => Task.FromResult(Preferences.Default.Get(BackupVerifiedKey, true));
 
@@ -65,6 +75,7 @@ public sealed class PreferencesWalletStateStore : IWalletStateStore
         Preferences.Default.Remove(RevealedKey);
         Preferences.Default.Remove(ChangeKey);
         Preferences.Default.Remove(CheckpointKey);
+        Preferences.Default.Remove(AnchorsKey);
         Preferences.Default.Remove(BackupVerifiedKey);
         Preferences.Default.Remove(PqKey);
         return Task.CompletedTask;

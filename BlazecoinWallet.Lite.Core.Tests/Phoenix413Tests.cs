@@ -54,9 +54,20 @@ public class Phoenix413Tests
         Assert.Equal(4_194_000, BlazecoinDifficulty.PhoenixActivationHeight);
         Assert.Equal(30, BlazecoinDifficulty.PhoenixTargetSpacing);
         Assert.Equal(12_390, BlazecoinDifficulty.PhoenixHalfLife);
-        // The shipped checkpoint must sit BELOW H_A−1 so a fresh install's forward
-        // sync passes through the fork and captures the anchor from real headers.
-        Assert.True(HeaderChainSync.MainnetCheckpoint.Height < BlazecoinDifficulty.PhoenixActivationHeight - 1);
+        // A shipped checkpoint past H_A must carry the Phoenix anchor itself — the per-block
+        // rule cannot be verified without it — and the values are the fork's real ones:
+        // block 4,194,000's nBits and block 4,193,999's timestamp (harvested from mainnet).
+        var cp = HeaderChainSync.MainnetCheckpoint;
+        if (cp.Height >= BlazecoinDifficulty.PhoenixActivationHeight)
+        {
+            Assert.Equal(0x1c404193u, cp.AnchorBits);
+            Assert.Equal(1787765193L, cp.AnchorParentTime);
+            Assert.NotEqual(0L, cp.Time); // the parent-time input of the next header's rule
+        }
+        else
+        {
+            Assert.True(cp.Height < BlazecoinDifficulty.PhoenixActivationHeight - 1); // captured from the stream instead
+        }
     }
 
     [Fact]
