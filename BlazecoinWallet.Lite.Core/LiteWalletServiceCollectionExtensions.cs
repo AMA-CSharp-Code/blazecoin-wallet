@@ -32,7 +32,19 @@ public sealed class LiteWalletOptions
     /// <summary>Hook for the transport (e.g. the dev host's dev-cert bypass). Null → default handler.</summary>
     public Func<HttpMessageHandler>? InnerHandlerFactory { get; init; }
 
+    /// <summary>Budget for an ordinary gateway call (an address, its coins, a proof, a relay):
+    /// a healthy gateway answers in well under a second. Applied per gateway attempt by
+    /// <see cref="RequestTimeoutHandler"/>, so a gateway that accepts the connection but never
+    /// answers costs one budget before the next gateway is tried.</summary>
     public TimeSpan HttpTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Budget for the provenance trace — the one gateway call that legitimately takes
+    /// long: the server walks a coin's whole mint ancestry. Under the single 30 s ceiling every
+    /// mobile trace from 2026-10-26 was cut off by the client (gateway log: 499 at 30.5 s) and
+    /// the page blamed the connection. Current gateways answer inside their own ~20 s time budget
+    /// (plus up to 15 s queueing behind another trace); the margin covers a gateway that has not
+    /// been updated yet.</summary>
+    public TimeSpan TraceTimeout { get; init; } = TimeSpan.FromMinutes(3);
 
     /// <summary>
     /// Disables the trustless header-chain sync for heads where per-header scrypt is
@@ -74,10 +86,15 @@ public static class LiteWalletServiceCollectionExtensions
         {
             services.AddSingleton(_ =>
             {
+                // Budgets sit INSIDE the failover (per attempt) so a gateway that accepts the
+                // connection but never answers is treated like a dead one: the next gateway is
+                // tried. HttpClient's own timeout is off — it is one ceiling for every call and a
+                // provenance trace needs far more than an ordinary read (see RequestTimeoutHandler).
                 var failover = new GatewayFailoverHandler(
                     options.GatewayUrls,
-                    options.InnerHandlerFactory?.Invoke() ?? new HttpClientHandler());
-                return new HttpClient(failover) { BaseAddress = failover.Primary, Timeout = options.HttpTimeout };
+                    new RequestTimeoutHandler(options.HttpTimeout, options.TraceTimeout,
+                        options.InnerHandlerFactory?.Invoke() ?? new HttpClientHandler()));
+                return new HttpClient(failover) { BaseAddress = failover.Primary, Timeout = Timeout.InfiniteTimeSpan };
             });
             services.AddSingleton<ILiteWalletData>(sp => new IndexerDataService(
                 sp.GetRequiredService<HttpClient>(),

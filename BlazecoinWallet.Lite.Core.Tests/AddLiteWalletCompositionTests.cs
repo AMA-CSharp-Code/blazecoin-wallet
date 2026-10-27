@@ -125,4 +125,70 @@ public class AddLiteWalletCompositionTests
         using var sp = Build(new LiteWalletOptions { GatewayUrls = ["http://evil.test/"] });
         Assert.Throws<ArgumentException>(() => sp.GetRequiredService<LiteWalletService>());
     }
+
+
+    // ── per-request budgets (2026-10-27) ──
+
+    /// <summary>A gateway that takes a fixed time to answer anything (honouring cancellation).</summary>
+    private sealed class SlowGateway : HttpMessageHandler
+    {
+        private readonly TimeSpan _delay;
+        public SlowGateway(TimeSpan delay) => _delay = delay;
+
+        private const string EmptyAncestry =
+            """{"address":"B","totalSatoshis":0,"outputCount":0,"transactionsRead":0,"truncated":false,"fifo":{"attributedSatoshis":0,"years":[],"months":[],"specials":[]},"haircut":{"attributedSatoshis":0,"years":[],"months":[],"specials":[]}}""";
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await Task.Delay(_delay, ct);
+            var path = request.RequestUri!.AbsolutePath;
+            var body = path.EndsWith("/ancestry", StringComparison.Ordinal) ? EmptyAncestry : "[]";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
+        }
+    }
+
+    [Fact]
+    public async Task Gateway_mode_times_the_trace_under_its_own_budget_not_the_read_ceiling()
+    {
+        // Same slow gateway for both calls. The ordinary read is cut at HttpTimeout (and
+        // degrades, never throws); the trace, under TraceTimeout, is answered. This is the
+        // 2026-10-26 outage in miniature: one ceiling for both would fail the trace too.
+        using var sp = Build(new LiteWalletOptions
+        {
+            GatewayUrls = ["https://gw.test/"],
+            HttpTimeout = TimeSpan.FromMilliseconds(100),
+            TraceTimeout = TimeSpan.FromSeconds(10),
+            InnerHandlerFactory = () => new SlowGateway(TimeSpan.FromMilliseconds(400)),
+        });
+        var data = Assert.IsType<IndexerDataService>(sp.GetRequiredService<ILiteWalletData>());
+
+        Assert.Empty(await data.GetUtxosAsync("Baddr"));          // read: timed out → degraded
+        var trace = await data.GetAncestryAsync("Baddr");          // trace: waited for
+        Assert.Null(trace.Error);
+        Assert.NotNull(trace.Report);
+
+        // HttpClient's own ceiling is off — the handler owns every budget.
+        Assert.Equal(Timeout.InfiniteTimeSpan, sp.GetRequiredService<HttpClient>().Timeout);
+    }
+
+    [Fact]
+    public async Task The_trace_budget_is_still_a_ceiling_in_the_composed_graph()
+    {
+        using var sp = Build(new LiteWalletOptions
+        {
+            GatewayUrls = ["https://gw.test/"],
+            HttpTimeout = TimeSpan.FromMilliseconds(50),
+            TraceTimeout = TimeSpan.FromMilliseconds(150),
+            InnerHandlerFactory = () => new SlowGateway(TimeSpan.FromSeconds(5)),
+        });
+        var data = (IndexerDataService)sp.GetRequiredService<ILiteWalletData>();
+
+        var started = DateTime.UtcNow;
+        var trace = await data.GetAncestryAsync("Baddr");
+
+        Assert.Null(trace.Report);
+        Assert.Contains("did not finish the trace in time", trace.Error);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(3));
+    }
 }

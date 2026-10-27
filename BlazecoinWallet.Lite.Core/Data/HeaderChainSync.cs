@@ -153,15 +153,15 @@ public static class HeaderChainValidator
 public sealed class HeaderChainSync
 {
     /// <summary>The shipped anchor — a real mainnet block, refreshed at every lite release so a
-    /// fresh install's forward sync stays short (harvested 2026-10-25 from the live daemon at tip
-    /// 4,368,772; it is also an entry of the shipped <see cref="HeaderAnchors"/> table). Being
+    /// fresh install's forward sync stays short (harvested 2026-10-27 from the live daemon at tip
+    /// 4,373,562; it is also an entry of the shipped <see cref="HeaderAnchors"/> table). Being
     /// past H_A, it BAKES the Phoenix-413 anchor the per-block rule needs: AnchorBits = block
     /// 4,194,000's nBits, AnchorParentTime = block 4,193,999's timestamp (both constant since
     /// the fork). Trusting it is the same assumption Core's checkpoints/assumevalid make.
     /// (The 2026-08-26 → 10-25 anchor was 4,193,880, deliberately below the fork so the sync
     /// captured those two values from the header stream; Phoenix413Tests pins them.)</summary>
     public static readonly HeaderCheckpoint MainnetCheckpoint =
-        new(4_368_000, "24c0791e17ed118a81153f98b03db0ddab27e6a30f458bff50e0d6c2a43793e3", 0x1c04faac, 1792939488,
+        new(4_373_000, "6e3c90335ee10e2ad30aa03b28d05d930a9fbc48b9c4f2a7209740cb8917debb", 0x1c04be0a, 1793088607,
             AnchorBits: 0x1c404193, AnchorParentTime: 1787765193);
 
     private const int BatchSize = 250;   // headers per gateway call (~40 KB)

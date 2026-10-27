@@ -71,9 +71,21 @@
         }
         @if (m.Truncated)
         {
+            @* Two budgets can stop a walk. Time: the gateway traces in timed slices and
+               caches what it read, so a re-trace carries on from where this one stopped —
+               say so, because the button is the fix. Reads: the server's hard cap. *@
             <p class="lite-prov-truncated">
-                ⚠ The trace hit the server's depth limit — ancestry beyond it counts as
-                unproven, so these figures are a minimum, not the whole story.
+                @if (m.TruncatedBy == "time")
+                {
+                    <text>⏱ The gateway stopped at its time limit — ancestry beyond it counts as
+                    unproven, so these figures are a minimum. Re-trace to go deeper: the
+                    gateway carries on from what it has already read.</text>
+                }
+                else
+                {
+                    <text>⚠ The trace hit the server's depth limit — ancestry beyond it counts as
+                    unproven, so these figures are a minimum, not the whole story.</text>
+                }
             </p>
         }
 
@@ -157,7 +169,7 @@
         IReadOnlyList<LiteVintageRow> Specials);
 
     private sealed record Merged(long Total, int Reads, MergedModel Fifo, MergedModel Haircut,
-        bool Truncated)
+        bool Truncated, string? TruncatedBy)
     {
         public IEnumerable<LiteVintageRow> MonthsOf(MergedModel model, LiteVintageRow year) =>
             model.Months.Where(x => x.Key.StartsWith(year.Key + "-", StringComparison.Ordinal));
@@ -204,7 +216,10 @@
                 reports.Sum(r => r.TransactionsRead),
                 MergeModels(reports.Select(r => r.Fifo)),
                 MergeModels(reports.Select(r => r.Haircut)),
-                reports.Any(r => r.Truncated));
+                reports.Any(r => r.Truncated),
+                // "time" wins across addresses: if ANY address can go deeper, say so.
+                reports.Any(r => r.TruncatedBy == "time") ? "time"
+                    : reports.FirstOrDefault(r => r.Truncated)?.TruncatedBy);
         }
         finally
         {

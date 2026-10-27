@@ -110,4 +110,99 @@ public class GatewayFailoverHandlerTests
         await Assert.ThrowsAsync<HttpRequestException>(() => client.GetAsync("indexer/api/x"));
         Assert.Equal(new[] { "a.test", "b.test" }, transport.Calls); // both were tried
     }
+
+
+    // ── per-attempt budgets (RequestTimeoutHandler sits INSIDE the failover, 2026-10-27) ──
+
+    /// <summary>A gateway that accepts the connection and never answers, honouring cancellation.</summary>
+    private sealed class StallingTransport : HttpMessageHandler
+    {
+        public readonly List<string> Calls = [];
+        public readonly List<RequestBudget?> BudgetsSeen = [];
+        public string? StallHost;
+        public TimeSpan Stall = TimeSpan.FromSeconds(10);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Calls.Add(request.RequestUri!.Host);
+            BudgetsSeen.Add(request.Options.TryGetValue(RequestTimeoutHandler.Budget, out var b) ? b : null);
+            if (request.RequestUri.Host == StallHost) await Task.Delay(Stall, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("from-" + request.RequestUri.Host) };
+        }
+    }
+
+    private static HttpClient BudgetedClient(HttpMessageHandler transport, TimeSpan defaultBudget, TimeSpan traceBudget, params string[] gateways)
+    {
+        // The composition root's shape: failover OUTSIDE, budgets INSIDE (per attempt), client ceiling off.
+        var failover = new GatewayFailoverHandler(gateways, new RequestTimeoutHandler(defaultBudget, traceBudget, transport));
+        return new HttpClient(failover) { BaseAddress = failover.Primary, Timeout = Timeout.InfiniteTimeSpan };
+    }
+
+    [Fact]
+    public async Task A_gateway_that_accepts_but_never_answers_is_failed_over_after_its_budget()
+    {
+        var transport = new StallingTransport { StallHost = "a.test" };
+        using var client = BudgetedClient(transport, TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(5),
+            "https://a.test/", "https://b.test/");
+
+        var started = DateTime.UtcNow;
+        var answer = await client.GetStringAsync("indexer/api/x");
+
+        Assert.Equal("from-b.test", answer);
+        Assert.Equal(new[] { "a.test", "b.test" }, transport.Calls);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(3), "the stall was cut at the budget, not waited out");
+    }
+
+    [Fact]
+    public async Task The_requests_budget_rides_along_to_the_retry()
+    {
+        var transport = new StallingTransport { StallHost = "a.test" };
+        using var client = BudgetedClient(transport, TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(200),
+            "https://a.test/", "https://b.test/");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "indexer/api/address/B/ancestry");
+        request.Options.Set(RequestTimeoutHandler.Budget, RequestBudget.Trace);
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        // Both attempts were timed under the TRACE budget — the option survived the re-send.
+        Assert.Equal(new RequestBudget?[] { RequestBudget.Trace, RequestBudget.Trace }, transport.BudgetsSeen);
+    }
+
+    [Fact]
+    public async Task The_callers_own_cancellation_is_not_a_failover_trigger()
+    {
+        var transport = new StallingTransport { StallHost = "a.test" };
+        using var client = BudgetedClient(transport, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10),
+            "https://a.test/", "https://b.test/");
+        using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetAsync("indexer/api/x", caller.Token));
+
+        Assert.Equal(new[] { "a.test" }, transport.Calls);   // the user said stop — nobody else is asked
+    }
+
+    [Fact]
+    public async Task Every_gateway_stalling_propagates_the_timeout_after_trying_each()
+    {
+        var transport = new EverythingStalls();
+        using var client = BudgetedClient(transport, TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(50),
+            "https://a.test/", "https://b.test/");
+
+        var ex = await Assert.ThrowsAsync<TaskCanceledException>(() => client.GetAsync("indexer/api/x"));
+
+        Assert.IsType<TimeoutException>(ex.InnerException);
+        Assert.Equal(new[] { "a.test", "b.test" }, transport.Calls);   // both were given their budget
+    }
+
+    private sealed class EverythingStalls : HttpMessageHandler
+    {
+        public readonly List<string> Calls = [];
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Calls.Add(request.RequestUri!.Host);
+            await Task.Delay(TimeSpan.FromSeconds(10), ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
+    }
 }

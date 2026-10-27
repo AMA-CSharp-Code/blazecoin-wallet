@@ -17,10 +17,17 @@ public class IndexerDataServiceTests
     {
         public readonly Dictionary<string, (HttpStatusCode, string)> ByPathSuffix = new();
         public bool Dead;
+        /// <summary>Thrown instead of answering — e.g. the budget handler's timeout shape.</summary>
+        public Exception? Fault;
+        /// <summary>Each request's path and the budget it declared (null = none).</summary>
+        public readonly List<(string Path, RequestBudget? Budget)> Seen = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
+            Seen.Add((request.RequestUri!.AbsolutePath,
+                request.Options.TryGetValue(RequestTimeoutHandler.Budget, out var b) ? b : null));
             if (Dead) throw new HttpRequestException("connection refused");
+            if (Fault != null) throw Fault;
             var path = request.RequestUri!.AbsolutePath;
             foreach (var (suffix, resp) in ByPathSuffix)
                 if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
@@ -105,5 +112,87 @@ public class IndexerDataServiceTests
         gw.ByPathSuffix["/broadcast"] = (HttpStatusCode.UnprocessableEntity, """{"error":"txn-already-in-mempool"}""");
         var dup = await Build(gw).BroadcastAsync("00ff");
         Assert.Equal(BroadcastFailureKind.Duplicate, dup.Failure);
+    }
+
+
+    // ── the provenance trace (2026-10-27: its own time budget, a timeout named as one) ──
+
+    private const string EmptyAncestryJson =
+        """{"address":"B","totalSatoshis":0,"outputCount":0,"transactionsRead":0,"truncated":false,"fifo":{"attributedSatoshis":0,"years":[],"months":[],"specials":[]},"haircut":{"attributedSatoshis":0,"years":[],"months":[],"specials":[]}}""";
+
+    [Fact]
+    public async Task The_ancestry_call_declares_the_trace_budget_and_ordinary_reads_do_not()
+    {
+        var gw = new ScriptedGateway();
+        gw.ByPathSuffix["/utxos"] = (HttpStatusCode.OK, "[]");
+        gw.ByPathSuffix["/ancestry"] = (HttpStatusCode.OK, EmptyAncestryJson);
+        var svc = Build(gw);
+
+        await svc.GetUtxosAsync("Baddr");
+        var trace = await svc.GetAncestryAsync("Baddr");
+
+        Assert.Null(trace.Error);
+        Assert.Collection(gw.Seen,
+            u => { Assert.EndsWith("/utxos", u.Path); Assert.Null(u.Budget); },
+            a => { Assert.EndsWith("/ancestry", a.Path); Assert.Equal(RequestBudget.Trace, a.Budget); });
+    }
+
+    [Theory]
+    [InlineData("\"truncated\":true,\"truncatedBy\":\"time\"", true, "time")]
+    [InlineData("\"truncated\":true,\"truncatedBy\":\"reads\"", true, "reads")]
+    [InlineData("\"truncated\":true", true, null)]           // an older gateway: no reason field
+    [InlineData("\"truncated\":false", false, null)]
+    public async Task Ancestry_maps_the_budget_flags_from_the_gateway(string flags, bool truncated, string? by)
+    {
+        var gw = new ScriptedGateway();
+        gw.ByPathSuffix["/ancestry"] = (HttpStatusCode.OK, EmptyAncestryJson.Replace("\"truncated\":false", flags));
+        var svc = Build(gw);
+
+        var trace = await svc.GetAncestryAsync("Baddr");
+
+        Assert.Null(trace.Error);
+        Assert.Equal(truncated, trace.Report!.Truncated);
+        Assert.Equal(by, trace.Report.TruncatedBy);
+    }
+
+    [Fact]
+    public async Task An_ancestry_timeout_is_named_as_one_and_says_a_retry_resumes()
+    {
+        // The budget handler's shape (and HttpClient.Timeout's): TaskCanceled over Timeout.
+        var gw = new ScriptedGateway { Fault = new TaskCanceledException("budget", new TimeoutException()) };
+        var svc = Build(gw);
+
+        var trace = await svc.GetAncestryAsync("Baddr");
+
+        Assert.Null(trace.Report);
+        Assert.Contains("did not finish the trace in time", trace.Error);
+        Assert.Contains("carries on from where it stopped", trace.Error);
+        Assert.DoesNotContain("connection", trace.Error);   // 2026-10-26's misdiagnosis, never again
+    }
+
+    [Fact]
+    public async Task A_dead_gateway_is_still_reported_as_a_connection_problem()
+    {
+        var svc = Build(new ScriptedGateway { Dead = true });
+
+        var trace = await svc.GetAncestryAsync("Baddr");
+
+        Assert.Null(trace.Report);
+        Assert.Contains("check your connection", trace.Error);
+    }
+
+    [Fact]
+    public async Task The_callers_own_cancellation_is_a_failure_result_not_a_throw()
+    {
+        var gw = new ScriptedGateway { Fault = new OperationCanceledException() };
+        var svc = Build(gw);
+        using var caller = new CancellationTokenSource();
+        caller.Cancel();
+
+        var trace = await svc.GetAncestryAsync("Baddr", caller.Token);
+
+        Assert.Null(trace.Report);
+        Assert.NotNull(trace.Error);
+        Assert.DoesNotContain("did not finish", trace.Error);   // not a budget verdict — the user stopped it
     }
 }

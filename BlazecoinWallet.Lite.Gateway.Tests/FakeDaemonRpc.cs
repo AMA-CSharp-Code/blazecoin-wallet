@@ -15,6 +15,9 @@ public sealed class FakeDaemonRpc : DaemonRpcClient
     public readonly Dictionary<string, string> Proofs = new(StringComparer.OrdinalIgnoreCase);
     public readonly Dictionary<long, string> HeaderHex = [];
     public bool Unreachable;
+    /// <summary>Wall-clock cost of one verbose transaction read (also paid per id inside a
+    /// batch) — lets the trace time budget be exercised against a "slow daemon".</summary>
+    public TimeSpan ReadDelay;
     public bool AcceptAllowed = true;
     public string? RejectReason;
     public string? LastSentHex;
@@ -110,17 +113,18 @@ public sealed class FakeDaemonRpc : DaemonRpcClient
 
     /// <summary>Serves any tx in the scripted chain with its block's hash/time, mirroring
     /// a txindex daemon; mempool txs come back with no blockhash.</summary>
-    public override Task<RpcRawTransaction> GetRawTransactionVerboseAsync(string txId, CancellationToken ct = default)
+    public override async Task<RpcRawTransaction> GetRawTransactionVerboseAsync(string txId, CancellationToken ct = default)
     {
         Gate();
+        if (ReadDelay > TimeSpan.Zero) await Task.Delay(ReadDelay, ct);
         foreach (var b in Blocks.Values)
         {
             var tx = b.Tx.FirstOrDefault(t => string.Equals(t.TxId, txId, StringComparison.OrdinalIgnoreCase));
             if (tx != null)
-                return Task.FromResult(new RpcRawTransaction(tx.TxId, tx.Vin, tx.Vout, b.Hash, GenesisUnixTime + b.Height));
+                return new RpcRawTransaction(tx.TxId, tx.Vin, tx.Vout, b.Hash, GenesisUnixTime + b.Height);
         }
         if (MempoolTxs.TryGetValue(txId, out var m))
-            return Task.FromResult(new RpcRawTransaction(m.TxId, m.Vin, m.Vout, null, null));
+            return new RpcRawTransaction(m.TxId, m.Vin, m.Vout, null, null);
         throw new DaemonRpcException("No such mempool or blockchain transaction.", DaemonRpcException.NotFoundCode);
     }
 

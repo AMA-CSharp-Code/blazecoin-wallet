@@ -317,6 +317,13 @@ static void MapWalletSurface(RouteGroupBuilder api)
         // dust coins ran through a 413-input consolidation and blew straight past the
         // original 25k); the TraceGate + cache keep the daemon cost acceptable.
         var maxReads = cfg.GetValue("Trace:MaxTransactionReads", 100_000);
+        // Wall-clock budget (2026-10-27): the callers are phones with a request timeout, and a
+        // coin descended through the payout wallet's consolidation history needed more than
+        // ten minutes of reads — every mobile trace died at the client's 30 s (status 499 in
+        // this log) and the page blamed the connection. Now the walk answers inside the
+        // budget with `truncated` set (the page shows a floor), and because the reads are
+        // cached a re-trace carries on from where this one stopped. 0 = unlimited.
+        var maxSeconds = cfg.GetValue("Trace:MaxSeconds", 20.0);
         var options = new AncestryTracerOptions
         {
             // Depth is a pathology backstop, not the budget — MaxTransactionReads is.
@@ -324,6 +331,7 @@ static void MapWalletSurface(RouteGroupBuilder api)
             // change-chain grew past 100 hops (2026-08-24).
             MaxDepth = cfg.GetValue("Trace:MaxDepth", 100_000),
             MaxTransactionReads = maxReads,
+            TimeBudget = maxSeconds > 0 ? TimeSpan.FromSeconds(maxSeconds) : null,
         };
 
         // An empty address needs no daemon work — answer without taking the gate.
@@ -376,10 +384,14 @@ static object AncestryDto(string address, ProvenanceReport report, int maxReads)
     totalSatoshis = report.TotalSatoshis,
     outputCount = report.Outputs.Count,
     transactionsRead = report.TransactionsRead,
-    // The budget was exhausted, so unwalked ancestry counted as unproven — the figures
-    // are a floor. (A trace landing EXACTLY on the cap while complete would flag too;
+    // A budget was exhausted, so unwalked ancestry counted as unproven — the figures
+    // are a floor. (A trace landing EXACTLY on the read cap while complete would flag too;
     // "may be incomplete" is the honest reading either way.)
-    truncated = report.TransactionsRead >= maxReads,
+    truncated = report.Truncated || report.TransactionsRead >= maxReads,
+    // Which budget stopped it: "time" (re-trace to go deeper — the reads are cached) or
+    // "reads"; null when the walk completed. Older clients ignore the field.
+    truncatedBy = report.TimeBudgetReached ? "time"
+        : report.ReadBudgetReached || report.TransactionsRead >= maxReads ? "reads" : null,
     fifo = AncestryModel(report.Fifo),
     haircut = AncestryModel(report.Haircut),
 };

@@ -131,7 +131,12 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
     {
         try
         {
-            var res = await _http.GetAsync($"indexer/api/address/{Uri.EscapeDataString(address)}/ancestry", ct);
+            // The one long gateway call: it runs under the trace budget, not the read budget
+            // (RequestTimeoutHandler) — the server may legitimately spend tens of seconds here.
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"indexer/api/address/{Uri.EscapeDataString(address)}/ancestry");
+            request.Options.Set(RequestTimeoutHandler.Budget, RequestBudget.Trace);
+            using var res = await _http.SendAsync(request, ct);
             if (res.IsSuccessStatusCode)
             {
                 var dto = await res.Content.ReadFromJsonAsync<AncestryJson>(Json, ct);
@@ -139,7 +144,7 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
                     ? LiteAncestryResult.Fail("The gateway returned an empty ancestry response.")
                     : LiteAncestryResult.Ok(new LiteAncestryReport(
                         address, dto.TotalSatoshis, dto.OutputCount, dto.TransactionsRead,
-                        MapModel(dto.Fifo), MapModel(dto.Haircut), dto.Truncated));
+                        MapModel(dto.Fifo), MapModel(dto.Haircut), dto.Truncated, dto.TruncatedBy));
             }
 
             string? reason = null;
@@ -150,6 +155,14 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
                 ? "This gateway doesn't serve provenance yet."
                 : $"Ancestry unavailable ({(int)res.StatusCode}).";
             return LiteAncestryResult.Fail(reason);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            // The trace budget ran out, not the network: say so, and say what helps — the
+            // gateway caches what it read, so trying again picks up where this stopped.
+            _logger.LogWarning(ex, "Ancestry trace timed out");
+            return LiteAncestryResult.Fail(
+                "The gateway did not finish the trace in time — try again; it carries on from where it stopped.");
         }
         catch (Exception ex)
         {
@@ -220,5 +233,5 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
     private sealed record AncestryModelJson(long AttributedSatoshis,
         List<AncestryRowJson>? Years, List<AncestryRowJson>? Months, List<AncestryRowJson>? Specials);
     private sealed record AncestryJson(long TotalSatoshis, int OutputCount, int TransactionsRead,
-        AncestryModelJson? Fifo, AncestryModelJson? Haircut, bool Truncated = false);
+        AncestryModelJson? Fifo, AncestryModelJson? Haircut, bool Truncated = false, string? TruncatedBy = null);
 }

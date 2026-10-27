@@ -36,6 +36,22 @@ public sealed class AncestryTracerOptions
 
     /// <summary>Reads between progress reports while inside one output's walk.</summary>
     public int ProgressEveryReads { get; init; } = 200;
+
+    /// <summary>
+    /// Wall-clock budget for one <see cref="AncestryTracer.TraceOutputsAsync"/> run; null (the
+    /// default, and the desktop's setting) = unlimited. Once it is spent the walk stops READING:
+    /// every branch not yet resolved counts as unproven, exactly as the read budget does, and
+    /// <see cref="ProvenanceReport.TimeBudgetReached"/> says so. Added 2026-10-27 for the lite
+    /// gateway, whose callers are phones with a request timeout: a coin that descends through
+    /// the payout wallet's consolidation history needed more than ten minutes of reads, and a
+    /// trace that never answers is worth less than a floor that does. Because reads are
+    /// memoised (and the gateway caches them across runs), a re-trace with the same budget
+    /// gets further each time.
+    /// </summary>
+    public TimeSpan? TimeBudget { get; init; }
+
+    /// <summary>Clock for <see cref="TimeBudget"/>; tests substitute a manual one.</summary>
+    public TimeProvider Clock { get; init; } = TimeProvider.System;
 }
 
 /// <summary>
@@ -139,8 +155,9 @@ public sealed record VintageBreakdown(
 /// (every satoshi belongs to exactly one block); <see cref="Haircut"/> is the
 /// proportional view the website pays claims on. They WILL show different per-vintage
 /// numbers — always label which is on screen. <see cref="ReadBudgetReached"/> means the
-/// walk stopped reading at <see cref="AncestryTracerOptions.MaxTransactionReads"/>, so
-/// some lineage is missing rather than absent.
+/// walk stopped reading at <see cref="AncestryTracerOptions.MaxTransactionReads"/>, and
+/// <see cref="TimeBudgetReached"/> that it stopped at <see cref="AncestryTracerOptions.TimeBudget"/>;
+/// either way some lineage is missing rather than absent.
 /// </summary>
 public sealed record ProvenanceReport(
     IReadOnlyList<OutputProvenance> Outputs,
@@ -149,8 +166,12 @@ public sealed record ProvenanceReport(
     VintageBreakdown Haircut,
     long TotalSatoshis,
     int TransactionsRead,
-    bool ReadBudgetReached = false)
+    bool ReadBudgetReached = false,
+    bool TimeBudgetReached = false)
 {
+    /// <summary>The walk stopped at a budget (reads or time), so the figures are a floor.</summary>
+    public bool Truncated => ReadBudgetReached || TimeBudgetReached;
+
     /// <summary>True when every satoshi traced back to a minting block under FIFO.</summary>
     public bool FullyTraced => Fifo.AttributedSatoshis == TotalSatoshis;
 }
@@ -203,6 +224,11 @@ public sealed class AncestryTracer
     private int _reads;
     private int _readsAtLastReport;
 
+    // The time budget: stamped when a run starts, latched the first time it is found spent so
+    // the report can say so even though later checks never consult the clock again.
+    private long _runStarted;
+    private bool _timeBudgetReached;
+
     // Per-run progress plumbing (set by TraceOutputsAsync, read by the fetch path).
     private IProgress<TraceProgress>? _progress;
     private int _outputsDone, _outputsTotal;
@@ -248,6 +274,8 @@ public sealed class AncestryTracer
         _progress = progress;
         _outputsDone = 0;
         _outputsTotal = outputs.Count;
+        _runStarted = _options.Clock.GetTimestamp();
+        _timeBudgetReached = false;
 
         var traced = new List<OutputProvenance>(outputs.Count);
         for (var i = 0; i < outputs.Count; i++)
@@ -283,7 +311,10 @@ public sealed class AncestryTracer
         string txid, int vout, int depth, CancellationToken ct)
     {
         if (_outputCache.TryGetValue((txid, vout), out var cached)) return cached;
-        if (depth > _options.MaxDepth || _reads >= _options.MaxTransactionReads) return null;
+        // Only depth is checked here: a spent budget is enforced where READS happen
+        // (GetTransactionAsync / PrefetchParentsAsync), so a transaction already fetched —
+        // say the tail of a batch that overran the clock — is still resolved and attributed.
+        if (depth > _options.MaxDepth) return null;
 
         // Warm caches make the awaits below complete synchronously, which turns this
         // recursion into plain native-stack recursion; on a deep payout change-chain
@@ -388,7 +419,7 @@ public sealed class AncestryTracer
         string txid, int vout, int depth, CancellationToken ct)
     {
         if (_segmentCache.TryGetValue((txid, vout), out var cached)) return cached;
-        if (depth > _options.MaxDepth || _reads >= _options.MaxTransactionReads) return null;
+        if (depth > _options.MaxDepth) return null;   // budgets apply at the reads, as above
 
         // Same stack-unwind yield as ResolveOutputAsync — see the comment there.
         if (depth != 0 && depth % 256 == 0) await Task.Yield();
@@ -542,6 +573,7 @@ public sealed class AncestryTracer
     /// </summary>
     private async Task PrefetchParentsAsync(RawTransaction tx, CancellationToken ct)
     {
+        if (BudgetSpent) return;
         var wanted = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var input in tx.Inputs)
@@ -565,7 +597,7 @@ public sealed class AncestryTracer
     private async Task<RawTransaction?> GetTransactionAsync(string txid, CancellationToken ct)
     {
         if (_txCache.TryGetValue(txid, out var cached)) return cached;
-        if (_reads >= _options.MaxTransactionReads) return null;
+        if (BudgetSpent) return null;
 
         ct.ThrowIfCancellationRequested();
         _reads++;
@@ -606,6 +638,25 @@ public sealed class AncestryTracer
         return block;
     }
 
+    /// <summary>
+    /// True once either budget is spent: the read cap, or the wall-clock budget when one is
+    /// set. Every read path asks this BEFORE reading, so a spent budget stops the walk at the
+    /// next transaction and the branches left unread count as unproven (under-claim, never
+    /// guess). The time verdict latches: once spent it stays spent for the run.
+    /// </summary>
+    private bool BudgetSpent
+    {
+        get
+        {
+            if (_reads >= _options.MaxTransactionReads) return true;
+            if (_timeBudgetReached) return true;
+            if (_options.TimeBudget is { } budget &&
+                _options.Clock.GetElapsedTime(_runStarted) >= budget)
+                _timeBudgetReached = true;
+            return _timeBudgetReached;
+        }
+    }
+
     private ProvenanceReport BuildReport(List<OutputProvenance> outputs) =>
         new(outputs,
             _origins.ToDictionary(kv => kv.Key, kv => kv.Value),
@@ -613,7 +664,8 @@ public sealed class AncestryTracer
             BreakdownHaircut(outputs),
             outputs.Sum(o => o.Satoshis),
             _reads,
-            _reads >= _options.MaxTransactionReads);
+            _reads >= _options.MaxTransactionReads,
+            _timeBudgetReached);
 
     /// <summary>A catalogue bucket being accumulated: sats plus the blocks and span behind them.</summary>
     private sealed class RowAcc

@@ -659,4 +659,193 @@ public class AncestryTracerTests
         Assert.True(report.Haircut.AttributedSatoshis < 50_000);
         Assert.Equal(report.Fifo.AttributedSatoshis, report.Outputs[0].FifoAttributed);
     }
+
+
+    // ── the wall-clock budget (added for the lite gateway, 2026-10-27) ──
+
+    /// <summary>A clock the test moves by hand: TimeProvider's elapsed-time maths over a manual timestamp.</summary>
+    private sealed class ManualClock : TimeProvider
+    {
+        private long _ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => _ticks;
+        public void Advance(TimeSpan by) => _ticks += by.Ticks;
+    }
+
+    /// <summary>
+    /// Every transaction read costs a slice of the manual clock — once per txid when
+    /// <see cref="CacheAcrossRuns"/> is on (the gateway's read cache: a re-trace gets the
+    /// already-read transactions for free), every time otherwise.
+    /// </summary>
+    private sealed class SlowReads : IAncestryRpc
+    {
+        private readonly FakeChain _inner;
+        private readonly ManualClock _clock;
+        private readonly TimeSpan _perRead;
+        private readonly HashSet<string> _seen = new(StringComparer.OrdinalIgnoreCase);
+        public bool CacheAcrossRuns;
+
+        public SlowReads(FakeChain inner, ManualClock clock, TimeSpan perRead)
+            => (_inner, _clock, _perRead) = (inner, clock, perRead);
+
+        public Task<IReadOnlyList<UnspentOutput>> ListUnspentAsync(CancellationToken ct = default) => _inner.ListUnspentAsync(ct);
+        public Task<BlockRef?> GetBlockRefAsync(string blockHash, CancellationToken ct = default) => _inner.GetBlockRefAsync(blockHash, ct);
+
+        public Task<RawTransaction?> GetTransactionAsync(string txid, CancellationToken ct = default)
+        {
+            if (!CacheAcrossRuns || _seen.Add(txid)) _clock.Advance(_perRead);
+            return _inner.GetTransactionAsync(txid, ct);
+        }
+    }
+
+    /// <summary>A payout-style change chain: coinbase → hop1 → hop2 → … → hopN (the wallet's
+    /// coin). Every hop is one more SEQUENTIAL read, so the clock, not the batch size, decides
+    /// how far a budget gets.</summary>
+    private static FakeChain ChangeChain(int hops, long sats = 1_000)
+    {
+        var chain = new FakeChain().Coinbase("cb", 700_000, Y2014, sats);
+        var prev = "cb";
+        for (var i = 1; i <= hops; i++)
+        {
+            chain.Spend($"hop{i}", [(prev, 0)], sats);
+            prev = $"hop{i}";
+        }
+        return chain.Utxo(prev, 0, sats);
+    }
+
+    [Fact]
+    public async Task the_time_budget_stops_the_walk_and_is_reported_as_time_not_reads()
+    {
+        var clock = new ManualClock();
+        var rpc = new SlowReads(ChangeChain(20), clock, TimeSpan.FromSeconds(1));
+
+        var report = await new AncestryTracer(rpc, new AncestryTracerOptions
+        {
+            TimeBudget = TimeSpan.FromSeconds(5),
+            Clock = clock,
+        }).TraceUnspentAsync();
+
+        Assert.True(report.TimeBudgetReached);
+        Assert.False(report.ReadBudgetReached);     // the read cap is untouched
+        Assert.True(report.Truncated);
+        Assert.False(report.FullyTraced);
+        // About five reads fit in five seconds (plus the one in flight) — nowhere near 21.
+        Assert.InRange(report.TransactionsRead, 5, 7);
+        // The coinbase was never reached: nothing attributed, nothing invented.
+        Assert.Equal(0, report.Fifo.AttributedSatoshis);
+        Assert.Equal(0, report.Haircut.AttributedSatoshis);
+        Assert.Equal(1_000, report.TotalSatoshis);
+    }
+
+    [Fact]
+    public async Task no_time_budget_is_the_default_and_the_walk_runs_to_the_end()
+    {
+        // The desktop sets no budget: a slow node is simply waited for.
+        var clock = new ManualClock();
+        var rpc = new SlowReads(ChangeChain(20), clock, TimeSpan.FromSeconds(1));
+
+        var report = await new AncestryTracer(rpc, new AncestryTracerOptions { Clock = clock }).TraceUnspentAsync();
+
+        Assert.Null(new AncestryTracerOptions().TimeBudget);
+        Assert.False(report.TimeBudgetReached);
+        Assert.False(report.Truncated);
+        Assert.True(report.FullyTraced);
+        Assert.Equal(21, report.TransactionsRead);
+    }
+
+    [Fact]
+    public async Task a_walk_that_finishes_inside_its_time_budget_is_complete_and_unflagged()
+    {
+        var clock = new ManualClock();
+        var rpc = new SlowReads(ChangeChain(20), clock, TimeSpan.FromSeconds(1));
+
+        var report = await new AncestryTracer(rpc, new AncestryTracerOptions
+        {
+            TimeBudget = TimeSpan.FromHours(1),
+            Clock = clock,
+        }).TraceUnspentAsync();
+
+        Assert.False(report.TimeBudgetReached);
+        Assert.False(report.Truncated);
+        Assert.True(report.FullyTraced);
+        Assert.Equal(new Dictionary<string, long> { [Jun2014] = 1_000 }, report.Outputs[0].ByVintage);
+    }
+
+    [Fact]
+    public async Task a_fresh_tracer_over_a_warm_read_cache_gets_further_each_run_until_complete()
+    {
+        // The gateway's contract: reads are cached across requests, so a re-trace with the
+        // same budget resumes where the last one stopped — the page's "Re-trace to go deeper".
+        var clock = new ManualClock();
+        var rpc = new SlowReads(ChangeChain(20), clock, TimeSpan.FromSeconds(1)) { CacheAcrossRuns = true };
+        var options = new AncestryTracerOptions { TimeBudget = TimeSpan.FromSeconds(5), Clock = clock };
+
+        var runs = new List<ProvenanceReport>();
+        for (var i = 0; i < 10; i++)
+        {
+            var report = await new AncestryTracer(rpc, options).TraceUnspentAsync();   // a NEW tracer per run
+            runs.Add(report);
+            if (!report.Truncated) break;
+        }
+
+        Assert.True(runs.Count > 1, "a 20-hop chain cannot fit one 5 s slice");
+        Assert.False(runs[^1].Truncated);
+        Assert.True(runs[^1].FullyTraced);
+        Assert.Equal(21, runs[^1].TransactionsRead);
+        for (var i = 1; i < runs.Count; i++)
+            Assert.True(runs[i].TransactionsRead > runs[i - 1].TransactionsRead, "each run must get strictly further");
+        Assert.All(runs.SkipLast(1), r => Assert.True(r.TimeBudgetReached));
+    }
+
+    [Fact]
+    public async Task the_time_budget_is_per_run_so_a_reused_tracer_gets_a_fresh_clock()
+    {
+        // One instance, two runs: the second run's budget starts when IT starts, not when the
+        // instance was built — otherwise a long-lived desktop tracer would starve itself.
+        var clock = new ManualClock();
+        var rpc = new SlowReads(ChangeChain(3), clock, TimeSpan.FromSeconds(1));
+        var tracer = new AncestryTracer(rpc, new AncestryTracerOptions { TimeBudget = TimeSpan.FromSeconds(10), Clock = clock });
+
+        var first = await tracer.TraceUnspentAsync();
+        clock.Advance(TimeSpan.FromHours(1));                   // a long idle gap
+        var second = await tracer.TraceUnspentAsync();          // all cached: no reads at all
+
+        Assert.True(first.FullyTraced);
+        Assert.False(first.TimeBudgetReached);
+        Assert.False(second.TimeBudgetReached);
+        Assert.True(second.FullyTraced);
+    }
+
+    [Fact]
+    public async Task transactions_already_fetched_are_still_resolved_after_the_budget_is_spent()
+    {
+        // A sweep's parents arrive in ONE batch. If the clock runs out during that batch the
+        // fetched parents must still be attributed (they cost nothing more) — the budget stops
+        // READING, it does not throw away what was read.
+        var clock = new ManualClock();
+        var rpc = new SlowReads(Sweep(50), clock, TimeSpan.FromSeconds(1));
+
+        var report = await new AncestryTracer(rpc, new AncestryTracerOptions
+        {
+            TimeBudget = TimeSpan.FromSeconds(10),
+            Clock = clock,
+        }).TraceUnspentAsync();
+
+        Assert.Equal(51, report.TransactionsRead);              // the sweep + one batch of 50
+        Assert.True(report.FullyTraced);                        // every fetched coinbase counted
+        Assert.Equal(50_000, report.Haircut.AttributedSatoshis);
+    }
+
+    [Fact]
+    public void truncated_covers_either_budget()
+    {
+        static ProvenanceReport Report(bool reads, bool time) =>
+            new([], new Dictionary<long, MintPoint>(), new VintageBreakdown([], [], 0, []), new VintageBreakdown([], [], 0, []),
+                0, 0, reads, time);
+
+        Assert.False(Report(false, false).Truncated);
+        Assert.True(Report(true, false).Truncated);
+        Assert.True(Report(false, true).Truncated);
+        Assert.True(Report(true, true).Truncated);
+    }
 }

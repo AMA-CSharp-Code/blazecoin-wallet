@@ -36,9 +36,11 @@ public sealed record LiteVintageModel(
     IReadOnlyList<LiteVintageRow> Specials);
 
 /// <summary>The gateway's trace of ONE address; the page merges these across the
-/// wallet's funded addresses. <paramref name="Truncated"/> means the server's read
-/// budget was exhausted mid-walk — unwalked ancestry counted as unproven, so every
-/// figure is a floor (older gateways omit the field → false).</summary>
+/// wallet's funded addresses. <paramref name="Truncated"/> means a server budget was
+/// exhausted mid-walk — unwalked ancestry counted as unproven, so every figure is a floor
+/// (older gateways omit the field → false). <paramref name="TruncatedBy"/> names the budget:
+/// "time" (the gateway's wall-clock slice — a re-trace goes deeper, since the server caches
+/// what it read) or "reads" (its hard read cap); null when complete or from an older gateway.</summary>
 public sealed record LiteAncestryReport(
     string Address, long TotalSatoshis, int OutputCount, int TransactionsRead,
-    LiteVintageModel Fifo, LiteVintageModel Haircut, bool Truncated = false);
+    LiteVintageModel Fifo, LiteVintageModel Haircut, bool Truncated = false, string? TruncatedBy = null);

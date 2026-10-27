@@ -5,7 +5,10 @@ namespace BlazecoinWallet.Lite.Data;
 /// gateway URLs and quietly fails over when one can't be reached, remembering the last
 /// good one. Failover triggers ONLY on delivery failure (connect error / timeout), never
 /// on an HTTP response — a 4xx/5xx is an ANSWER from a live gateway, not an outage.
-/// Request bodies are buffered once so a retry can re-send them intact.
+/// Request bodies are buffered once so a retry can re-send them intact, and the request's
+/// options (its <see cref="RequestTimeoutHandler"/> budget) ride along, because the budget
+/// handler sits INSIDE this one and times each attempt on its own — a timeout is a
+/// per-gateway verdict here, not the caller's cancellation (2026-10-27).
 /// </summary>
 public sealed class GatewayFailoverHandler : DelegatingHandler
 {
@@ -44,6 +47,8 @@ public sealed class GatewayFailoverHandler : DelegatingHandler
             using var attempt = new HttpRequestMessage(request.Method, new Uri(_gateways[idx], pathAndQuery));
             foreach (var h in request.Headers)
                 attempt.Headers.TryAddWithoutValidation(h.Key, h.Value);
+            foreach (var (key, value) in request.Options)
+                ((IDictionary<string, object?>)attempt.Options)[key] = value;
             if (body != null)
             {
                 var content = new ByteArrayContent(body);

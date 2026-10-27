@@ -13,7 +13,7 @@
          reads the informational version at runtime for the Settings "Version" line and the
          PQ_SIGNATURES 7.1 update banner's "vX", so this is THE place it is bumped. The commit
          hash suffix is switched off so the string compares cleanly against minClientVersion. -->
-    <Version>2.0.7</Version>
+    <Version>2.0.8</Version>
     <InformationalVersion>2.0.5</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
