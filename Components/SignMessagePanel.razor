@@ -1,0 +1,151 @@
+@using BlazecoinWallet.Core.Services
+@inject IMessageSigner Signer
+
+@* Sign Message - a Preferences section (2026-10-08). Proving an address to the website is one paste and
+   one click: paste what the Wallet Address card gave you, click Sign, copy the signature. The signing
+   itself (find the wallet that holds the address, unlock an encrypted one for 60 s, sign, verify with the
+   daemon, lock again) lives in Core's MessageSigner since 2026-10-22 — this panel only renders its result.
+   The sidebar's "Sign Message" button deep-links to this section (preferences#sign-message). *@
+<section class="pref-section sm-section" id="sign-message">
+    <h2>✍ Sign Message</h2>
+    <p class="pref-hint">
+        Prove an address is yours - for the website's Wallet Address card, or anyone who asks. Paste the whole
+        <code>signmessage "B…" "blazecoin-verify:…"</code> line from the card, or just the challenge text; the
+        address and message fill in below. Nothing is sent on-chain and no coins move.
+    </p>
+
+    <textarea class="pref-input sm-paste" rows="3" placeholder="signmessage &quot;B…&quot; &quot;blazecoin-verify:…&quot;"
+              @bind="_pasted" @bind:event="oninput" @onblur="ApplyPaste"></textarea>
+
+    <label class="sm-label">Address to prove</label>
+    <input class="pref-input sm-mono" placeholder="B… or BQ…" @bind="_address" @bind:after="OnAddressChanged" />
+
+    <label class="sm-label">Message to sign</label>
+    <textarea class="pref-input sm-mono" rows="2" @bind="_message"></textarea>
+
+    @if (_needPassphrase)
+    {
+        <div class="sm-unlock">
+            <p class="pref-hint">
+                The wallet <strong>@_wallet</strong> holds this address and is encrypted. Enter its passphrase:
+                it is unlocked for 60 seconds, the message is signed, and it is locked again.
+            </p>
+            <input type="password" class="pref-input" placeholder="Passphrase" @bind="_passphrase" @onkeydown="OnPassKey" />
+        </div>
+    }
+
+    <div class="sm-actions">
+        <button class="btn btn-primary sm-bordered" @onclick="SignAsync" disabled="@_busy">@(_busy ? "Signing…" : "🖊 Sign")</button>
+        @if (_wallet is not null && !_needPassphrase && _signature is null)
+        {
+            <span class="sm-found">found in wallet <strong>@_wallet</strong></span>
+        }
+    </div>
+
+    @if (_err is not null) { <div class="alert alert-danger sm-alert">@_err</div> }
+
+    @if (_signature is not null)
+    {
+        <div class="sm-result">
+            <p class="pref-hint">
+                @(_verified == true ? "✅ Checked against the daemon: this signature proves the address." : "Signature produced.")
+                It is @_signature.Length characters@(_signature.Length > 200 ? " (a post-quantum signature - paste it whole)" : "").
+            </p>
+            <textarea class="pref-input sm-mono sm-sig" rows="5" readonly>@_signature</textarea>
+            <div class="sm-actions">
+                <button class="btn btn-primary sm-bordered" @onclick="CopyAsync">@_copyLabel</button>
+                <button class="btn btn-secondary" @onclick="Reset">Sign another</button>
+            </div>
+        </div>
+    }
+</section>
+
+@code {
+    private string _pasted = "";
+    private string _address = "";
+    private string _message = "";
+    private string _passphrase = "";
+    private string? _wallet;
+    private bool _needPassphrase;
+    private string? _signature;
+    private bool? _verified;
+    private string? _err;
+    private bool _busy;
+    private string _copyLabel = "📋 Copy signature";
+
+    private void ApplyPaste()
+    {
+        var parsed = SigningPasteParser.Parse(_pasted);
+        if (parsed.Address is not null && parsed.Address != _address) { _address = parsed.Address; OnAddressChanged(); }
+        if (parsed.Message.Length > 0) _message = parsed.Message;
+    }
+
+    // A different address means a different wallet: forget what the last attempt found out.
+    private void OnAddressChanged()
+    {
+        _wallet = null; _needPassphrase = false; _signature = null; _verified = null; _err = null;
+    }
+
+    private async Task OnPassKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SignAsync();
+    }
+
+    private async Task SignAsync()
+    {
+        _err = null;
+        ApplyPaste();
+        var address = _address.Trim();
+        var message = _message.Trim();
+        if (!SigningPasteParser.LooksLikeAddress(address)) { _err = "Enter the Blazecoin address to prove (it starts with B)."; return; }
+        if (message.Length == 0) { _err = "Paste the challenge text (or any message) to sign."; return; }
+
+        _busy = true; StateHasChanged();
+        try
+        {
+            var result = await Signer.SignAsync(address, message, _passphrase);
+            _wallet = result.Wallet;
+            switch (result.Outcome)
+            {
+                case SignOutcome.NoWalletOwnsAddress:
+                    _err = "No wallet loaded on this daemon holds the key for that address. Open the wallet window that owns it, or load that wallet first.";
+                    break;
+                case SignOutcome.PassphraseNeeded:
+                    _needPassphrase = true;
+                    break;
+                case SignOutcome.WrongPassphrase:
+                    _err = "Incorrect passphrase.";
+                    break;
+                case SignOutcome.Signed:
+                    _signature = result.Signature;
+                    _verified = result.Verified;
+                    _needPassphrase = false;
+                    break;
+            }
+        }
+        catch (RpcException rex) { _err = $"The daemon refused (code {rex.Code}): {rex.Message}"; }
+        catch (HttpRequestException) { _err = "The daemon is not answering - is this window's node running?"; }
+        catch (Exception ex) { _err = ex.Message; }
+        finally
+        {
+            _passphrase = "";   // never kept past one attempt
+            _busy = false;
+        }
+    }
+
+    private async Task CopyAsync()
+    {
+        if (_signature is null) return;
+        await Clipboard.SetTextAsync(_signature);
+        _copyLabel = "✅ Copied - now paste it into the website";
+        StateHasChanged();
+        await Task.Delay(2500);
+        _copyLabel = "📋 Copy signature";
+    }
+
+    private void Reset()
+    {
+        _signature = null; _verified = null; _err = null; _wallet = null; _needPassphrase = false;
+        _copyLabel = "📋 Copy signature";
+    }
+}

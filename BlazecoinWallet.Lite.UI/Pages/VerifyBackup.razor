@@ -1,0 +1,92 @@
+@page "/verify-backup"
+@layout LiteLayout
+@inject LiteWalletService Wallet
+@inject NavigationManager Nav
+
+@* The deferred backup ceremony: reachable from the Home warning chip and Settings.
+   Shows the stored phrase on demand and re-runs the two-word quiz; passing proves the
+   written backup and clears the unverified flag. A restore never needs this page —
+   typing the phrase was already proof. *@
+<div class="lite-card">
+    <h2>Verify Your Backup</h2>
+
+    @if (_verified)
+    {
+        <p class="lite-sub">✅ Your recovery phrase is verified — the written copy has been
+            proven. Nothing more to do.</p>
+        <button class="lite-btn" @onclick="@(() => Nav.NavigateTo(""))">Back to Wallet</button>
+    }
+    else
+    {
+        <p class="lite-sub">
+            Your recovery phrase has not been verified yet. The phrase is the ONLY way back
+            into this wallet if the phone is lost — write it down, then prove the copy below.
+        </p>
+
+        <button class="lite-btn lite-btn-ghost" @onclick="() => _showWords = !_showWords">
+            @(_showWords ? "Hide my recovery phrase" : "Show my recovery phrase")
+        </button>
+        @if (_showWords)
+        {
+            <div class="lite-mnemonic" style="margin-top:12px">
+                @for (var i = 0; i < _words.Length; i++)
+                {
+                    <span class="lite-word"><b>@(i + 1)</b>@_words[i]</span>
+                }
+            </div>
+        }
+
+        <div style="height:10px"></div>
+        <p class="lite-sub">From your <strong>written copy</strong>, enter these words:</p>
+        @foreach (var idx in _quizIndices)
+        {
+            <label class="lite-sub">Word #@(idx + 1)</label>
+            <input class="lite-input" value="@_quizAnswers[idx]"
+                   @onchange="e => _quizAnswers[idx] = e.Value?.ToString() ?? string.Empty" />
+        }
+        <button class="lite-btn" @onclick="VerifyAsync">Verify My Backup</button>
+        @if (_error != null) { <div class="lite-error">@_error</div> }
+    }
+</div>
+
+@code {
+    private bool _verified;
+    private bool _showWords;
+    private string[] _words = [];
+    private int[] _quizIndices = [];
+    private Dictionary<int, string> _quizAnswers = new();
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await Wallet.UnlockAsync())
+        {
+            Nav.NavigateTo("setup");
+            return;
+        }
+        _verified = await Wallet.IsBackupVerifiedAsync();
+        if (_verified) return;
+
+        _words = (await Wallet.RevealMnemonicAsync()).Split(' ');
+        // Two distinct random words, same shape as the Setup ceremony's quiz.
+        var count = Math.Min(2, _words.Length);
+        _quizIndices = Enumerable.Range(0, _words.Length)
+            .OrderBy(_ => Random.Shared.Next()).Take(count).OrderBy(i => i).ToArray();
+        _quizAnswers = _quizIndices.ToDictionary(i => i, _ => string.Empty);
+    }
+
+    private async Task VerifyAsync()
+    {
+        foreach (var idx in _quizIndices)
+        {
+            if (!string.Equals(_quizAnswers[idx].Trim(), _words[idx], StringComparison.OrdinalIgnoreCase))
+            {
+                _error = "One or more words don't match — check your written copy.";
+                return;
+            }
+        }
+        await Wallet.MarkBackupVerifiedAsync();
+        _error = null;
+        _verified = true;
+    }
+}

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The Mac App Store requires you specify if the app uses encryption. -->
+    <!-- Please consult https://developer.apple.com/documentation/bundleresources/information_property_list/itsappusesnonexemptencryption -->
+    <!-- <key>ITSAppUsesNonExemptEncryption</key> -->
+    <!-- Please indicate <true/> or <false/> here. -->
+
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.finance</string>
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>2</integer>
+    </array>
+    <!-- No UIRequiredDeviceCapabilities: the template's arm64 entry would exclude Intel Macs, and the
+         release is a universal build (Apple Silicon + Intel), like the V1.5 macOS release. -->
+    <!-- The wallet launches blazecoind as a child process and stops it on quit; no App Sandbox
+         (see Entitlements.plist), so the node uses its normal datadir under ~/Library/Application Support. -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <!-- Must match the icon set MAUI generates from the MauiIcon item, whose base name is the source file's
+         (Resources/AppIcon/blazecoin_appicon.png -> blazecoin_appicon.appiconset). The template's
+         'appicon.appiconset' matched nothing, so actool emitted no Assets.car and Finder showed the
+         generic white icon (first published build, 2026-09-24). -->
+    <key>XSAppIconAssets</key>
+    <string>Assets.xcassets/blazecoin_appicon.appiconset</string>
+	<!-- Dual-GPU Intel MacBook Pros drive their Retina panel with the integrated GPU unless an app
+	     opts out of automatic switching. The wallet's animated pages then run on the Intel UHD 630
+	     with the Radeon idle: compositor + WebKit at ~80% of a core while idle on the dashboard,
+	     sluggish page changes (2019 16-inch MBP, 2026-09-24). false = use the discrete GPU while the
+	     wallet is running. On macOS 26.5 this key alone did NOT switch the display for this Catalyst
+	     app; AppDelegate additionally holds a Metal device on the discrete GPU. Kept as belt and braces.
+	     No effect on single-GPU Macs (Apple Silicon). -->
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<false/>
+</dict>
+</plist>

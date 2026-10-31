@@ -1,0 +1,121 @@
+@page "/tools"
+@layout LiteLayout
+@inject LiteWalletService Wallet
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+
+@* Message tools: prove you control an address by signing a message with its key, and verify
+   a signature anyone hands you. Pure on-device crypto — no gateway, no key ever leaves. *@
+<div class="lite-card">
+    <h2>Sign a Message</h2>
+    <p class="lite-sub">Prove you control one of your addresses — sign a message with its key.
+        Share the address, message, and signature; anyone can verify it.</p>
+
+    <label class="lite-sub">Sign with</label>
+    <select class="lite-input" @bind="_signAddress">
+        @foreach (var a in _addresses)
+        {
+            <option value="@a">@Short(a)</option>
+        }
+    </select>
+
+    <label class="lite-sub">Message</label>
+    <textarea class="lite-input" rows="3" placeholder="e.g. I control this address — Blazecoin 2014"
+              @bind="_signMessage"></textarea>
+    <button class="lite-btn" @onclick="SignAsync">🖊️ Sign</button>
+
+    @if (_signature != null)
+    {
+        <div class="lite-address" style="text-align:left; margin-top:12px">
+            <div class="lite-sub">Address</div>
+            <div class="lite-txid">@_signAddress</div>
+            <div class="lite-sub" style="margin-top:8px">Signature</div>
+            <div class="lite-txid">@_signature</div>
+        </div>
+        <button class="lite-btn lite-btn-ghost" @onclick="CopyProofAsync">@_copyLabel</button>
+    }
+    @if (_signError != null) { <div class="lite-error">@_signError</div> }
+</div>
+
+<div class="lite-card">
+    <h2>Verify a Message</h2>
+    <p class="lite-sub">Check that a signature really came from the claimed address.</p>
+    <label class="lite-sub">Address</label>
+    <input class="lite-input" placeholder="B…" @bind="_verifyAddress" />
+    <label class="lite-sub">Message</label>
+    <textarea class="lite-input" rows="2" @bind="_verifyMessage"></textarea>
+    <label class="lite-sub">Signature</label>
+    <textarea class="lite-input" rows="2" @bind="_verifySignature"></textarea>
+    <button class="lite-btn" @onclick="Verify">✓ Verify</button>
+
+    @if (_verifyResult is not null)
+    {
+        <div class="@(_verifyResult == true ? "lite-success" : "lite-error")">
+            @(_verifyResult == true ? "✅ Valid — the signature matches this address." : "❌ Invalid — does not match.")
+        </div>
+    }
+</div>
+
+<button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("settings"))">← Back to Settings</button>
+
+@code {
+    private IReadOnlyList<string> _addresses = [];
+    private string _signAddress = string.Empty;
+    private string _signMessage = string.Empty;
+    private string? _signature;
+    private string? _signError;
+    private string _copyLabel = "📋 Copy address · message · signature";
+
+    private string _verifyAddress = string.Empty;
+    private string _verifyMessage = string.Empty;
+    private string _verifySignature = string.Empty;
+    private bool? _verifyResult;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await Wallet.UnlockAsync()) { Nav.NavigateTo("setup"); return; }
+        _addresses = Wallet.Addresses;
+        _signAddress = Wallet.Address;
+    }
+
+    private async Task SignAsync()
+    {
+        _signError = null; _signature = null;
+        if (string.IsNullOrWhiteSpace(_signMessage)) { _signError = "Enter a message to sign."; return; }
+        try
+        {
+            var (addr, sig) = Wallet.SignMessage(_signMessage, _signAddress);
+            _signAddress = addr;
+            _signature = sig;
+        }
+        catch (Exception ex) { _signError = ex.Message; }
+        await Task.CompletedTask;
+    }
+
+    private void Verify()
+    {
+        _verifyResult = !string.IsNullOrWhiteSpace(_verifyAddress) && !string.IsNullOrWhiteSpace(_verifySignature)
+            && BlazecoinMessage.Verify(_verifyAddress, _verifyMessage, _verifySignature);
+    }
+
+    private async Task CopyProofAsync()
+    {
+        var proof = $"Address: {_signAddress}\nMessage: {_signMessage}\nSignature: {_signature}";
+        try
+        {
+            await Js.InvokeVoidAsync("navigator.clipboard.writeText", proof);
+            _copyLabel = "✅ Copied!";
+            _ = ResetLabelAsync();
+        }
+        catch { _copyLabel = "Copy failed — select the text above"; }
+    }
+
+    private async Task ResetLabelAsync()
+    {
+        await Task.Delay(1500);
+        _copyLabel = "📋 Copy address · message · signature";
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string Short(string s) => s.Length <= 16 ? s : $"{s[..8]}…{s[^6..]}";
+}

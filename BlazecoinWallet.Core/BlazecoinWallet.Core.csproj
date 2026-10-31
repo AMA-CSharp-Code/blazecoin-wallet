@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Blazecoin Core: the platform-independent wallet logic (models, RPC, services)
+       extracted from the MAUI app (SOLID/test-plan M3) so it can be unit-tested and,
+       later, reused by a Lite/web client. Namespaces stay BlazecoinWallet.Maui.* so
+       the MAUI app needs no code changes — only a ProjectReference. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BlazecoinWallet.Maui</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Packed alongside BlazecoinWallet.Lite.Core (which project-references this) so the Lite.Core
+       package's dependency resolves from the same private feed at the same version. See
+       installer/Publish-LiteCorePackages.ps1. Package metadata only — no behaviour change. -->
+  <PropertyGroup>
+    <PackageId>BlazecoinWallet.Core</PackageId>
+    <Authors>AMA-CSharp-Code</Authors>
+    <Company>Blazecoin</Company>
+    <Description>Blazecoin wallet core: platform-independent wallet models, daemon RPC client abstractions and services shared by the desktop wallet and BlazecoinWallet.Lite.Core.</Description>
+    <RepositoryUrl>https://github.com/AMA-CSharp-Code/BlazecoinWallet.Maui</RepositoryUrl>
+    <PackageTags>blazecoin;wallet;cryptocurrency</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+    <!-- ClosedXML + QuestPDF moved to BlazecoinWallet.Core.Export (desktop-only) so the
+         mobile heads don't carry them; the export INTERFACE stays here. -->
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

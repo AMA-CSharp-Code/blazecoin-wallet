@@ -1,0 +1,156 @@
+@page "/console"
+@using System.Text.Json
+@using BlazecoinWallet.Core.Services
+@inject IBlazecoindRpcService RpcService
+@inject IJSRuntime JS
+
+@* Component is named RpcConsole (not Console) to avoid shadowing System.Console
+   for other pages in this namespace; the route and label stay "Console". *@
+<PageTitle>Console - Blazecoin Wallet V2.0</PageTitle>
+
+@* Permanent Network-skin background — painted into #netBg by
+   initNetworkBackground(), the same JS-painter pattern the Mining page uses
+   for #tileBg. Styled by .net-bg in RpcConsole.razor.css. *@
+<div class="net-bg" id="netBg"></div>
+
+<div class="wallet-page">
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title">
+                    <span class="bin">1100›_1100</span>
+                    <span class="title-wrap"><span class="banner-text" id="consoleTitle"></span><span class="banner-caret">▌</span></span>
+                    <span class="bin">1100›_1100</span>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    <div class="hint-container">
+        <p class="muted">
+            Run blazecoind RPC commands — e.g. <code>getblockchaininfo</code>,
+            <code>getpeerinfo</code>, <code>getbalance</code>, <code>getblockhash 100</code>.
+        </p>
+    </div>
+
+    @* V1.5 banner-card chrome from wallet.css: .card containing a
+       .status-header gets the edge-to-edge black header bar, with the
+       inner padding provided by .card-body. *@
+    <div class="content-container card">
+        <div class="status-header"><span>Console Window</span></div>
+        <div class="card-body">
+            <div class="console-output">
+                @if (_history.Count == 0)
+                {
+                    <div class="console-result">Type a command below and press Enter.</div>
+                }
+                @foreach (var line in _history)
+                {
+                    @if (line.IsCommand)
+                    {
+                        <div class="console-cmd"><span class="prompt">›</span> @line.Text</div>
+                    }
+                    else
+                    {
+                        <pre class="console-result @(line.IsError ? "err" : "")">@line.Text</pre>
+                    }
+                }
+            </div>
+
+            <div class="console-input">
+                <span class="prompt">›</span>
+                <input @bind="_command" @bind:event="oninput" @onkeydown="OnKeyDown"
+                       placeholder="Enter command…" disabled="@_busy" />
+                <button class="btn btn-primary" @onclick="Run" disabled="@_busy">Run</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private sealed record Line(string Text, bool IsCommand, bool IsError);
+
+    private readonly List<Line> _history = new();
+    private string _command = "";
+    private bool _busy;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Same JS-painter pattern as the Mining page; idempotent.
+            try
+            {
+                await JS.InvokeVoidAsync("initNetworkBackground", "netBg");
+                await JS.InvokeVoidAsync("typeConsoleBanner");
+            }
+            catch { /* WebView not ready yet — effects just won't run */ }
+        }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await Run();
+    }
+
+    private async Task Run()
+    {
+        var cmd = _command.Trim();
+        if (string.IsNullOrEmpty(cmd) || _busy) return;
+
+        _history.Add(new Line(cmd, true, false));
+        _command = "";
+        _busy = true;
+        StateHasChanged();
+
+        try
+        {
+            var tokens = Tokenize(cmd);
+            var method = tokens[0];
+            var args = tokens.Skip(1).Select(ParseToken).ToArray();
+            var result = await RpcService.ExecuteCommandAsync(method, args);
+            _history.Add(new Line(result, false, false));
+        }
+        catch (RpcException rex)
+        {
+            _history.Add(new Line($"error code {rex.Code}: {rex.Message}", false, true));
+        }
+        catch (Exception ex)
+        {
+            _history.Add(new Line(ex.Message, false, true));
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>Whitespace split that honours "double quotes" for multi-word args.</summary>
+    private static List<string> Tokenize(string s)
+    {
+        var list = new List<string>();
+        var sb = new System.Text.StringBuilder();
+        var inQuote = false;
+        foreach (var c in s)
+        {
+            if (c == '"') inQuote = !inQuote;
+            else if (char.IsWhiteSpace(c) && !inQuote)
+            {
+                if (sb.Length > 0) { list.Add(sb.ToString()); sb.Clear(); }
+            }
+            else sb.Append(c);
+        }
+        if (sb.Length > 0) list.Add(sb.ToString());
+        return list;
+    }
+
+    /// <summary>Numbers / bools / JSON arrays+objects are passed typed; anything
+    /// that isn't valid JSON is sent as a plain string.</summary>
+    private static object ParseToken(string t)
+    {
+        try { return JsonSerializer.Deserialize<JsonElement>(t); }
+        catch { return t; }
+    }
+}

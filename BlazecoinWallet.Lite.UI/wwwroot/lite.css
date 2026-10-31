@@ -1,0 +1,604 @@
+/* Blazecoin lite wallet — the DESKTOP wallet's look (wwwroot/css/wallet.css +
+   NavMenu.razor.css), scaled to a phone: same palette, the V1.5 "ledger card"
+   (square corners, 2px white border, black status-header bar), the deep-crimson
+   #9E000F nav gradient with the gold brand mark, green balance, red gradient buttons. */
+:root {
+    --blz-primary: #cf2013;
+    --blz-primary-dark: #8b0000;
+    --blz-crimson: #9e000f;        /* V1.5 deep crimson (nav / title bar) */
+    --blz-accent: #ff4d3a;         /* lighter red for hover/highlight */
+    --blz-gold: #ffd966;           /* brand-mark gold */
+    --blz-success: #06d6a0;
+    --blz-danger: #ef476f;
+    --blz-dark: #0a0a0a;
+    --blz-gradient: linear-gradient(135deg, #cf2013 0%, #0a0a0a 100%);
+    --blz-gradient-soft: linear-gradient(135deg, #1a0608 0%, #0a0a0a 100%);
+    --blz-muted: rgba(255, 255, 255, 0.6);
+}
+
+html, body {
+    margin: 0; padding: 0;
+    background: var(--blz-gradient-soft);
+    color: #fff;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-height: 100vh;
+}
+
+.lite-shell { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ── Top nav: the desktop .topnav (deep V1.5 crimson → black) ── */
+.lite-header {
+    display: flex; justify-content: space-between; align-items: center;
+    height: 3.5rem; padding: 0 1.1rem;
+    background-image: linear-gradient(135deg, #9e000f 55%, black 100%);
+    border-bottom: 2px solid #000;
+    box-shadow: 0 2px 10px rgba(158, 0, 15, 0.25);
+    position: sticky; top: 0; z-index: 100;
+}
+.lite-brand {
+    color: #fff; font-size: 1.1rem; font-weight: 500;
+    display: flex; align-items: center; gap: 0.5rem;
+}
+.lite-brand .brand-mark {
+    color: var(--blz-gold); font-size: 1.4rem; line-height: 1;
+    text-shadow: 0 0 8px rgba(255, 217, 102, 0.7);
+}
+.lite-header-right { display: flex; align-items: center; gap: 10px; }
+/* Gold to match the active nav label (same var + glow). */
+.lite-net {
+    font-size: .7rem; color: var(--blz-gold); letter-spacing: .12em; font-weight: 600;
+    border: 1px solid rgba(255, 217, 102, 0.5); border-radius: 3px;
+    padding: 2px 7px; text-transform: uppercase; opacity: .9;
+    text-shadow: 0 0 8px rgba(255, 217, 102, 0.5);
+}
+.lite-gear { display: flex; color: rgba(255, 255, 255, 0.8); }
+.lite-gear svg { width: 20px; height: 20px; display: block; }
+.lite-gear:hover, .lite-gear.active { color: var(--blz-gold); }
+/* Header lock button (2026-08-23) — same footprint/colour as the gear. */
+.lite-lock { display: flex; background: none; border: 0; padding: 0; cursor: pointer; color: rgba(255, 255, 255, 0.8); }
+.lite-lock svg { width: 20px; height: 20px; display: block; }
+.lite-lock:hover { color: var(--blz-gold); }
+/* Quiet "verifying chain" strip under the nav while the header sync catches up.
+   Zero-height anchor + absolute strip = OUT OF FLOW, so showing/hiding it can never shift
+   the page (it used to nudge every card down/up on each at-tip poll). The 0.4s reveal
+   delay means the sub-second at-tip syncs never paint the strip at all — only a genuine
+   first-run catch-up (which runs for seconds/minutes) becomes visible. (2026-08-24) */
+.lite-syncbar-anchor { position: relative; height: 0; z-index: 80; }
+.lite-syncbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    background: rgba(0, 0, 0, 0.72); color: var(--blz-gold);
+    font-size: 0.8rem; letter-spacing: 0.02em; text-align: center; padding: 4px 10px;
+    border-bottom: 1px solid rgba(255, 217, 102, 0.35);
+    opacity: 0;
+    animation: lite-syncbar-reveal 0.18s ease-out 0.4s forwards;
+}
+@keyframes lite-syncbar-reveal { to { opacity: 1; } }
+
+.lite-main { flex: 1 1 auto; padding: 1.25rem 1rem 24px; max-width: 560px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+
+/* ── Top nav: black bar under the header, framed in crimson, gold active ── */
+.lite-nav {
+    display: flex; position: sticky; top: 0; z-index: 90;
+    background: #000; border-bottom: 2px solid var(--blz-crimson);
+    box-shadow: 0 2px 10px rgba(158, 0, 15, 0.25);
+    padding: 8px 0 6px;
+}
+.lite-nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    text-decoration: none;
+}
+/* Icons are ALWAYS solid red (never change on select) — the house SVG + the triangles. */
+.lite-nav-item .nav-glyph { color: var(--blz-primary); display: flex; align-items: center; height: 20px; }
+/* Match the triangles' 20px visual height (the tight viewBox lets the house fill this). */
+.lite-nav-item .nav-glyph svg { height: 20px; width: auto; display: block; }
+
+/* Only the LABEL text highlights when its tab is selected: muted → gold. */
+.lite-nav-item .nav-label {
+    font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 600;
+    color: var(--blz-muted); transition: color 0.2s ease;
+}
+.lite-nav-item.active .nav-label { color: var(--blz-gold); text-shadow: 0 0 8px rgba(255, 217, 102, 0.5); }
+.lite-nav-item:hover .nav-label { color: #fff; }
+
+/* CSS red triangles — Send points RIGHT ▶, Receive points LEFT ◀ (V2.0 Sidebar orientation). */
+.nav-glyph.tri-right, .nav-glyph.tri-left {
+    width: 0; height: 0;
+    border-top: 10px solid transparent; border-bottom: 10px solid transparent;
+}
+.nav-glyph.tri-right { border-left: 16px solid var(--blz-primary); }
+.nav-glyph.tri-left { border-right: 16px solid var(--blz-primary); }
+
+/* ── The V1.5 LEDGER CARD: square corners, 2px white border, black status-header.
+     The card's h2 IS the status bar (negative margins pull it edge-to-edge),
+     mirroring desktop .card:has(> .status-header) / overviewpage.ui #wStateHeader. ── */
+.lite-card {
+    /* Dark glass (black tint over the blur): started as the comet cards'
+       halo-wash compensation, promoted to the standard card look 2026-07-27. */
+    background: rgba(0, 0, 0, 0.35);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border: 2px solid #fff;
+    border-radius: 0;
+    padding: 1.25rem;
+    margin-bottom: 1.1rem;
+    overflow: hidden;
+}
+.lite-card h2 {
+    margin: -1.25rem -1.25rem 1rem;
+    background: #000;
+    height: 32px; line-height: 32px;
+    padding: 0 13px;                   /* matches V1.5 label x=13 */
+    color: #fff; font-size: 11pt; font-weight: 600;
+    letter-spacing: .02em;
+}
+
+.lite-balance {
+    font-size: 2.5rem; font-weight: bold; color: var(--blz-success);
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+}
+.lite-balance small { font-size: 1.1rem; color: var(--blz-muted); font-weight: 600; }
+.lite-sub { color: var(--blz-muted); font-size: .85rem; }
+/* Home balance card: balance figure + address centered (header bar stays standard) */
+.lite-card-balance .lite-balance,
+.lite-card-balance .lite-sub { text-align: center; }
+
+/* Comet ring — ported from the desktop Sidebar's selected-bar effect
+   (Sidebar.razor.css), colours inverted from the desktop original: the card's
+   edge is V2.0 red (--blz-primary #cf2013) and a bright WHITE comet head
+   fading to a transparent tail glides around it (a rotating conic-gradient
+   masked to a 2px ring), over a soft white backlight glow. Reusable via
+   .lite-card-comet — since 2026-08-18 on the Home BALANCE card only (Recent
+   Activity dropped it on request; two rings read as noise) — kept to Home only
+   (repaint-per-frame animation); the WebView pauses it while backgrounded,
+   reduced-motion disables it. */
+.lite-card-comet {
+    position: relative;
+    /* Comet palette as custom properties so event pulses (below) can recolour
+       the whole effect — head, tail and glow — by swapping variables only. */
+    --comet-c0: #ffffff;
+    --comet-c1: rgba(255, 255, 255, 0.9);
+    --comet-c2: rgba(255, 255, 255, 0.55);
+    --comet-c3: rgba(255, 255, 255, 0.2);
+    --comet-glow-a: rgba(255, 255, 255, 0.35);
+    --comet-glow-b: rgba(255, 255, 255, 0.15);
+    /* Inverted from the standard white ledger-card edge (on request): red
+       border, white comet — the comet reads best against the red frame. */
+    border-color: var(--blz-primary);
+    /* The base card's dark glass is what cancels the neighbouring card's halo
+       wash here (backdrop blur lifts a white glow sitting behind this glass). */
+    /* .lite-card clips overflow (header-bar trick); the ring rides the OUTER edge,
+       so this card must not clip — nothing inside actually overflows (square
+       corners, the h2 stays within the border), so visible is safe here. */
+    overflow: visible;
+    /* NO box-shadow on the host: the card's backdrop-filter blur samples past
+       the edge and pulls an outer glow into the frosted interior, washing it
+       out. The glow lives on ::before instead (painted above the blurred
+       background, so it only radiates outward). */
+}
+/* Recent Activity: red frame like the Balance card (its neighbour), but no
+   comet — the pair reads as one dashboard block, the ring marks the money. */
+.lite-card-activity { border-color: var(--blz-primary); }
+/* Backlight glow — its own pseudo-element so the host's backdrop blur can't
+   sample it (see above). Not on ::after: the ring mask would clip the shadow.
+   The wide halo DOES reach behind the neighbouring frosted card (cards sit
+   1.1rem apart) and its blur lifts it — compensated by the darker comet-card
+   background above rather than by shrinking the glow. */
+.lite-card-comet::before {
+    content: "";
+    position: absolute;
+    inset: -2px;              /* cast from the border's outer edge */
+    pointer-events: none;
+    box-shadow:
+        0 0 12px 2px var(--comet-glow-a),
+        0 0 34px 10px var(--comet-glow-b);
+}
+.lite-card-comet::after {
+    content: "";
+    position: absolute;
+    inset: -2px;              /* ride the card's 2px border */
+    pointer-events: none;
+    padding: 2px;             /* thickness of the glowing ring */
+    background: conic-gradient(
+        from var(--comet-angle),
+        var(--comet-c0) 0deg,
+        var(--comet-c1) 35deg,
+        var(--comet-c2) 110deg,
+        var(--comet-c3) 180deg,
+        transparent 240deg,
+        transparent 360deg
+    );
+    /* clip the gradient to just the padding ring so the glow rides the edge */
+    -webkit-mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    /* NO animation here — see .lite-main below. The angle is inherited from
+       one shared clock so every comet on the page is in phase by construction. */
+}
+/* --comet-angle must be registered as an <angle> so it can be interpolated
+   (a plain custom property would jump, not sweep). It INHERITS: the sweep is
+   animated ONCE on .lite-main and every ring reads that one value. */
+@property --comet-angle {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: true;
+}
+/* One clock for all comets. Each card used to run its own `animation` on its
+   ::after, and two identical infinite animations only stay in phase if they
+   START in the same frame — the Balance card mounts first and Recent Activity
+   after history loads (visibly so on the WASM head, where the gap is longer),
+   so the two comets drifted apart. Animating the shared ancestor's custom
+   property means there is exactly one animation and nothing to drift; a card
+   mounted later simply reads the current angle. Cheap: on pages with no comet
+   nothing consumes the value, so nothing repaints. (Same idea as the desktop's
+   startHeaderCoinSync — one shared timestamp — without a JS loop.)
+   Faster than the original 2.4s: the long half-ring tail makes a lap read
+   slower than it is, so the sweep compensates to keep the snappy feel. */
+.lite-main { animation: lite-comet 2.3s linear infinite; }
+@keyframes lite-comet { to { --comet-angle: 360deg; } }
+@media (prefers-reduced-motion: reduce) {
+    .lite-main { animation: none; }
+}
+/* Transient event pulses (CometPulse service, 30 s): the balance card's comet
+   runs success-green after an incoming payment and orange after a send, then
+   reverts to white. Only the palette variables change — geometry/speed stay. */
+.lite-card-comet.comet-received {
+    --comet-c0: #b8ffe9;
+    --comet-c1: rgba(6, 214, 160, 0.9);
+    --comet-c2: rgba(6, 214, 160, 0.55);
+    --comet-c3: rgba(6, 214, 160, 0.2);
+    --comet-glow-a: rgba(6, 214, 160, 0.4);
+    --comet-glow-b: rgba(6, 214, 160, 0.18);
+}
+.lite-card-comet.comet-sent {
+    --comet-c0: #ffd9a8;
+    --comet-c1: rgba(255, 152, 0, 0.9);
+    --comet-c2: rgba(255, 152, 0, 0.55);
+    --comet-c3: rgba(255, 152, 0, 0.2);
+    --comet-glow-a: rgba(255, 152, 0, 0.4);
+    --comet-glow-b: rgba(255, 152, 0, 0.18);
+}
+
+/* ── Buttons: desktop .btn-primary / .btn-secondary ── */
+.lite-btn {
+    display: inline-block; width: 100%; box-sizing: border-box; text-align: center;
+    background: linear-gradient(135deg, var(--blz-primary), var(--blz-accent));
+    color: #fff; border: none; border-radius: 8px;
+    padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: 600; cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: inherit;
+}
+.lite-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--blz-accent), var(--blz-primary));
+    transform: scale(1.02);
+}
+.lite-btn:disabled { opacity: .5; cursor: default; }
+.lite-btn-ghost {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(207, 32, 19, 0.3);
+}
+.lite-btn-ghost:hover:not(:disabled) {
+    background: rgba(207, 32, 19, 0.2);
+    transform: none;
+}
+/* Success-green variant (the balance/toast green) — the Send page's scan button. */
+.lite-btn-success {
+    background: rgba(6, 214, 160, 0.12);
+    border: 1px solid var(--blz-success);
+    color: var(--blz-success);
+}
+.lite-btn-success:hover:not(:disabled) {
+    background: rgba(6, 214, 160, 0.22);
+    transform: none;
+}
+
+/* ── Inputs: dark wells with the red-tint border ── */
+.lite-input {
+    width: 100%; box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.45); color: #fff;
+    border: 1px solid rgba(207, 32, 19, 0.35); border-radius: 8px;
+    padding: 0.75rem; margin: 6px 0 12px;
+    font-family: Consolas, ui-monospace, monospace; font-size: .95rem;
+    transition: border-color 0.3s ease;
+}
+.lite-input:focus { outline: none; border-color: var(--blz-primary); box-shadow: 0 0 8px rgba(207, 32, 19, 0.35); }
+textarea.lite-input { min-height: 84px; resize: vertical; }
+label.lite-sub { font-weight: 600; letter-spacing: .02em; }
+
+/* ── Alerts ── */
+.lite-error {
+    background: rgba(239, 71, 111, 0.12); border: 1px solid var(--blz-danger);
+    border-radius: 0; padding: 10px 13px; margin: 12px 0; font-size: .9rem;
+}
+.lite-success {
+    background: rgba(6, 214, 160, 0.10); border: 1px solid var(--blz-success);
+    border-radius: 0; padding: 10px 13px; margin: 12px 0; font-size: .9rem; word-break: break-all;
+}
+
+/* ── Mnemonic ceremony ── */
+.lite-mnemonic { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin: 12px 0; }
+.lite-word {
+    background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(207, 32, 19, 0.35);
+    border-radius: 0; padding: 6px 8px;
+    font-family: Consolas, ui-monospace, monospace; font-size: .85rem;
+}
+.lite-word b { color: var(--blz-gold); margin-right: 5px; font-weight: 600; }
+
+/* ── History: the desktop transactions-ledger row language ── */
+.lite-history { list-style: none; margin: 0; padding: 0; }
+.lite-history li {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    padding: 10px 2px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: .9rem;
+}
+.lite-history li:last-child { border-bottom: none; }
+/* Tx-detail Outputs rows: the address is one unbreakable token, and a flex item's
+   default min-width:auto means it refuses to shrink - pushing the amount past the
+   card's right edge. Let the address column shrink and wrap; pin the amount column
+   unshrinkable and unwrappable so it always sits inside the card. (2026-08-24) */
+.lite-history-outputs li > span:first-child { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.lite-history-outputs li > span:last-child { flex: 0 0 auto; white-space: nowrap; }
+.lite-history .in { color: var(--blz-success); font-weight: 600; }
+.lite-history .out { color: var(--blz-accent); font-weight: 600; }
+.lite-txid { color: var(--blz-muted); font-family: Consolas, ui-monospace, monospace; font-size: .78rem; }
+.lite-link { color: var(--blz-accent); text-decoration: none; }
+.lite-link:hover { text-decoration: underline; }
+
+/* ── Receive ── */
+.lite-address {
+    font-family: Consolas, ui-monospace, monospace; word-break: break-all;
+    background: rgba(0, 0, 0, 0.45); border: 1px dashed rgba(207, 32, 19, 0.5);
+    border-radius: 0; padding: 12px 13px; text-align: center; margin-bottom: 12px;
+    font-size: .92rem;
+}
+.lite-qr { display: flex; justify-content: center; margin: 14px 0; }
+.lite-qr svg {
+    width: 220px; height: 220px; background: #fff; padding: 10px;
+    border: 2px solid #fff; border-radius: 0;   /* square, like the ledger cards */
+    box-shadow: 0 0 20px rgba(207, 32, 19, 0.35);
+}
+
+/* Incoming-payment toast (LiteLayout) — success-green ledger chip, dismissible. */
+.lite-toast {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: rgba(6, 214, 160, 0.12);
+    border: 1px solid var(--blz-success);
+    color: var(--blz-success);
+    padding: 10px 12px; margin-bottom: 10px;
+    font-size: .95rem;
+}
+.lite-toast b { font-weight: 700; }
+.lite-toast-close {
+    background: none; border: none; color: var(--blz-success);
+    cursor: pointer; font-size: .9rem; padding: 2px 6px;
+}
+.lite-toast-close:hover { color: #fff; }
+
+/* Unconfirmed incoming payment — amber, distinct from the confident green "Received". */
+.lite-toast-pending {
+    background: rgba(255, 193, 7, 0.12);
+    border-color: #ffc107;
+    color: #ffc107;
+}
+.lite-toast-pending .lite-toast-close { color: #ffc107; }
+.lite-toast small { opacity: .8; font-weight: 400; }
+
+/* The Home unverified-backup warning chip — a tappable amber banner. Centered, and on
+   DARK blurred glass (not the toast's translucent amber): the busy skins behind made
+   the amber-on-amber text hard to read. */
+.lite-backup-chip {
+    cursor: pointer;
+    justify-content: center;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.6);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+}
+.lite-backup-chip:hover { background: rgba(0, 0, 0, 0.75); }
+
+/* The Home provenance entry — same dark-glass chip construction as the backup
+   warning, but gold-edged (the collector colour) and only rendered when the
+   wallet holds confirmed coins to trace. */
+.lite-prov-chip {
+    cursor: pointer;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.6);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 217, 102, 0.5);
+    color: #fff;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    font-size: .9rem;
+}
+.lite-prov-chip:hover { background: rgba(0, 0, 0, 0.75); }
+.lite-prov-chip b { color: var(--blz-gold); }
+
+/* ============================================================================
+   Coin background skin — ported from the V2.0 desktop wallet's "Pixelated
+   Coins" (wallet.css .skin-pixelated-coins + mining-background.js paintCoinGrid).
+   Painted by coin-skin.js into #lite-skin-host, behind the shell. Dimmed so the
+   ledger cards stay readable; pauses off-screen; disabled under reduced-motion.
+   ============================================================================ */
+.lite-shell { position: relative; z-index: 1; }
+
+.lite-skin-host { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.lite-skin-host.lite-skin-off { display: none; }
+
+.skin-pixelated-coins {
+    /* oversized so the diagonal drift never reveals an edge */
+    position: fixed; top: -40%; left: -40%; width: 180%; height: 180%;
+    display: grid; place-items: center; pointer-events: none;
+    opacity: 0.85;                      /* bright, like the desktop skin (cards have solid bg) */
+    /* Continuous diagonal drift, down-left, forever. The step is EXACTLY 2 cells (set by
+       coin-skin.js as --drift-x/--drift-y in px) and the coin pattern repeats every 2 cells,
+       so the loop restart lands on an identical field — no snap. */
+    animation: lite-drift-diagonal 40s linear infinite;
+}
+.skin-pixelated-coins .coin-cell { width: 80%; aspect-ratio: 1; }
+.skin-pixelated-coins .coin-cell.stagger { transform: translateX(50%); }
+.skin-pixelated-coins .coin-cell canvas {
+    display: block; width: 100%; height: 100%;
+    image-rendering: pixelated;
+    filter: sepia(1) saturate(2) brightness(1.1) hue-rotate(5deg);  /* original desktop gold */
+    animation: lite-coin-flip 12s ease-in-out infinite;
+    clip-path: polygon(
+        33% 0%, 67% 0%, 67% 17%, 83% 17%, 83% 33%, 100% 33%,
+        100% 67%, 83% 67%, 83% 83%, 67% 83%, 67% 100%, 33% 100%,
+        33% 83%, 17% 83%, 17% 67%, 0% 67%, 0% 33%, 17% 33%, 17% 17%, 33% 17%);
+}
+.skin-pixelated-coins .coin-cell.flip canvas { animation-delay: -6s; }
+
+.skin-pixelated-coins.lite-skin-paused,
+.skin-pixelated-coins.lite-skin-paused .coin-cell canvas { animation-play-state: paused; }
+
+@keyframes lite-drift-diagonal { from { transform: translate(0, 0); } to { transform: translate(var(--drift-x, -360px), var(--drift-y, 360px)); } }
+@keyframes lite-coin-flip { 0% { transform: rotateY(0deg); } 50% { transform: rotateY(360deg); } 100% { transform: rotateY(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .skin-pixelated-coins { animation: none; }
+    .skin-pixelated-coins .coin-cell canvas { animation: none; }
+}
+
+/* ── Axe-pattern skin — ported from the website User account page (.bz-axe-bg): a
+   45°-rotated field of black columns of spinning axes over crimson stripes, with an
+   uphill dashed centre line per stripe. DOM + sizes built by axe-skin.js; the wrap
+   invariants (spin-phase period = half track, dash period divides the stage) live there. */
+.skin-axe-pattern { overflow: hidden; background: #000; opacity: 0.9; }
+.skin-axe-pattern .axe-stage {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%) rotate(45deg);
+    display: flex; flex-direction: row; justify-content: center;
+    background: var(--blz-crimson);
+    contain: strict;                  /* isolate the animated subtree (account-page perf lesson) */
+}
+.skin-axe-pattern .axe-col { background: #000; overflow: hidden; }
+.skin-axe-pattern .axe-stripe { position: relative; overflow: hidden; }
+.skin-axe-pattern .axe-stripe-line {
+    position: absolute; top: 0; left: 50%; width: 3px; margin-left: -1.5px; height: 200%;
+    background: repeating-linear-gradient(to bottom, #ffffff 0 40px, transparent 40px 125px);
+    animation: lite-axe-dash 580s linear infinite;
+}
+.skin-axe-pattern .axe-track { display: flex; flex-direction: column; animation: lite-axe-flow var(--fdur, 180s) linear infinite; }
+.skin-axe-pattern .axe-slot { display: flex; align-items: center; justify-content: center; }
+.skin-axe-pattern .axe {
+    background-position: center; background-size: contain; background-repeat: no-repeat;
+    transform-origin: 50% 50%;
+    animation: lite-axe-spin 68s linear infinite;
+}
+/* Tint only — no glow/brightness: both amplify the PNG's faint canvas into a visible box. */
+.skin-axe-pattern .axe-gold { filter: sepia(1) saturate(4) hue-rotate(5deg); }
+@keyframes lite-axe-spin { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+@keyframes lite-axe-flow { from { transform: translateY(-50%); } to { transform: translateY(0); } }
+@keyframes lite-axe-dash { from { transform: translateY(0); } to { transform: translateY(-50%); } }
+.skin-axe-pattern.lite-skin-paused .axe,
+.skin-axe-pattern.lite-skin-paused .axe-track,
+.skin-axe-pattern.lite-skin-paused .axe-stripe-line { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+    .skin-axe-pattern .axe, .skin-axe-pattern .axe-track, .skin-axe-pattern .axe-stripe-line { animation: none; }
+}
+
+/* ── Digital Fire Fighters skin — ported from the desktop wallet's heaviest skin,
+   mobile-tuned (curated 14-image set, no orbit, no RAM preload — see
+   firefighter-skin.js). Rows of tiles scroll sideways in alternating directions;
+   the one-set translate + exact clone set makes the loop seamless. */
+.skin-digital-fire-fighters { overflow: hidden; background: #000; opacity: 0.85; }
+.skin-digital-fire-fighters .ff-bg {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; overflow: hidden;
+    contain: strict;
+}
+.skin-digital-fire-fighters .ff-row {
+    display: flex; flex-wrap: nowrap; flex-shrink: 0;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+}
+.skin-digital-fire-fighters .ff-tile { flex-shrink: 0; height: 100%; }
+.skin-digital-fire-fighters .ff-tile img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    filter: brightness(110%);
+    border: 2px solid #000; box-sizing: border-box;   /* desktop uses 3px; 2px at phone tile size */
+}
+@keyframes lite-ff-right { from { transform: translateX(calc(-1 * var(--ff-set))); } to { transform: translateX(0); } }
+@keyframes lite-ff-left  { from { transform: translateX(0); } to { transform: translateX(calc(-1 * var(--ff-set))); } }
+.skin-digital-fire-fighters.lite-skin-paused .ff-row { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+    .skin-digital-fire-fighters .ff-row { animation: none; }
+}
+
+/* Settings appearance toggle */
+.lite-skin-toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; margin-top: 6px; }
+.lite-skin-toggle input { width: 18px; height: 18px; accent-color: var(--blz-primary); }
+.lite-skin-toggle span { color: #fff; font-size: .95rem; }
+
+.lite-history-row { cursor: pointer; }
+.lite-history-row:hover { background: rgba(255,255,255,0.04); }
+
+/* ── In-app modal (setup skip warning): dim backdrop + centered ledger card ── */
+.lite-modal {
+    position: fixed; inset: 0; z-index: 900;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+}
+.lite-modal-card { max-width: 420px; width: 100%; margin-bottom: 0; }
+/* Ceremony modals (unlock / protect / eviction / skip-backup) lead with an emoji h2 —
+   centred reads as a dialog title rather than a left-anchored section heading. */
+.lite-modal-card h2 { text-align: center; }
+/* Same idea for ceremony PAGE titles (e.g. Setup's "Set Up Your Wallet") — opt-in per
+   heading, so ordinary card headings stay left-anchored. */
+.lite-title-center { text-align: center; }
+
+/* ── Camera QR scanner overlay (Send page; built on demand by js/lite-qr.js) ── */
+.lite-qr-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: #000; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; overflow: hidden;
+}
+.lite-qr-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.lite-qr-reticle {
+    position: relative; z-index: 1;
+    width: min(70vw, 260px); aspect-ratio: 1;
+    border: 3px solid var(--blz-gold); border-radius: 12px;
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45);   /* dim everything outside the reticle */
+}
+.lite-qr-hint {
+    position: relative; z-index: 1; margin-top: 18px;
+    color: #fff; font-size: .95rem; text-align: center; padding: 0 24px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+.lite-qr-bar { position: absolute; z-index: 1; left: 0; right: 0; bottom: 0; display: flex; gap: 10px; padding: 16px; }
+.lite-qr-bar .lite-btn { width: auto; flex: 1; }
+
+/* ── Provenance page: the mint-ancestry catalogue ── */
+.lite-prov-models { display: flex; gap: 8px; margin: 4px 0 10px; }
+.lite-prov-model {
+    background: rgba(0, 0, 0, 0.4); color: #ddd;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    padding: 5px 12px; font-size: .85rem; cursor: pointer;
+}
+.lite-prov-model.on { background: var(--blz-primary); border-color: #fff; color: #fff; font-weight: 700; }
+
+.lite-prov-table { width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: 6px; }
+.lite-prov-table th, .lite-prov-table td {
+    padding: 6px 8px; text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.lite-prov-table thead th { color: var(--blz-accent); font-weight: 600; }
+.lite-prov-table .num { text-align: right; font-family: Consolas, monospace; }
+/* Year totals lead in the balance green; month rows nest beneath, dimmer. */
+.lite-prov-year td { font-weight: 700; color: var(--blz-success); }
+.lite-prov-month td { opacity: .8; font-size: .85rem; color: var(--blz-success); }
+/* Specials in the collector gold — same convention as the desktop page. */
+.lite-prov-gold td { color: var(--blz-gold); }
+.lite-prov-h { margin: 14px 0 2px; font-size: 1.05rem; }
+/* The running trace clock — balance green, monospace so it ticks without jitter. */
+.lite-prov-elapsed { font-family: Consolas, monospace; color: var(--blz-success); }
+/* Depth-limit notice — the trace was truncated server-side; amber like a warning,
+   because the figures are honest but incomplete. */
+.lite-prov-truncated { color: #ffb347; font-size: .84rem; margin: 4px 0 8px; }

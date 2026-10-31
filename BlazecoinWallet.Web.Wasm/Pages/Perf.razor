@@ -1,0 +1,49 @@
+@page "/perf"
+@using System.Diagnostics
+@using Org.BouncyCastle.Crypto.Generators
+
+@* The step-1 measurement: how fast is scrypt(1024,1,1) under WASM in THIS browser?
+   This is the exact call BlazecoinPoW.MeetsTarget makes per header, so ms/header here
+   decides whether the trustless header-chain sync is viable in the web head (and how
+   much WASM AOT is worth). Head-specific dev page — never linked from the wallet UI. *@
+<div style="padding:2rem; font-family:Consolas,monospace; color:#eee; background:#111; min-height:100vh">
+    <h3>scrypt(1024,1,1) under WASM</h3>
+    <p>The per-header cost of the trustless header-chain sync. A 250-header gateway
+       batch is the unit that matters.</p>
+    <button style="padding:8px 16px" @onclick="() => RunAsync(20)" disabled="@_busy">Run 20 hashes</button>
+    <button style="padding:8px 16px" @onclick="() => RunAsync(100)" disabled="@_busy">Run 100 hashes</button>
+    @if (_busy)
+    {
+        <p>hashing…</p>
+    }
+    @foreach (var line in _results)
+    {
+        <p>@line</p>
+    }
+</div>
+
+@code {
+    private bool _busy;
+    private readonly List<string> _results = [];
+
+    private async Task RunAsync(int n)
+    {
+        _busy = true;
+        StateHasChanged();
+        await Task.Delay(50);   // let the busy state paint before the single thread saturates
+
+        var header = new byte[80];
+        new Random(413).NextBytes(header);
+        SCrypt.Generate(header, header, 1024, 1, 1, 32);   // warmup / JIT-tier
+
+        var sw = Stopwatch.StartNew();
+        for (var i = 0; i < n; i++)
+            SCrypt.Generate(header, header, 1024, 1, 1, 32);
+        sw.Stop();
+
+        var perHeader = sw.Elapsed.TotalMilliseconds / n;
+        _results.Add($"{n} hashes: {sw.ElapsedMilliseconds} ms total · {perHeader:0.0} ms/header · " +
+                     $"250-header batch ≈ {perHeader * 250 / 1000:0.0} s · 1,000 headers ≈ {perHeader * 1000 / 1000:0.0} s");
+        _busy = false;
+    }
+}

@@ -1,0 +1,372 @@
+@page "/import"
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.Import
+@using Microsoft.Maui.Storage
+@implements IDisposable
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IWalletImportService Importer
+@inject IJSRuntime JS
+
+<PageTitle>Import - Blazecoin Wallet V2.0</PageTitle>
+
+@* Three counter-rotating rings of tiles, painted by initImportBackground. *@
+<div class="import-bg" id="importBg"></div>
+
+@* Cyan sonar pulse radiating from viewport centre. Pure CSS, no JS. *@
+<div class="im-sonar" aria-hidden="true"></div>
+
+<div class="wallet-page">
+    @* Main header — same nested red→black two-container chrome as the
+       Dashboard title banner (Dashboard.razor). *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title">
+                    @* Red-outlined folder icons (stroke="currentColor" → #d10000),
+                       same treatment as the Address Book header SVGs. *@
+                    <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" pathLength="100" />
+                    </svg>
+                    <span class="banner-text">Import Wallet</span>
+                    <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" pathLength="100" />
+                    </svg>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else if (_success)
+    {
+        <div class="alert alert-success">
+            <h3>✓ Imported as "@_newName"</h3>
+            @if (_migrated)
+            {
+                <p>Migrated from legacy Berkeley DB to descriptor format. A <code>.legacy.bak</code> safety copy was placed next to the wallet.</p>
+            }
+            <p>The wallet is now loaded and ready to use.</p>
+            <button class="btn btn-primary" @onclick="Reset">Import another</button>
+        </div>
+    }
+    else if (_awaitingPassphrase)
+    {
+        <div class="send-form">
+            <h2>Finish migration</h2>
+            <p class="form-help">
+                <strong>"@_newName"</strong> was restored and loaded, but it's encrypted — the
+                passphrase was missing or incorrect, so it hasn't been converted to the descriptor
+                format yet. Enter the wallet's passphrase to finish.
+            </p>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="alert alert-danger">@_error</div>
+            }
+
+            <div class="form-group">
+                <label for="pass2">Wallet passphrase</label>
+                <input id="pass2" type="password" class="form-control" @bind="_passphrase"
+                       placeholder="Enter the wallet's passphrase" disabled="@_busy" />
+            </div>
+
+            @if (_busy)
+            {
+                <div class="import-progress" role="status" aria-live="polite">
+                    <div class="im-progress-bar"><span class="im-progress-fill"></span></div>
+                    <p class="im-progress-msg">@_busyMessage</p>
+                    <p class="form-hint">
+                        Elapsed: <strong>@FormatElapsed(_elapsedSeconds)</strong>. Migrating —
+                        this rescans the chain and can take several minutes.
+                    </p>
+                </div>
+            }
+
+            <div class="form-actions">
+                <button class="btn btn-primary import-submit" @onclick="DoRetryMigrateAsync"
+                        disabled="@(_busy || string.IsNullOrWhiteSpace(_passphrase))">
+                    @(_busy ? _busyMessage : "Finish migration")
+                </button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="send-form">
+            <h2>Import</h2>
+            <p class="form-help">
+                Pick a <code>wallet.dat</code> file to import. Works with both V2 descriptor
+                backups and legacy V1.5 / original Blazecoin wallets — if it's a Berkeley DB
+                file, we'll migrate it to the modern descriptor format on the way in.
+            </p>
+
+            <div class="form-group">
+                <div class="file-picker-box">
+                    <label>Wallet file</label>
+                    <div class="address-actions" style="margin-top:0">
+                        <button class="btn btn-secondary" @onclick="PickFileAsync" disabled="@_busy">
+                            @(string.IsNullOrEmpty(_sourcePath) ? "Choose wallet.dat..." : "Choose a different file...")
+                        </button>
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(_sourcePath))
+                {
+                    <div class="address-box" style="margin-top:1rem">
+                        <code>@_sourcePath</code>
+                    </div>
+                    <p class="form-hint">
+                        Detected format: <strong>@Importer.FormatLabel(_detectedFormat)</strong>
+                    </p>
+                }
+            </div>
+
+            @if (!string.IsNullOrEmpty(_sourcePath))
+            {
+                <div class="form-group">
+                    <label for="newName">New wallet name</label>
+                    <input id="newName" class="form-control" @bind="_newName"
+                           placeholder="e.g. imported-v15" />
+                    <small class="form-hint">
+                        This becomes the wallet's folder name under
+                        <code>%APPDATA%\BlazecoinV2.0\wallets\</code>. Pick something
+                        unique — Core refuses to overwrite an existing wallet.
+                    </small>
+                </div>
+
+                @if (_detectedFormat == WalletFormat.LegacyBdb)
+                {
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" @bind="_migrate" />
+                            Migrate to descriptor wallet after loading (recommended)
+                        </label>
+                        <small class="form-hint">
+                            Legacy BDB wallets work but are deprecated. Migration converts the
+                            keys to descriptors and writes a <code>.legacy.bak</code> safety copy.
+                            On a synced 4M-block chain this can take several minutes.
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="pass">Passphrase (only if the wallet is encrypted)</label>
+                        <input id="pass" type="password" class="form-control" @bind="_passphrase"
+                               placeholder="Leave blank if unencrypted" />
+                    </div>
+                }
+
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="alert alert-danger">@_error</div>
+                }
+
+                @if (!string.IsNullOrEmpty(_status))
+                {
+                    <div class="alert alert-success">@_status</div>
+                }
+
+                @* Progress while a restore/migrate is in flight. These are single
+                   blocking RPC calls and a legacy wallet's getwalletinfo errors out
+                   mid-rescan, so there's no reliable % to show — instead we sweep an
+                   indeterminate bar and tick a live elapsed-time counter so the user
+                   can see it's working rather than frozen. *@
+                @if (_busy)
+                {
+                    <div class="import-progress" role="status" aria-live="polite">
+                        <div class="im-progress-bar"><span class="im-progress-fill"></span></div>
+                        <p class="im-progress-msg">@_busyMessage</p>
+                        <p class="form-hint">
+                            Elapsed: <strong>@FormatElapsed(_elapsedSeconds)</strong>.
+                            @if (_detectedFormat == WalletFormat.LegacyBdb)
+                            {
+                                <text>
+                                    A legacy wallet rescans the whole chain — on a wallet with lots
+                                    of history this can take <strong>30–60 minutes</strong>. Keep the
+                                    app open; the daemon is working even though there's no percentage.
+                                </text>
+                            }
+                            else
+                            {
+                                <text>This may take a moment.</text>
+                            }
+                        </p>
+                    </div>
+                }
+
+                <div class="form-actions">
+                    <button class="btn btn-primary import-submit" @onclick="DoImportAsync"
+                            disabled="@(_busy || string.IsNullOrWhiteSpace(_newName))">
+                        @(_busy ? _busyMessage : "Import Wallet")
+                    </button>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private string _sourcePath = "";
+    private WalletFormat _detectedFormat = WalletFormat.Unknown;
+    private string _newName = "";
+    private bool _migrate = true;
+    private string _passphrase = "";
+    private bool _busy;
+    private string _busyMessage = "";
+    private bool _success;
+    private bool _migrated;
+    private bool _awaitingPassphrase;   // restored but encrypted — show the finish-migration panel
+    private string? _error;
+    private string? _status;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Non-daemon work (JS background) runs regardless of daemon state.
+        try { await JS.InvokeVoidAsync("initImportBackground"); }
+        catch { /* WebView not ready — background just won't appear */ }
+
+        // Check daemon reachability up front so the offline panel shows
+        // before the user can attempt an import. Import has no data load at
+        // first render (RPC only fires on the Import button), so there's
+        // nothing else to gate behind a reachable daemon here (no reconnect
+        // reload either — the base default).
+        await CheckDaemonAsync();
+        StateHasChanged();
+    }
+
+    private async Task PickFileAsync()
+    {
+        _error = null;
+        _status = null;
+        try
+        {
+            var result = await FilePicker.PickAsync(new PickOptions { PickerTitle = "Select a wallet.dat file" });
+            if (result == null) return;
+
+            _sourcePath = result.FullPath;
+            _detectedFormat = await Importer.DetectFormatAsync(_sourcePath);
+            _migrate = _detectedFormat == WalletFormat.LegacyBdb;
+
+            if (string.IsNullOrEmpty(_newName))
+            {
+                // Default the new name from the source filename (minus .dat).
+                var folder = Path.GetFileName(Path.GetDirectoryName(_sourcePath) ?? "");
+                var baseName = string.IsNullOrEmpty(folder) || folder.Equals("wallets", StringComparison.OrdinalIgnoreCase)
+                    ? Path.GetFileNameWithoutExtension(_sourcePath)
+                    : folder;
+                _newName = $"imported-{baseName}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not open file picker: {ex.Message}";
+        }
+    }
+
+    private async Task DoImportAsync()
+        => ApplyResult(await RunOpAsync(
+            "Importing wallet — scanning the chain...",
+            p => Importer.ImportAsync(_newName, _sourcePath, _detectedFormat, _migrate,
+                                      string.IsNullOrEmpty(_passphrase) ? null : _passphrase, p)));
+
+    // Restored but encrypted — finish the legacy→descriptor migration with the
+    // corrected passphrase (no re-restore; the wallet is already loaded).
+    private async Task DoRetryMigrateAsync()
+        => ApplyResult(await RunOpAsync(
+            "Finishing migration — scanning the chain...",
+            p => Importer.RetryMigrateAsync(_newName, _passphrase, p)));
+
+    // Shared busy/ticker/progress wrapper around an import or retry operation.
+    private async Task<WalletImportResult> RunOpAsync(
+        string initialMsg, Func<IProgress<WalletImportPhase>, Task<WalletImportResult>> op)
+    {
+        _error = null;
+        _status = null;
+        _busy = true;
+        _busyMessage = initialMsg;
+        StartTicker();
+
+        // The service reports the mid-phase (restore → migrate) message; reflect it
+        // in the busy/status text exactly as the page used to set it inline.
+        var progress = new Progress<WalletImportPhase>(p =>
+        {
+            _busyMessage = p.BusyMessage;
+            if (p.Status != null) _status = p.Status;
+            StateHasChanged();
+        });
+
+        try { return await op(progress); }
+        finally
+        {
+            StopTicker();
+            _busy = false;
+            _busyMessage = "";
+        }
+    }
+
+    private void ApplyResult(WalletImportResult result)
+    {
+        if (result.Success)
+        {
+            _migrated = result.Migrated;
+            _success = true;            // service already made it the active wallet
+            _awaitingPassphrase = false;
+        }
+        else if (result.NeedsPassphrase)
+        {
+            // Wallet restored + loaded but encrypted: switch to the focused
+            // "finish migration" panel. Clear the bad passphrase so the user retypes.
+            _awaitingPassphrase = true;
+            _error = result.Error;
+            _passphrase = "";
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+
+    // ---- Live elapsed-time ticker shown during the long restore/migrate ----
+    private System.Threading.Timer? _ticker;
+    private DateTime _opStartUtc;
+    private int _elapsedSeconds;
+
+    private void StartTicker()
+    {
+        _opStartUtc = DateTime.UtcNow;
+        _elapsedSeconds = 0;
+        _ticker = new System.Threading.Timer(_ =>
+        {
+            _elapsedSeconds = (int)(DateTime.UtcNow - _opStartUtc).TotalSeconds;
+            InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private void StopTicker()
+    {
+        _ticker?.Dispose();
+        _ticker = null;
+    }
+
+    private static string FormatElapsed(int s)
+        => s < 60 ? $"{s}s" : $"{s / 60}m {s % 60:D2}s";
+
+    public void Dispose() => StopTicker();
+
+    private void Reset()
+    {
+        _success = false;
+        _migrated = false;
+        _awaitingPassphrase = false;
+        _error = null;
+        _status = null;
+        _sourcePath = "";
+        _detectedFormat = WalletFormat.Unknown;
+        _newName = "";
+        _passphrase = "";
+        _migrate = true;
+    }
+}

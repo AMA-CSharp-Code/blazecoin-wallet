@@ -1,0 +1,310 @@
+/* Title banner — copied from Dashboard.razor.css so Address Book shares the
+   same chrome: nested red→black cards with pixelated flipping coins flanking
+   a typewriter-revealed title. The JS hooks (drawHeaderCoins,
+   startHeaderCoinSync, typeBlazecoinBanner) are already generic — they query
+   .header-coin and .banner-text on whatever page invokes them. */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+.banner-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3rem;
+    margin: 0;
+    padding: 12px 0;
+    color: white;
+    text-shadow: 3px 3px navy, 3px 4px red;
+    font-weight: 500;
+}
+
+/* Per-letter page-flip — each char of "Address Book" wraps in a .flip-page
+   span that rotates on its X axis (top-over-bottom flip — page turning) on
+   an 8s cycle, staggered 0.1s per letter so the flips sweep across the title
+   as a wave. The 360deg endpoint matches the 0deg start so the loop wraps
+   invisibly. Sibling to Receive's coin-flip but differentiated by axis:
+   pages flip top-to-bottom, coins spin left-to-right. */
+.banner-pages {
+    display: inline-flex;
+    justify-content: center;
+    white-space: nowrap;
+    min-width: 14ch;
+    perspective: 800px;
+}
+.flip-page {
+    display: inline-block;
+    animation: pageFlip 8s ease-in-out infinite;
+    animation-delay: calc(var(--i) * 0.1s);
+}
+
+@keyframes pageFlip {
+    0%   { transform: rotateX(0deg);   }
+    15%  { transform: rotateX(360deg); }   /* flip fast in first 15% (~1.2s) */
+    100% { transform: rotateX(360deg); }   /* hold flat for the rest */
+}
+
+/* Open-book SVG icons flanking the title — same path as Sidebar.razor's
+   Address Book link, stroked in red via currentColor. The 3rem gap on
+   .banner-title (flex) handles spacing. */
+.banner-icon {
+    width: 1.2em;
+    height: 1.2em;
+    color: #d10000;          /* feeds stroke="currentColor" on the SVG */
+    flex-shrink: 0;
+    transform: translateY(4px);   /* nudge down to align visually with the text baseline */
+}
+
+/* Stroke-draw animation on each path inside the icon. Each path has
+   pathLength="100" set in the SVG so dasharray/dashoffset both become
+   percentages of the path's total length. Cycle: draw on, hold, draw
+   off, hold invisible, loop. The spine path is started slightly later
+   so the outline appears first. */
+.banner-icon path {
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    animation: drawIn 4s ease-in-out infinite;
+}
+.banner-icon path:nth-child(2) { animation-delay: 0.4s; }
+
+@keyframes drawIn {
+    0%   { stroke-dashoffset: 100; }   /* invisible (fully dashed off) */
+    30%  { stroke-dashoffset: 0;   }   /* fully drawn */
+    70%  { stroke-dashoffset: 0;   }   /* hold visible */
+    100% { stroke-dashoffset: 100; }   /* erase back to invisible */
+}
+
+.muted {
+    color: rgba(255, 255, 255, 0.6);
+    margin-bottom: 1rem;
+}
+
+/* Add/Generate form sits in its own card-style container, matching the
+   Mining page's .control box (dark translucent fill + white border, square
+   corners). Single row, inputs interleaved with their action buttons:
+   [Label] [Generate New] [Blazecoin Address] [Add]. */
+.ab-add {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 1rem;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 1rem 1.2rem;
+}
+/* Match the button height to the surrounding input height. Inputs have
+   `padding: 0.5rem 0.7rem`; the global .btn rule uses `0.75rem 1.5rem`
+   vertically, making buttons ~8px taller. Match vertical to 0.5rem; keep
+   horizontal padding for the button feel. */
+.ab-add .btn {
+    padding: 0.5rem 1.5rem;
+}
+
+.ab-input {
+    padding: 0.5rem 0.7rem;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(0, 0, 0, 0.3);
+    color: #fff;
+}
+/* Placeholder ("Label" / "Blazecoin Address") in muted white instead of the
+   browser-default grey. Typed text uses the .ab-input color: #fff above. */
+.ab-input::placeholder {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.ab-addr {
+    flex: 1;
+    min-width: 240px;
+}
+
+.ab-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.ab-table th,
+.ab-table td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ab-table th {
+    color: #ff4d3a;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(158, 0, 15, 0.6);
+}
+
+/* Force the body rows' Label and Address cells to white — the wallet's
+   default text colour was rendering them as grey. */
+.ab-table tbody td {
+    color: #fff;
+}
+
+/* Zebra striping — every other (even) row darker, matching the Receive page's
+   address table. */
+.ab-table tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.ab-table .mono {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.82rem;
+    word-break: break-all;
+}
+
+/* Action buttons — Copy and Remove flush against the right edge of the
+   row, with equal widths matching the column. (Add / Generate New keep
+   their natural widths from the global .btn rules.) */
+.ab-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+.ab-actions .btn {
+    flex: 0 0 110px;
+}
+.ab-table th:last-child,
+.ab-table td.ab-actions {
+    width: 228px;            /* 2 × 110px buttons + 0.5rem gap */
+}
+
+.btn-sm {
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+}
+
+.btn-danger {
+    background: #9E000F;
+    color: #fff;
+}
+
+/* =========================================================================
+   Address Book background — vertical columns of tiles scrolling up/down on
+   alternating columns, each tile with a gentle staggered opacity pulse. The
+   .ab-col children are created by initAddressBookBackground in
+   mining-background.js (need ::deep); keyframes are local (scoped @keyframes
+   don't cross components). Column width comes from --abcol-w (set inline by JS).
+   ========================================================================= */
+.ab-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    display: flex;
+}
+
+.ab-bg ::deep .ab-col {
+    width: var(--abcol-w, 16.6vw);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    animation: abScrollUp 40s linear infinite;
+}
+
+.ab-bg ::deep .ab-col:nth-child(even) {
+    animation: abScrollDown 40s linear infinite;
+}
+
+.ab-bg ::deep .ab-col img {
+    width: 100%;
+    height: auto;
+    display: block;
+    animation: abPulse 7s ease-in-out infinite;
+}
+
+@keyframes abScrollUp   { from { transform: translateY(0); }     to { transform: translateY(-50%); } }
+@keyframes abScrollDown { from { transform: translateY(-50%); }  to { transform: translateY(0); } }
+@keyframes abPulse {
+    0%, 100% { opacity: 0.6; }
+    50%      { opacity: 1; }
+}
+
+/* The outer wallet-page wrapper is invisible (just position+z-index for the
+   stacking-above-.ab-bg behaviour), so the title banner sits standalone like
+   on the Dashboard. The dark/red "card" chrome that keeps the table+inputs
+   readable above the busy scrolling-columns background moves to .ab-content
+   so only the form+table area is boxed — banner is above it. */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* Padding intentionally omitted — the V1.5 banner-card chrome
+   (.card:has(> .status-header) in wallet.css) strips outer padding so the
+   black "Labels" header bar reaches edge-to-edge; .card-body restores
+   1.5rem inside. Border: 2px solid white to match Mining / Console. */
+.ab-content {
+    background: rgba(0, 0, 0, 0.45);
+    border: 2px solid #fff;
+    border-radius: 0;
+}
+/* Suppress the global .card:hover lift — this panel is static, not clickable. */
+.ab-content.card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* All buttons inside the Labels card get square edges (matches the V1.5
+   chrome). */
+.ab-content .btn {
+    border-radius: 0;
+}
+
+/* "Add" button — brand-red gradient (matches sidebar / Mining Start /
+   Console Run). Overrides the global .btn-primary red→orange gradient.
+   Border width 1px to match the neighbouring .btn-secondary "Generate New"
+   button (which inherits 1px from the global .btn-secondary rule). */
+.ab-content .btn-primary {
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+    color: #fff;
+    border: 1px solid #fff;
+}
+.ab-content .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%);
+}
+
+/* Copy button (the .btn-sm without .btn-danger in the actions column) —
+   plain white text, transparent background, highlights on hover. */
+.ab-actions .btn:not(.btn-danger) {
+    color: #fff;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.ab-actions .btn:not(.btn-danger):hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.7);
+}
+
+/* Remove button — same 1px translucent-white border as Copy so the pair
+   reads as matched. (The global .btn-danger already supplies the red
+   background and white text.) */
+.ab-actions .btn.btn-danger {
+    border: 1px solid rgba(255, 255, 255, 0.35);
+}
+/* Same brighten-on-hover treatment as the Add button (.btn-primary above):
+   sweep to the lighter red→brand-red gradient when the cursor lands on it. */
+.ab-actions .btn.btn-danger:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%);
+}

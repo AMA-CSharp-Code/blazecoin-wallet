@@ -1,0 +1,53 @@
+@page "/addressbook"
+@layout LiteLayout
+@inject IAddressBook Book
+@inject NavigationManager Nav
+
+@* Saved payees — a name for each destination address, offered as a picker on Send. *@
+<div class="lite-card">
+    <h2>Address Book</h2>
+    <p class="lite-sub">Save the addresses you pay often; they'll appear as a picker on Send.</p>
+    <label class="lite-sub">Name</label>
+    <input class="lite-input" placeholder="e.g. Exchange deposit" @bind="_name" />
+    <label class="lite-sub">Address</label>
+    <input class="lite-input" placeholder="B…" @bind="_address" />
+    <button class="lite-btn" @onclick="Save">💾 Save</button>
+    @if (_error != null) { <div class="lite-error">@_error</div> }
+</div>
+
+@if (Book.Entries.Count > 0)
+{
+    <div class="lite-card">
+        <h2>Saved</h2>
+        <ul class="lite-history">
+            @foreach (var e in Book.Entries)
+            {
+                <li>
+                    <span><strong>@e.Name</strong><br /><span class="lite-txid">@Short(e.Address)</span></span>
+                    <button class="lite-btn lite-btn-ghost" style="width:auto;padding:2px 8px;font-size:.8rem"
+                            @onclick="() => Remove(e.Address)">Remove</button>
+                </li>
+            }
+        </ul>
+    </div>
+}
+
+<button class="lite-btn lite-btn-ghost" @onclick="@(() => Nav.NavigateTo("settings"))">← Back to Settings</button>
+
+@code {
+    private string _name = string.Empty;
+    private string _address = string.Empty;
+    private string? _error;
+
+    private void Save()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_name)) { _error = "Give it a name."; return; }
+        if (!BlazecoinAddress.IsValid(_address)) { _error = "That's not a valid Blazecoin address."; return; }
+        Book.Save(_name, _address);
+        _name = _address = string.Empty;
+    }
+
+    private void Remove(string address) => Book.Remove(address);
+    private static string Short(string s) => s.Length <= 18 ? s : $"{s[..9]}…{s[^7..]}";
+}

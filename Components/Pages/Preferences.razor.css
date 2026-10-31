@@ -1,0 +1,501 @@
+/* Content sits above the fixed live skin background (#prefBackground). */
+.wallet-page {
+    position: relative;
+    z-index: 1;
+}
+
+/* Title banner — copied from the Dashboard's nested red→black cards, with the
+   dashboard navy/red text-shadow (beats the global h1 red-glow rule). */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+
+.banner-title {
+    margin: 0;
+    padding: 12px 0;
+    text-align: center;
+    /* No explicit font-size — inherits the default h1 size, matching the
+       Dashboard header exactly. */
+    font-weight: 500;
+    color: #fff;
+    white-space: nowrap;
+}
+
+/* Sliced text assemble: five copies of the title, each clipped to one of five
+   equal horizontal bands (clip-path inset driven by --i). Each band slides in
+   from an alternating side (--dir) and fades up to form the whole word, holds,
+   then slides apart again — looping. The first slice is in-flow to size the
+   stack; the rest overlay it exactly. */
+.slice-stack {
+    position: relative;
+    display: inline-block;
+}
+.slice {
+    color: #fff;
+    text-shadow: 3px 3px navy, 3px 4px red;   /* the headers' navy/red look */
+    white-space: nowrap;
+    clip-path: inset(calc(var(--i) * 20%) 0 calc((4 - var(--i)) * 20%) 0);
+    /* Loop the assemble: slide in → hold → quick fade out in place → silently
+       reset to the apart position while invisible → rebuild. No per-slice delay,
+       so all bands fade out together — a clean quick fade rather than a staggered
+       band-by-band chop. `both` holds the apart/invisible first keyframe at the
+       start (no load flash). */
+    animation: sliceAssemble 8s ease-out infinite both;
+}
+.slice:first-child { position: relative; }
+.slice:not(:first-child) { position: absolute; top: 0; left: 0; right: 0; }
+
+@keyframes sliceAssemble {
+    0%   { transform: translateX(var(--dir)); opacity: 0; }   /* apart, hidden */
+    10%  { transform: translateX(var(--dir)); opacity: 0; }   /* hold apart — longer gap between repeats */
+    45%  { transform: translateX(0);          opacity: 1; }   /* slide in → assembled */
+    83%  { transform: translateX(0);          opacity: 1; }   /* hold */
+    92%  { transform: translateX(0);          opacity: 0; }   /* slow fade out (~0.7s, unified) */
+    100% { transform: translateX(var(--dir)); opacity: 0; }   /* reset apart, hidden */
+}
+
+/* Gears flanking the "Preferences" title. Meshing gears rotate in opposite
+   directions, so left is CW and right is CCW (same 4s period so the teeth
+   would line up if they were actually touching). */
+.gear {
+    display: inline-block;
+    vertical-align: middle;
+    font-size: 0.9em;
+    will-change: transform;
+}
+.gear-left  { margin: 0 1.8em 0 0.4em; animation: gearSpinCW  4s linear infinite; }
+.gear-right { margin: 0 0.4em 0 1.8em; animation: gearSpinCCW 4s linear infinite; }
+
+@keyframes gearSpinCW  { from { transform: rotate(0deg); }  to { transform: rotate(360deg); } }
+@keyframes gearSpinCCW { from { transform: rotate(0deg); }  to { transform: rotate(-360deg); } }
+
+/* All the skin features (heading, hint, selected preview, card grid) live in
+   one dark-red container, matching the wallet's other content panels. */
+.pref-section {
+    text-align: left;
+    /* Full content width so each section lines up edge-to-edge with the page's
+       "Preferences" title banner above (matching the Dashboard layout), rather
+       than the old centred 900px cap. */
+    margin: 0 0 1.5rem;
+    /* Same translucency as the Dashboard cards so the live skin behind
+       #prefBackground shows through to the same degree. */
+    background-color: rgba(0, 0, 0, 0.65);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 1.5rem;
+    overflow: hidden;          /* clip the edge-to-edge black header bar to the square corners */
+}
+
+/* Edge-to-edge black header bar at the top of each section, matching the
+   Dashboard card headers (.status-header in wallet.css: solid black, 32px
+   tall, 13px inset, white 11pt 600). Negative margins break the bar out of
+   the section's 1.5rem padding so it reaches the edges; text-transform
+   capitalizes the first letter of each header word. */
+.pref-section h2 {
+    background-color: #000;
+    color: #fff;
+    font-size: 11pt;
+    font-weight: 600;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    margin: -1.5rem -1.5rem 1.5rem;
+    padding: 0 13px;
+    text-transform: capitalize;
+}
+
+.pref-hint {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.9rem;
+    margin: 0 0 1rem;
+}
+
+/* Prominent preview of the currently-selected skin. */
+.selected-skin {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+    padding: 0.9rem;
+    background: rgba(0, 0, 0, 0.92);
+    border: 2px solid rgba(207, 32, 19, 0.6);
+    border-radius: 0;
+}
+
+.selected-preview {
+    width: 140px;
+    height: 90px;
+    flex-shrink: 0;
+    border-radius: 0;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.selected-eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.selected-name {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #fff;
+    margin: 0.1rem 0 0.25rem;
+}
+
+/* Dashboard-refresh option buttons. */
+.opt-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.opt-btn {
+    padding: 0.5rem 1.1rem;
+    background: rgba(0, 0, 0, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 0;
+    color: #fff;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.95rem;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.opt-btn:hover {
+    background: rgba(207, 32, 19, 0.8);
+    border-color: rgba(207, 32, 19, 0.55);
+}
+
+.opt-btn.active {
+    background: rgba(207, 32, 19, 0.9);
+    border-color: white;
+    box-shadow: 0 0 8px rgba(207, 32, 19, 0.5);
+}
+
+.opt-row-spaced {
+    margin-top: 0.6rem;
+}
+
+.pref-input {
+    width: 100%;
+    max-width: 420px;
+    padding: 0.5rem 0.7rem;
+    border-radius: 0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(0, 0, 0, 0.9);
+    color: #fff;
+}
+
+.pref-check {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #fff;
+    cursor: pointer;
+}
+
+.diag {
+    display: grid;
+    gap: 0.2rem;
+    font-size: 0.9rem;
+}
+
+.diag-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.diag-row span:first-child {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.diag-mono {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.78rem;
+    word-break: break-all;
+    text-align: right;
+}
+
+/* Mining-defaults sliders. */
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.slider-row label {
+    min-width: 130px;
+    color: #fff;
+}
+
+.slider-row input[type="range"] {
+    flex: 1;
+    max-width: 340px;
+    accent-color: #cf2013;
+}
+
+.slider-value {
+    min-width: 3rem;
+    color: #ffd966;
+    font-weight: 600;
+}
+
+/* Skin chooser — moved here from the Dashboard's gear popover; laid out as a
+   responsive grid of cards instead of a vertical popover list. */
+.skin-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.75rem;
+}
+
+.skin-card {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.55rem;
+    background: rgba(0, 0, 0, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0;
+    color: white;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    text-align: left;
+    font-family: inherit;
+}
+
+.skin-card:hover {
+    background: rgba(207, 32, 19, 0.8);
+    border-color: rgba(207, 32, 19, 0.55);
+}
+
+.skin-card.active {
+    background: rgba(207, 32, 19, 0.9);
+    border-color: white;
+    box-shadow: 0 0 8px rgba(207, 32, 19, 0.5);
+}
+
+.skin-card-label {
+    flex: 1;
+    min-width: 0;
+}
+
+.skin-card-name {
+    font-weight: 500;
+    font-size: 0.95rem;
+    margin-bottom: 0.15rem;
+}
+
+.skin-card-desc {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    line-height: 1.35;
+}
+
+.skin-preview {
+    width: 54px;
+    height: 36px;
+    border-radius: 0;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.skin-preview-pixelated-coins {
+    /* The actual coin image the skin renders, with the same gold tint the
+       header coins use, and pixelated upscaling for the "pixel coin" look. */
+    background-image: url('/BlazecoinBird/ComfyUI_02889_.webp');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+    image-rendering: pixelated;
+    filter: sepia(1) saturate(2) brightness(1.1) hue-rotate(5deg);
+    /* Flip horizontally so the bird faces right, matching the skin's coins. */
+    transform: scaleX(-1);
+}
+
+.skin-preview-mining-pools {
+    background-image: url('/PoolImages/ComfyUI_06419_.webp');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-413 {
+    background-image: url('/Images/413/413-Vert.png');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-shield {
+    background-image: url('/shield-tile.png');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-phoenix {
+    background-image: url('/BlazecoinBird/ComfyUI_02889_.webp');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-blockchain {
+    background-image: url('/GlassChainsImage/ComfyUI_02591_.webp');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-network {
+    background:
+        linear-gradient(90deg, transparent 40%, rgba(57,255,20,0.45) 50%, transparent 60%),
+        url('/NetworkImages/ComfyUI_02733_.webp');
+    background-size: cover, cover;
+    background-position: center, center;
+    background-color: #000;
+}
+
+.skin-preview-hodl-waves {
+    background:
+        repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0,0,0,0.4) 2px 4px),
+        url('/WavesImages/ComfyUI_09077_.webp');
+    background-size: cover, cover;
+    background-position: center, center;
+    background-color: #000;
+    box-shadow: inset 0 0 8px rgba(0, 255, 255, 0.5);
+}
+
+.skin-preview-mining {
+    background-image: url('/MiningPoolImages/ComfyUI_02582_.webp');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-digital-fire-fighters {
+    background-image: url('/DigitalFireFighterImages/ComfyUI_00474_.webp');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+}
+
+/* Coin-pile skins — same image set, directional gradient hints the animation. */
+.skin-preview-coinpile-send {
+    background:
+        linear-gradient(90deg, transparent 35%, rgba(255,217,102,0.45) 50%, transparent 65%),
+        url('/CoinPilesImages/ComfyUI_11594_.webp');
+    background-size: cover, cover;
+    background-position: center, center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-coinpile-receive {
+    background-image: url('/CoinPilesImages/ComfyUI_11600_.webp');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-coinpile-transactions {
+    background:
+        linear-gradient(135deg, transparent 30%, rgba(255,217,102,0.45) 50%, transparent 70%),
+        url('/CoinPilesImages/ComfyUI_11608_.webp');
+    background-size: cover, cover;
+    background-position: center, center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-addressbook {
+    background:
+        linear-gradient(0deg, transparent 30%, rgba(255,217,102,0.45) 50%, transparent 70%),
+        url('/AddressBookImages/ComfyUI_12232_.webp');
+    background-size: cover, cover;
+    background-position: center, center;
+    background-color: #0a0a0a;
+}
+
+.skin-preview-security {
+    background-image: url('/SecurityImages/ComfyUI_12715_.webp');
+    background-size: cover;
+    background-position: center;
+    background-color: #0a0a0a;
+    box-shadow: inset 0 0 9px rgba(0, 255, 65, 0.55);   /* matrix-green hint */
+}
+
+/* Backup — diagonal gold streak hints at the NE drift direction. */
+.skin-preview-backup {
+    background:
+        linear-gradient(45deg, transparent 30%, rgba(255,193,7,0.55) 50%, transparent 70%),
+        url('/BackupImages/ComfyUI_14012_.webp');
+    background-size: cover, cover;
+    background-position: center, center;
+    background-color: #0a0a0a;
+}
+
+/* Import — radial cyan halo hints at the sonar pulse + rotating rings. */
+.skin-preview-import {
+    background:
+        radial-gradient(circle, transparent 30%, rgba(80, 200, 255, 0.55) 50%, transparent 75%),
+        url('/BackupImages/ComfyUI_14018_.webp');
+    background-size: cover, cover;
+    background-position: center, center;
+    background-color: #0a0a0a;
+}
+
+/* Quantum — one rendered atom from the Quantum page mosaic, dimmed as on the page. */
+.skin-preview-quantum {
+    background:
+        linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)),
+        url('/QuantumImages/atoms/atom-10.webp');
+    background-size: cover, cover;
+    background-position: center, center;
+    background-color: #000;
+}
+
+.skin-preview-random {
+    background: linear-gradient(135deg, #cf2013, #0a0a0a);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: 700;
+    position: relative;
+}
+
+.skin-preview-random::after {
+    content: '🎲';
+    font-size: 1.4rem;
+    text-shadow: 0 0 6px rgba(255, 255, 255, 0.5);
+}
+
+.skin-preview-plain {
+    background: linear-gradient(135deg, #1a0608 0%, #0a0a0a 100%);
+}

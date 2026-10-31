@@ -1,0 +1,49 @@
+@inject IPinLock Pin
+
+@* The app-lock PIN card, extracted from Settings (audit round-3 F3) so the Settings page
+   stops being a god-page — each self-contained card owns its own state as a component. *@
+<div class="lite-card">
+    <h2>Security</h2>
+    <p class="lite-sub">An app-lock PIN asks for a code each time the wallet opens. This is an
+        extra gate — your keys are always protected by the device keystore regardless.</p>
+    @if (Pin.IsSet && !_changing)
+    {
+        <p class="lite-sub">🔒 A PIN is set.</p>
+        <button class="lite-btn lite-btn-ghost" @onclick="() => _changing = true">Change PIN</button>
+        <div style="height:8px"></div>
+        <button class="lite-btn lite-btn-ghost" @onclick="ClearPin">Remove PIN</button>
+    }
+    else
+    {
+        <input class="lite-input" type="password" inputmode="numeric" placeholder="New PIN (4+ digits)" @bind="_newPin" />
+        <input class="lite-input" type="password" inputmode="numeric" placeholder="Confirm PIN" @bind="_confirmPin" />
+        <button class="lite-btn" @onclick="SetPin">Set PIN</button>
+        @if (_changing) { <div style="height:8px"></div><button class="lite-btn lite-btn-ghost" @onclick="() => _changing = false">Cancel</button> }
+    }
+    @if (_message != null) { <div class="@(_ok ? "lite-success" : "lite-error")">@_message</div> }
+</div>
+
+@code {
+    private bool _changing;
+    private string _newPin = string.Empty;
+    private string _confirmPin = string.Empty;
+    private string? _message;
+    private bool _ok;
+
+    private void SetPin()
+    {
+        _message = null;
+        if (_newPin.Length < 4) { _ok = false; _message = "Use at least 4 digits."; return; }
+        if (_newPin != _confirmPin) { _ok = false; _message = "The PINs don't match."; return; }
+        Pin.Set(_newPin);
+        _newPin = _confirmPin = string.Empty;
+        _changing = false;
+        _ok = true; _message = "PIN set — it'll be asked for on next launch.";
+    }
+
+    private void ClearPin()
+    {
+        Pin.Clear();
+        _ok = true; _message = "PIN removed.";
+    }
+}

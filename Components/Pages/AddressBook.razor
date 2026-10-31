@@ -1,0 +1,181 @@
+@page "/addressbook"
+@using BlazecoinWallet.Core.Services
+@using BlazecoinWallet.Core.Services.AddressBook
+@inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
+@inject IBlazecoindRpcService RpcService
+@inject IAddressBookStore AddrBook
+@inject IJSRuntime JS
+
+<PageTitle>Address Book - Blazecoin Wallet V2.0</PageTitle>
+
+@* Vertical scrolling-columns background, painted by initAddressBookBackground. *@
+<div class="ab-bg" id="abTileBg"></div>
+
+<div class="wallet-page">
+    @* Title banner — Dashboard-style chrome, constrained to the same
+       max-width as the rest of the page content. Sits ABOVE the visible
+       address-labels box (.ab-content), matching the Dashboard layout. *@
+    <div class="title-banner">
+        <div class="title-banner-inner">
+            <div class="Headers11">
+                <h1 class="banner-title">
+                    @* Same open-book icon as the sidebar's Address Book link (Sidebar.razor:26-28). *@
+                    <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 6C9.8 4.4 6.3 4.1 3.8 4.7v12.6c2.5-0.6 6-0.3 8.2 1.3 2.2-1.6 5.7-1.9 8.2-1.3V4.7C17.7 4.1 14.2 4.4 12 6z" pathLength="100" />
+                        <path d="M12 6v12.6" pathLength="100" />
+                    </svg>
+                    @{ var titleChars = "Address Book"; }
+                    @* Each char is its own page that flips top-over-bottom; the
+                       per-letter --i drives the stagger so the flips sweep
+                       through the title as a wave. *@
+                    <span class="banner-pages">
+                        @for (int i = 0; i < titleChars.Length; i++)
+                        {
+                            if (titleChars[i] == ' ')
+                            {
+                                <span class="flip-page" style="--i:@i">&nbsp;</span>
+                            }
+                            else
+                            {
+                                <span class="flip-page" style="--i:@i">@titleChars[i]</span>
+                            }
+                        }
+                    </span>
+                    <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 6C9.8 4.4 6.3 4.1 3.8 4.7v12.6c2.5-0.6 6-0.3 8.2 1.3 2.2-1.6 5.7-1.9 8.2-1.3V4.7C17.7 4.1 14.2 4.4 12 6z" pathLength="100" />
+                        <path d="M12 6v12.6" pathLength="100" />
+                    </svg>
+                </h1>
+            </div>
+        </div>
+    </div>
+
+    @if (_connError != null)
+    {
+        <DaemonError Message="@_connError" OnRetry="RetryConnAsync" />
+    }
+    else
+    {
+    @* V1.5 banner-card chrome: .card containing a .status-header gets the
+       edge-to-edge black header bar, with the inner padding provided by
+       .card-body. *@
+    <div class="ab-content card">
+        <div class="status-header"><span>Labels</span></div>
+        <div class="card-body">
+        <p class="muted">Save labels for your Blazecoin addresses. Stored locally on this device.</p>
+
+        <div class="ab-add">
+            <input class="ab-input" placeholder="Label" @bind="_newLabel" />
+            <button class="btn btn-secondary" @onclick="GenerateAndFill">Generate New</button>
+            <input class="ab-input ab-addr" placeholder="Blazecoin Address" @bind="_newAddress" />
+            <button class="btn btn-primary" @onclick="AddEntry">Add</button>
+        </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+
+    @if (_entries.Count == 0)
+    {
+        <p>No saved addresses yet.</p>
+    }
+    else
+    {
+        <table class="ab-table">
+            <thead>
+                <tr><th>Label</th><th>Address</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var e in _entries)
+                {
+                    <tr>
+                        <td>@(string.IsNullOrWhiteSpace(e.Label) ? "—" : e.Label)</td>
+                        <td class="mono">@e.Address</td>
+                        <td class="ab-actions">
+                            <button class="btn btn-sm" @onclick="() => Copy(e.Address)">Copy</button>
+                            <button class="btn btn-sm btn-danger" @onclick="() => Remove(e)">Remove</button>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        }
+        </div>
+    </div>
+    }
+</div>
+
+@code {
+    private List<AddressBookEntry> _entries = new();
+    private string _newLabel = "";
+    private string _newAddress = "";
+    private string? _error;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Non-daemon work (localStorage labels) runs regardless of daemon state.
+            await LoadAsync();
+            StateHasChanged();
+
+            try
+            {
+                // Paint the vertical scrolling-columns background. Idempotent.
+                await JS.InvokeVoidAsync("initAddressBookBackground");
+                // (Typewriter removed — title now animates via the two-page
+                // CSS reveal in AddressBook.razor.css.)
+            }
+            catch { /* WebView not ready — background just won't appear */ }
+
+            // Daemon reachability — the page itself is localStorage-backed, but
+            // "Generate New" (and any future RPC) needs the daemon, so show the
+            // shared offline panel in place of the labels card when it's down.
+            _connError = await RpcService.CheckConnectionAsync();
+            StateHasChanged();
+        }
+    }
+
+    // Labels are localStorage-backed; reload them so the card is fresh after a retry.
+    protected override Task OnDaemonReconnectedAsync() => LoadAsync();
+
+    private async Task LoadAsync() => _entries = await AddrBook.GetEntriesAsync();
+
+    private Task SaveAsync() => AddrBook.SaveEntriesAsync(_entries);
+
+    private async Task AddEntry()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_newAddress)) { _error = "Enter an address."; return; }
+        _entries.Add(new AddressBookEntry { Label = _newLabel.Trim(), Address = _newAddress.Trim() });
+        _newLabel = "";
+        _newAddress = "";
+        await SaveAsync();
+    }
+
+    private async Task GenerateAndFill()
+    {
+        _error = null;
+        // Guard the RPC call: if the daemon went offline since load, flip the page
+        // to the shared offline panel instead of failing the address generation.
+        _connError = await RpcService.CheckConnectionAsync();
+        if (_connError != null) return;
+        try
+        {
+            _newAddress = await RpcService.GetNewAddressAsync() ?? "";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not generate address: {ex.Message}";
+        }
+    }
+
+    private async Task Copy(string addr) => await Clipboard.SetTextAsync(addr);
+
+    private async Task Remove(AddressBookEntry e)
+    {
+        _entries.Remove(e);
+        await SaveAsync();
+    }
+}

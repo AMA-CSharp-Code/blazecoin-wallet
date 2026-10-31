@@ -1,0 +1,367 @@
+/* =========================================================================
+   Brick-pattern tile background — rows of mining-themed images scrolling
+   sideways with a tile-pulse breathing effect. Ported from
+   Blazecoin_MVC_Web_App/Views/Mining/Index.cshtml.
+   ========================================================================= */
+.tile-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.tile-bg ::deep .tile-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    margin-bottom: 4px;
+    animation: scrollRight 35s linear infinite;
+}
+
+.tile-bg ::deep .tile-row:nth-child(even) {
+    margin-left: -25vw;
+    animation: scrollLeft 35s linear infinite;
+}
+
+.tile-bg ::deep .tile-row img {
+    width: calc(25vw - 2px);
+    height: auto;
+    display: block;
+    flex-shrink: 0;
+    border-radius: 4px;
+    animation: tilePulse 12s ease-in-out infinite;
+}
+
+.tile-bg ::deep .tile-row:nth-child(even) img             { animation-delay: -3s; }
+.tile-bg ::deep .tile-row img:nth-child(2)                { animation-delay: -2s; }
+.tile-bg ::deep .tile-row img:nth-child(3)                { animation-delay: -4s; }
+.tile-bg ::deep .tile-row:nth-child(even) img:nth-child(2){ animation-delay: -5s; }
+.tile-bg ::deep .tile-row:nth-child(even) img:nth-child(3){ animation-delay: -1s; }
+
+@keyframes tilePulse {
+    0%, 100% { opacity: 0.55; transform: scale(1);    filter: brightness(0.8); }
+    50%      { opacity: 1;    transform: scale(1.03); filter: brightness(1.3); }
+}
+
+@keyframes scrollRight { 0% { transform: translateX(-50vw); } 100% { transform: translateX(0); } }
+@keyframes scrollLeft  { 0% { transform: translateX(0); }     100% { transform: translateX(-50vw); } }
+
+/* =========================================================================
+   Page container — sits above the background.
+   ========================================================================= */
+.mining-page {
+    max-width: 1200px;       /* match .wallet-page / .wallet-dashboard so all pages share the same content width */
+    margin: 0 auto;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+}
+
+.mining-page h1 {
+    margin: 0;
+    text-align: center;
+    color: white;
+}
+
+/* =========================================================================
+   Title banner — nested red→black cards with a Headers11-styled title and
+   slide-in / fade-in animations on the emoji clusters + title text.
+   ========================================================================= */
+.title-banner {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.title-banner-inner {
+    background-color: #000;
+    border: 2px solid white;
+    border-radius: 0;
+    padding: 8px;
+}
+
+.Headers11 {
+    background: rgba(0, 0, 0, 0.1);
+    color: white;
+    padding: 2px;
+    border: 2px double black;
+    border-radius: 0;
+    text-shadow: 3px 3px navy, 3px 4px red;
+}
+
+.banner-title {
+    overflow: hidden;
+    padding: 12px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* No explicit font-size — inherits the default h1 size, matching the
+       Dashboard / Preferences / Console headers. */
+}
+
+/* Keep the flanking emoji clusters at their original size so the larger title
+   doesn't inflate them and make the header look oversized. */
+.slide-in-left,
+.slide-in-right {
+    font-size: 1.7rem;
+}
+
+.slide-in-left {
+    display: inline-block;
+    opacity: 0;
+    animation: slideFromLeft 15s ease-in-out infinite;
+}
+
+.slide-in-right {
+    display: inline-block;
+    opacity: 0;
+    animation: slideFromRight 15s ease-in-out infinite;
+}
+
+.fade-in-center {
+    display: inline-block;
+    opacity: 0;
+    animation: fadeInUp 15s ease-in-out infinite;
+}
+
+@keyframes slideFromLeft {
+    0%   { opacity: 0; transform: translateX(-80px); }
+    10%  { opacity: 1; transform: translateX(0); }
+    80%  { opacity: 1; transform: translateX(0); }
+    90%  { opacity: 0; transform: translateX(-80px); }
+    100% { opacity: 0; transform: translateX(-80px); }
+}
+
+@keyframes slideFromRight {
+    0%   { opacity: 0; transform: translateX(80px); }
+    10%  { opacity: 1; transform: translateX(0); }
+    80%  { opacity: 1; transform: translateX(0); }
+    90%  { opacity: 0; transform: translateX(80px); }
+    100% { opacity: 0; transform: translateX(80px); }
+}
+
+@keyframes fadeInUp {
+    0%   { opacity: 0; transform: translateY(10px); }
+    15%  { opacity: 1; transform: translateY(0); }
+    80%  { opacity: 1; transform: translateY(0); }
+    90%  { opacity: 0; transform: translateY(10px); }
+    100% { opacity: 0; transform: translateY(10px); }
+}
+
+/* =========================================================================
+   Content container — translucent dark-red panel matching MVC's
+   .bg-danger-subtle. Holds the warning, controls, action button, stats.
+   ========================================================================= */
+.content-container {
+    background-color: rgba(139, 0, 0, 0.5);
+    border: 2px solid white;
+    border-radius: 0;
+    color: white;
+    /* Padding stripped — the V1.5 banner-card chrome (.card:has(>
+       .status-header) in wallet.css) needs the outer panel to be edge-to-
+       edge so the black "Mining Configuration" header bar can span the
+       full width. The .card-body inside restores 1.5rem content padding. */
+}
+/* Suppress the global .card:hover lift — this panel is static, not clickable. */
+.content-container.card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+.warning-card {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 217, 102, 0.6);
+    color: #ffe0d6;
+    padding: 12px 16px;
+    border-radius: 0;
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+}
+
+.warning-card strong {
+    color: #ffd966;
+}
+
+.controls-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+/* Each control (Worker Threads, Throttle, Payout Address) gets its own
+   card-style container: dark translucent fill + white border. Square
+   corners match the page's V1.5 chrome. */
+.control {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 1rem 1.2rem;
+}
+.control.wide {
+    grid-column: 1 / -1;
+}
+
+.control label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    text-align: center;
+    color: #ffd966;
+}
+
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.slider-row input[type="range"] {
+    flex: 1;
+}
+
+.slider-value {
+    min-width: 3.5rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.hint {
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.7);
+    margin-top: 0.3rem;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.payout-address {
+    padding: 0.5rem 0.75rem;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    font-family: Consolas, 'Cascadia Mono', monospace;
+    font-size: 0.9rem;
+    overflow-x: auto;
+    color: #fff;            /* address text — plain white; the inner <code> inherits */
+    text-align: center;
+}
+
+.payout-address .muted {
+    color: rgba(255, 255, 255, 0.6);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+}
+/* Force the address text white. The <code> element inside .payout-address
+   was somehow picking up the wallet's danger-red (--blz-danger: #ef476f,
+   hot pink). Explicit rule wins over any cascade. */
+.payout-address code {
+    color: #fff;
+}
+
+.action-row {
+    margin-bottom: 1.5rem;
+    text-align: center;
+}
+
+.btn-start,
+.btn-stop {
+    padding: 0.7rem 1.6rem;
+    border: none;
+    border-radius: 0;                /* square edges to match the page's container chrome */
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.05s, box-shadow 0.15s;
+}
+
+.btn-start {
+    background: linear-gradient(135deg, #cf2013 0%, #8b0000 100%);
+    color: white;
+    border: 2px solid #fff;          /* white outline frames the red gradient */
+    box-shadow: 0 2px 8px rgba(207, 32, 19, 0.4);
+}
+
+.btn-start:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff4d3a 0%, #cf2013 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(207, 32, 19, 0.55);
+}
+
+.btn-stop {
+    background: #2a2a2a;
+    color: #ffe0d6;
+    border: 1px solid rgba(207, 32, 19, 0.5);
+}
+
+.btn-stop:hover:not(:disabled) {
+    background: #3a1010;
+    border-color: #cf2013;
+}
+
+.btn-start:disabled,
+.btn-stop:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.error-card {
+    background: rgba(239, 71, 111, 0.18);
+    border: 1px solid rgba(239, 71, 111, 0.6);
+    color: #ffd2dc;
+    padding: 10px 14px;
+    border-radius: 0;
+    margin-bottom: 1.5rem;
+}
+
+/* Flexbox instead of CSS Grid so the last row's orphans (e.g. with 8 stats
+   wrapped to 6+2 on a wide screen) centre automatically. Grid's auto-fit
+   would leave the orphans flush-left because every column slot exists at
+   the full width. */
+.stats-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 1rem;
+}
+.stat {
+    flex: 0 1 178px;       /* fixed-ish width matching the prior grid sizing */
+}
+
+.stat {
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 0;
+    padding: 0.85rem 1rem;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    text-align: center;
+}
+
+.stat:hover {
+    border-color: rgba(255, 217, 102, 0.6);
+    box-shadow: 0 4px 14px rgba(207, 32, 19, 0.25);
+}
+
+.stat-label {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: rgba(255, 255, 255, 0.65);
+    margin-bottom: 0.35rem;
+}
+
+.stat-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+.stat-value.running { color: #4ade80; text-shadow: 0 0 8px rgba(74, 222, 128, 0.4); }
+.stat-value.idle    { color: rgba(255, 255, 255, 0.5); }
+.stat-value.highlight { color: #ffd966; text-shadow: 0 0 12px rgba(255, 217, 102, 0.5); }
+.stat-value.muted   { color: rgba(255, 255, 255, 0.5); font-weight: 400; }
+.stat-value.small   { font-size: 0.95rem; }
