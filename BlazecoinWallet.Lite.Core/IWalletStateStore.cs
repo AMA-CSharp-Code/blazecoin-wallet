@@ -49,6 +49,14 @@ public interface IWalletStateStore
     Task<int> GetPqAddressCountAsync() => Task.FromResult(0);
     Task SetPqAddressCountAsync(int count) => Task.CompletedTask;
 
+    /// <summary>The coins this wallet has PROVEN on the chain ("txid:vout:address:sats;…"), so a
+    /// restart does not re-verify every coin before the balance can be shown (bug-bounty report
+    /// 2026-11-06: only proven coins count). Non-secret; losing it is safe — the coins are simply
+    /// verified again, and a spend re-verifies its inputs regardless. Default no-op so a store
+    /// that predates it keeps compiling.</summary>
+    Task<string?> GetVerifiedCoinsAsync() => Task.FromResult<string?>(null);
+    Task SetVerifiedCoinsAsync(string value) => Task.CompletedTask;
+
     /// <summary>Wipes stored state (wallet reset).</summary>
     Task ClearAsync();
 }
@@ -61,6 +69,7 @@ public sealed class InMemoryWalletStateStore : IWalletStateStore
     private int _pq;
     private string? _checkpoint;
     private string? _anchors;
+    private string? _verifiedCoins;
     private bool _backupVerified = true;   // no wallet yet = nothing to warn about
     public Task<int> GetRevealedAddressCountAsync() => Task.FromResult(_revealed);
     public Task SetRevealedAddressCountAsync(int count) { _revealed = count; return Task.CompletedTask; }
@@ -74,5 +83,7 @@ public sealed class InMemoryWalletStateStore : IWalletStateStore
     public Task SetBackupVerifiedAsync(bool verified) { _backupVerified = verified; return Task.CompletedTask; }
     public Task<int> GetPqAddressCountAsync() => Task.FromResult(_pq);
     public Task SetPqAddressCountAsync(int count) { _pq = count; return Task.CompletedTask; }
-    public Task ClearAsync() { _revealed = 0; _change = 0; _pq = 0; _checkpoint = null; _anchors = null; _backupVerified = true; return Task.CompletedTask; }
+    public Task<string?> GetVerifiedCoinsAsync() => Task.FromResult(_verifiedCoins);
+    public Task SetVerifiedCoinsAsync(string value) { _verifiedCoins = value; return Task.CompletedTask; }
+    public Task ClearAsync() { _revealed = 0; _change = 0; _pq = 0; _checkpoint = null; _anchors = null; _verifiedCoins = null; _backupVerified = true; return Task.CompletedTask; }
 }

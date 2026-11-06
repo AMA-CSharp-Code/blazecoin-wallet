@@ -55,11 +55,14 @@ public static class LiteUnits
     /// <summary>
     /// Convert a user-entered amount in the given unit to satoshis. Returns false when the
     /// text isn't a positive number, exceeds the supply, or (for sat) isn't a whole number.
+    /// The text may use a dot OR a comma as its one decimal mark and nothing else — no thousands
+    /// separators (see <see cref="BlazecoinWallet.Core.Services.AmountText"/>: "1,5" used to
+    /// parse as 15).
     /// </summary>
     public static bool TryParseToSats(string text, LiteUnit unit, out long satoshis)
     {
         satoshis = 0;
-        if (!decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var value) || value <= 0)
+        if (!BlazecoinWallet.Core.Services.AmountText.TryParseTyped(text, out var value) || value <= 0)
             return false;
         if (value > MaxInput(unit))
             return false;

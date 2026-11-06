@@ -26,7 +26,10 @@ public static class ForkBanner
     /// <list type="bullet">
     /// <item><see cref="ForkBannerState.None"/> — no status, or <c>forkHeight</c>/<c>forkName</c>
     /// unset, or this build carries the fork's rules AND is not below <c>minClientVersion</c>.</item>
-    /// <item><see cref="ForkBannerState.Stopped"/> — <c>tip ≥ forkHeight</c> and the build lacks the rules.</item>
+    /// <item><see cref="ForkBannerState.Stopped"/> — <c>tip ≥ forkHeight</c>, the build lacks the rules, and
+    /// the announcement is <see cref="ForkStatus.Authenticated"/>. Stopping sends is the one thing
+    /// here that costs the user something, so it takes a signed announcement; the same facts from
+    /// an unsigned one give <see cref="ForkBannerState.Warning"/> (bug-bounty report 2026-11-06).</item>
     /// <item><see cref="ForkBannerState.Warning"/> — <c>minClientVersion</c> newer than this build (at any
     /// distance), or <c>forkHeight − tip ≤ 40,320</c>.</item>
     /// <item><see cref="ForkBannerState.Notice"/> — otherwise (more than two weeks of blocks away).</item>
@@ -43,7 +46,10 @@ public static class ForkBanner
         var needsNewer = NeedsNewerClient(status.MinClientVersion, clientVersion);
 
         if (tip >= forkHeight)
-            return hasRules ? ForkBannerState.None : ForkBannerState.Stopped;
+        {
+            if (hasRules) return ForkBannerState.None;
+            return status.Authenticated ? ForkBannerState.Stopped : ForkBannerState.Warning;
+        }
 
         // Already on a build that follows the fork and meets the floor — nothing to say.
         if (hasRules && !needsNewer) return ForkBannerState.None;
@@ -82,9 +88,17 @@ public static class ForkBanner
         };
     }
 
-    /// <summary>The build to fetch, as named in the text: <c>vY</c> when announced, else a plain phrase.</summary>
+    /// <summary>The build to fetch, as named in the text: <c>vY</c> when a plain version (digits and
+    /// dots) was announced, else a plain phrase. The text never carries anything else a gateway
+    /// sent — this sentence sits next to "restore from your recovery phrase".</summary>
     public static string TargetVersionPhrase(string? minClientVersion) =>
-        string.IsNullOrWhiteSpace(minClientVersion) ? "the latest version" : $"v{minClientVersion.Trim()}";
+        ForkAnnouncement.CleanVersion(minClientVersion) is string v ? $"v{v}" : "the latest version";
+
+    /// <summary>Shown after the Notice / Warning text when the announcement is not signed by the
+    /// project: where it came from, and how to check it.</summary>
+    public const string UnverifiedNote =
+        "This notice comes from the gateway and is not signed by the Blazecoin project — " +
+        "you can compare it with another gateway in Settings.";
 
     /// <summary>The Notice / Warning headline: "Update required before block N".</summary>
     public static string UpdateHeadline(long forkHeight) => $"Update required before block {forkHeight:N0}";

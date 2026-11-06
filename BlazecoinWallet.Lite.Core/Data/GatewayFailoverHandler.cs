@@ -9,6 +9,10 @@ namespace BlazecoinWallet.Lite.Data;
 /// options (its <see cref="RequestTimeoutHandler"/> budget) ride along, because the budget
 /// handler sits INSIDE this one and times each attempt on its own — a timeout is a
 /// per-gateway verdict here, not the caller's cancellation (2026-10-27).
+/// <para>A caller that needs a SECOND opinion (bug-bounty reports 2026-11-06: one gateway's
+/// word on a broadcast must not be final) reads which gateway answered from
+/// <see cref="GatewayRouting.AnsweredBy"/> and repeats the request with that gateway in
+/// <see cref="GatewayRouting.Exclude"/>. Such a request never moves the sticky preference.</para>
 /// </summary>
 public sealed class GatewayFailoverHandler : DelegatingHandler
 {
@@ -40,10 +44,13 @@ public sealed class GatewayFailoverHandler : DelegatingHandler
         var pathAndQuery = request.RequestUri!.PathAndQuery;
         Exception? lastFailure = null;
         var start = Volatile.Read(ref _preferred);
+        request.Options.TryGetValue(GatewayRouting.Exclude, out var excluded);
+        var secondOpinion = excluded is { Count: > 0 };
 
         for (var i = 0; i < _gateways.Length; i++)
         {
             var idx = (start + i) % _gateways.Length;
+            if (secondOpinion && excluded!.Contains(_gateways[idx])) continue;
             using var attempt = new HttpRequestMessage(request.Method, new Uri(_gateways[idx], pathAndQuery));
             foreach (var h in request.Headers)
                 attempt.Headers.TryAddWithoutValidation(h.Key, h.Value);
@@ -60,7 +67,10 @@ public sealed class GatewayFailoverHandler : DelegatingHandler
             try
             {
                 var response = await base.SendAsync(attempt, ct);
-                Volatile.Write(ref _preferred, idx); // sticky: keep using what works
+                // Sticky: keep using what works — but a second-opinion request was steered away
+                // from the preferred gateway on purpose and must not re-point everything else.
+                if (!secondOpinion) Volatile.Write(ref _preferred, idx);
+                request.Options.Set(GatewayRouting.AnsweredBy, _gateways[idx]);
                 return response;
             }
             catch (HttpRequestException ex)
@@ -73,6 +83,20 @@ public sealed class GatewayFailoverHandler : DelegatingHandler
             }
         }
 
-        throw lastFailure!;
+        throw lastFailure ?? new HttpRequestException("No other gateway is configured.");
     }
+}
+
+/// <summary>
+/// Per-request routing notes between a caller and <see cref="GatewayFailoverHandler"/>, carried
+/// in <see cref="HttpRequestMessage.Options"/> so no caller needs a reference to the handler
+/// (and a plain HttpClient — tests, a single custom gateway — simply ignores them).
+/// </summary>
+public static class GatewayRouting
+{
+    /// <summary>Set by the handler on the caller's request: the gateway whose answer came back.</summary>
+    public static readonly HttpRequestOptionsKey<Uri> AnsweredBy = new("blz.gateway.answered-by");
+
+    /// <summary>Set by the caller: gateways this request must NOT be sent to (ask someone else).</summary>
+    public static readonly HttpRequestOptionsKey<IReadOnlyCollection<Uri>> Exclude = new("blz.gateway.exclude");
 }

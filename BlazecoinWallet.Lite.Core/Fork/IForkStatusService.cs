@@ -13,6 +13,10 @@ public interface IForkStatusService
     /// <summary>The banner state for this build against <see cref="Current"/>.</summary>
     ForkBannerState State { get; }
 
+    /// <summary>The chain height the banner is judged at and counts days from: the wallet's own
+    /// proof-of-work verified tip where the head has one, else the gateway's claimed height.</summary>
+    long EffectiveTip => Current?.Tip ?? 0;
+
     /// <summary>Raised (on a worker thread) whenever <see cref="Current"/> changes.</summary>
     event Action? Changed;
 

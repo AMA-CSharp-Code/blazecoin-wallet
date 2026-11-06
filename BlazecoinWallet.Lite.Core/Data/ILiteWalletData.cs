@@ -4,7 +4,29 @@ namespace BlazecoinWallet.Lite.Data;
 public sealed record LiteAddressSummary(long Balance, long TotalReceived, long TotalSent, int TxCount);
 
 /// <summary>One history row from the data source's address ledger.</summary>
-public sealed record LiteHistoryEntry(string TxId, long BlockHeight, DateTime Timestamp, long Amount, string Type);
+/// <param name="Check">Where a RECEIVED row stands against the chain (set by the wallet service,
+/// never by a data source): see <see cref="LiteHistoryCheck"/>.</param>
+public sealed record LiteHistoryEntry(string TxId, long BlockHeight, DateTime Timestamp, long Amount, string Type,
+    LiteHistoryCheck Check = LiteHistoryCheck.NotChecked);
+
+/// <summary>
+/// How far the wallet has verified a history row against the chain (bug-bounty report
+/// 2026-11-06: a gateway could serve a "received" row for a transaction that does not exist).
+/// </summary>
+public enum LiteHistoryCheck
+{
+    /// <summary>Nothing to check: a sent row, or a source whose word is authoritative (the user's
+    /// own node).</summary>
+    NotChecked,
+    /// <summary>A received row not yet in a block — it cannot be proven until it is mined.</summary>
+    Unconfirmed,
+    /// <summary>A received row whose check has not finished.</summary>
+    Pending,
+    /// <summary>Proven: the transaction is on the chain and pays this wallet at least the amount shown.</summary>
+    Verified,
+    /// <summary>Checked and NOT proven — shown as such, never as plain income.</summary>
+    Unverified,
+}
 
 /// <summary>A spendable output plus the maturity facts the wallet needs to filter on.</summary>
 /// <param name="ScriptPubKey">The output's scriptPubKey as hex, when the source serves it
@@ -19,7 +41,9 @@ public enum BroadcastFailureKind
 {
     /// <summary>It succeeded.</summary>
     None,
-    /// <summary>The network JUDGED the transaction and said no. Never retry elsewhere.</summary>
+    /// <summary>The network JUDGED the transaction and said no. Never retry elsewhere. A gateway
+    /// relay reports this only as far as it could check: see
+    /// <see cref="LiteBroadcastResult.Uncorroborated"/>.</summary>
     Rejected,
     /// <summary>The network already has this transaction — an earlier attempt delivered it.
     /// The send actually WORKED (the caller knows its own txid).</summary>
@@ -33,11 +57,16 @@ public enum BroadcastFailureKind
 /// <param name="TxId">The network txid on success.</param>
 /// <param name="Error">Human-readable reason on failure.</param>
 /// <param name="Failure">Typed failure classification (see <see cref="BroadcastFailureKind"/>).</param>
+/// <param name="Uncorroborated">True when this verdict is ONE gateway's word and no second
+/// gateway could back it (bug-bounty reports 2026-11-06). A relay whose answer is authoritative
+/// — the user's own node — never sets it. The send pipeline uses it to hand a transaction that
+/// only one gateway claims to have relayed straight to network nodes as well.</param>
 public sealed record LiteBroadcastResult(bool Success, string? TxId, string? Error,
-    BroadcastFailureKind Failure = BroadcastFailureKind.None)
+    BroadcastFailureKind Failure = BroadcastFailureKind.None, bool Uncorroborated = false)
 {
-    public static LiteBroadcastResult Ok(string txId) => new(true, txId, null);
-    public static LiteBroadcastResult Fail(string error, BroadcastFailureKind kind) => new(false, null, error, kind);
+    public static LiteBroadcastResult Ok(string txId, bool uncorroborated = false) => new(true, txId, null, Uncorroborated: uncorroborated);
+    public static LiteBroadcastResult Fail(string error, BroadcastFailureKind kind, bool uncorroborated = false)
+        => new(false, null, error, kind, uncorroborated);
 }
 
 /// <summary>

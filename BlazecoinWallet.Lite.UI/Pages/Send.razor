@@ -160,33 +160,16 @@
         var scanned = await Scanner.ScanAsync();
         if (string.IsNullOrWhiteSpace(scanned)) return;
         // Accept a bare address or a blazecoin:/BIP21 URI (the desktop wallet's convention).
-        var text = scanned.Trim();
-        if (text.StartsWith("blazecoin:", StringComparison.OrdinalIgnoreCase))
-        {
-            var body = text["blazecoin:".Length..];
-            var q = body.IndexOf('?');
-            _destination = (q < 0 ? body : body[..q]);
-            // Honour a BIP21 amount= so a scanned payment request doesn't force a re-type
-            // (and can't be silently dropped, a mis-pay risk).
-            if (q >= 0)
-            {
-                foreach (var part in body[(q + 1)..].Split('&'))
-                {
-                    // BIP21 amounts are ALWAYS in BLZ — convert to the user's display unit.
-                    if (part.StartsWith("amount=", StringComparison.OrdinalIgnoreCase) &&
-                        decimal.TryParse(part["amount=".Length..], System.Globalization.NumberStyles.Number,
-                            System.Globalization.CultureInfo.InvariantCulture, out var amtBlz) && amtBlz > 0)
-                    {
-                        var sats = (long)Math.Round(amtBlz * BlazecoinChain.Coin);
-                        _amountText = LiteUnits.Format(sats, Units.Unit);
-                    }
-                }
-            }
-        }
-        else
-        {
-            _destination = text;
-        }
+        // Honour a BIP21 amount= so a scanned payment request doesn't force a re-type — but only
+        // a well-formed one: a malformed amount is reported and left for the user, never repaired
+        // (LitePaymentLink; "amount=1,5" used to pre-fill 15).
+        var request = LitePaymentLink.Parse(scanned);
+        _destination = request.Destination;
+        _error = null;
+        if (request.AmountSatoshis is long sats)
+            _amountText = LiteUnits.Format(sats, Units.Unit);   // BIP21 amounts are in BLZ — shown in the user's unit
+        else if (request.AmountRejected)
+            _error = "That payment request's amount isn't valid, so it was left out — enter the amount by hand.";
     }
 
     /// <summary>Validate + parse, then show the confirmation screen — no keys touched yet.</summary>

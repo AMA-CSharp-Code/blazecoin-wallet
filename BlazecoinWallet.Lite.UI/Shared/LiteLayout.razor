@@ -132,12 +132,18 @@ else
                     else
                     {
                         <b>@ForkBanner.UpdateHeadline(forkHeight)</b>
-                        <text> @ForkBanner.UpdateBody(fork, LiteClientInfo.Version, fork.Tip) </text>
+                        <text> @ForkBanner.UpdateBody(fork, LiteClientInfo.Version, Fork.EffectiveTip) </text>
                     }
                     <a href="@ForkBanner.DownloadUrl" target="_blank" rel="noopener" style="color:inherit;font-weight:600">@ForkBanner.DownloadHost</a>@(stopped ? "" : ".")
                     @if (!stopped && ReloadToUpdate)
                     {
                         <text> Reload to update.</text>
+                    }
+                    @if (!stopped && !fork.Authenticated)
+                    {
+                        @* An unsigned announcement is the gateway's word: say so, and say how to
+                           check it (bug-bounty report 2026-11-06). It can never be the Stopped state. *@
+                        <span class="lite-forkbar-unverified" style="display:block;margin-top:4px;opacity:.85;font-size:.85rem">@ForkBanner.UnverifiedNote</span>
                     }
                 </span>
                 @if (Fork.State == ForkBannerState.Notice)

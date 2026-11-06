@@ -58,13 +58,15 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     private readonly string _rpcUrl;
     private readonly IWalletContext _walletContext;
     private readonly ILogger<BlazecoindRpcService>? _logger;
+    private readonly IWalletSwitchNotice? _switchNotice;
     private int _requestId;
 
-    public BlazecoindRpcService(IConfiguration configuration, IWalletContext walletContext, IHttpClientFactory httpClientFactory, ILogger<BlazecoindRpcService>? logger = null)
+    public BlazecoindRpcService(IConfiguration configuration, IWalletContext walletContext, IHttpClientFactory httpClientFactory, ILogger<BlazecoindRpcService>? logger = null, IWalletSwitchNotice? switchNotice = null)
     {
         _rpcUrl = configuration["Blazecoind:RpcUrl"] ?? "http://127.0.0.1:55413";
         _walletContext = walletContext;
         _logger = logger;
+        _switchNotice = switchNotice;
 
         // The "blazecoind" named client (configured in MauiProgram) owns the
         // infinite client-level timeout + basic-auth header. We still cap each
@@ -97,39 +99,68 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     private Task<T?> CallRpcMethodAsync<T>(string method, params object[] parameters)
         => CallRpcAtAsync<T>(_rpcUrl, method, DefaultRpcTimeout, parameters);
 
+    /// <summary>
+    /// The wallet RPCs that only READ — the only ones the -18 self-heal may repeat against a
+    /// different wallet. Everything else moves coins, signs, hands out an address or changes a
+    /// wallet's state, and a call meant for one wallet must never run against another: a
+    /// <c>sendtoaddress</c> confirmed against "Savings" used to be re-sent, unchanged, from
+    /// "Primary", and reported as a normal success (bug-bounty report 2026-11-06). The same went
+    /// for <c>encryptwallet</c>, <c>walletpassphrase</c>, <c>getnewaddress</c>, <c>setlabel</c>
+    /// and signing. An allow-list, so a wallet RPC added later is safe until someone decides
+    /// otherwise.
+    /// </summary>
+    public static readonly IReadOnlySet<string> HealableWalletReads = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "getwalletinfo", "getbalance", "getbalances", "listunspent", "listtransactions",
+        "gettransaction", "listlabels", "getaddressesbylabel", "getaddressinfo", "listdescriptors",
+    };
+
     /// <summary>Routes a wallet-scoped RPC through <c>/wallet/&lt;active&gt;</c>.
     /// Core demands this once more than one wallet is loaded (error -19);
     /// when no wallet is active it falls back to the base URL, preserving the
     /// original single-wallet behaviour. If the daemon answers -18 (the active
     /// wallet is no longer loaded — e.g. the daemon restarted and an RPC-loaded
-    /// wallet didn't persist), the call re-points the context at a wallet that
-    /// IS loaded ("Primary" preferred) and retries once, so an already-open
-    /// window heals itself instead of dead-ending every page on the error.</summary>
-    private async Task<T?> CallWalletRpcAsync<T>(string method, params object[] parameters)
+    /// wallet didn't persist) and the call is a READ (<see cref="HealableWalletReads"/>),
+    /// it re-points the context at a wallet that IS loaded ("Primary" preferred) and retries
+    /// once, so an already-open window heals itself instead of dead-ending every page on the
+    /// error — and tells the user it did (<see cref="IWalletSwitchNotice"/>). Any other call
+    /// fails with <see cref="WalletNotLoadedException"/>: nothing is retried elsewhere.</summary>
+    private Task<T?> CallWalletRpcAsync<T>(string method, params object[] parameters)
+        => CallWalletRpcWithTimeoutAsync<T>(method, DefaultRpcTimeout, parameters);
+
+    /// <summary>Same wallet routing and read-only -18 self-heal as <see cref="CallWalletRpcAsync{T}"/>,
+    /// with a caller-chosen timeout for whole-history reads.</summary>
+    private async Task<T?> CallWalletRpcWithTimeoutAsync<T>(string method, TimeSpan timeout, params object[] parameters)
     {
+        var wallet = _walletContext.Active;
         try
         {
-            return await CallRpcAtAsync<T>(WalletUrl(), method, DefaultRpcTimeout, parameters);
+            return await CallRpcAtAsync<T>(WalletUrlFor(wallet), method, timeout, parameters);
         }
         catch (RpcException ex) when (ex.Code == -18)
         {
-            if (!await TryReassignActiveWalletAsync()) throw;
-            return await CallRpcAtAsync<T>(WalletUrl(), method, DefaultRpcTimeout, parameters);
+            if (!HealableWalletReads.Contains(method)) throw new WalletNotLoadedException(wallet);
+            if (!await TryReassignActiveWalletAsync(wallet)) throw;
+            return await CallRpcAtAsync<T>(WalletUrl(), method, timeout, parameters);
         }
     }
 
-    /// <summary>Same wallet routing and -18 self-heal as <see cref="CallWalletRpcAsync{T}"/>, with a
-    /// caller-chosen timeout for whole-history reads.</summary>
-    private async Task<T?> CallWalletRpcWithTimeoutAsync<T>(string method, TimeSpan timeout, params object[] parameters)
+    /// <summary>
+    /// A wallet RPC that must execute against EXACTLY <paramref name="wallet"/> — the wallet a
+    /// send was reviewed on, or an auto-payout was armed on ("" = the node's default wallet
+    /// endpoint). The URL is built from that name, never from the active-wallet context, so a
+    /// read that re-points the context on another thread cannot move the call; and -18 is an
+    /// error, never a reason to try somewhere else.
+    /// </summary>
+    private async Task<T?> CallPinnedWalletRpcAsync<T>(string wallet, string method, params object[] parameters)
     {
         try
         {
-            return await CallRpcAtAsync<T>(WalletUrl(), method, timeout, parameters);
+            return await CallRpcAtAsync<T>(WalletUrlFor(wallet), method, DefaultRpcTimeout, parameters);
         }
         catch (RpcException ex) when (ex.Code == -18)
         {
-            if (!await TryReassignActiveWalletAsync()) throw;
-            return await CallRpcAtAsync<T>(WalletUrl(), method, timeout, parameters);
+            throw new WalletNotLoadedException(wallet);
         }
     }
 
@@ -138,7 +169,13 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     /// switches the context to "Primary" (or the first loaded wallet). Returns
     /// false when there is nothing sensible to switch to — the original -18
     /// then propagates so pages can explain the situation.</summary>
-    private async Task<bool> TryReassignActiveWalletAsync()
+    /// <param name="failedWallet">The wallet the failed call was ADDRESSED to. A page fires several
+    /// reads at once; when the first to fail has already re-pointed the context, the others
+    /// must simply follow it — judged against the wallet they were sent to, not against the
+    /// context as it is by the time they get here (2026-11-06: the Dashboard's second read
+    /// found the context already healed, concluded "-18 wasn't about the active wallet", and
+    /// dead-ended the page on the error the heal exists to prevent).</param>
+    private async Task<bool> TryReassignActiveWalletAsync(string? failedWallet)
     {
         List<string> loaded;
         try
@@ -151,6 +188,9 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
         }
 
         var active = _walletContext.Active;
+        // Another read got here first and already switched: retry against where it went.
+        if (!string.Equals(active ?? string.Empty, failedWallet ?? string.Empty, StringComparison.Ordinal))
+            return !string.IsNullOrEmpty(active) && loaded.Contains(active);
         if (!string.IsNullOrEmpty(active) && loaded.Contains(active)) return false; // -18 wasn't about the active wallet
         if (loaded.Count == 0) return false;
 
@@ -158,16 +198,17 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
         _logger?.LogWarning("Active wallet \"{Active}\" is not loaded on the daemon; switching to \"{Fallback}\".",
             active, fallback);
         _walletContext.SetActive(fallback);
+        // The figures on screen are now another wallet's — say so where the user will see it.
+        _switchNotice?.Record(active, fallback);
         return true;
     }
 
-    private string WalletUrl()
-    {
-        var active = _walletContext.Active;
-        return string.IsNullOrEmpty(active)
+    private string WalletUrl() => WalletUrlFor(_walletContext.Active);
+
+    private string WalletUrlFor(string? wallet) =>
+        string.IsNullOrEmpty(wallet)
             ? _rpcUrl
-            : $"{_rpcUrl.TrimEnd('/')}/wallet/{Uri.EscapeDataString(active)}";
-    }
+            : $"{_rpcUrl.TrimEnd('/')}/wallet/{Uri.EscapeDataString(wallet)}";
 
     private Task<T?> CallRpcAtAsync<T>(string url, string method, params object[] parameters)
         => CallRpcAtAsync<T>(url, method, DefaultRpcTimeout, parameters);
@@ -991,6 +1032,20 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
             : await CallWalletRpcAsync<string>("sendtoaddress", address, amount);
     }
 
+    /// <summary>
+    /// <see cref="SendToAddressAsync"/> against EXACTLY <paramref name="wallet"/> — the wallet
+    /// the payment was reviewed on or the auto-payout was armed on ("" = the node's default
+    /// wallet endpoint). If that wallet is not loaded the send fails with
+    /// <see cref="WalletNotLoadedException"/>; it is never executed from another wallet.
+    /// </summary>
+    public async Task<string?> SendFromWalletAsync(string wallet, string address, decimal amount, bool subtractFeeFromAmount = false)
+    {
+        ArgumentNullException.ThrowIfNull(wallet);
+        return subtractFeeFromAmount
+            ? await CallPinnedWalletRpcAsync<string>(wallet, "sendtoaddress", address, amount, "", "", true)
+            : await CallPinnedWalletRpcAsync<string>(wallet, "sendtoaddress", address, amount);
+    }
+
     // ---- Sends with a chosen change type (ISendRpc — see Services/Send) ----
     // sendtoaddress cannot pick the change type, so a request that names one goes through `send`,
     // whose options carry change_type. A request without one keeps the exact sendtoaddress path.
@@ -998,14 +1053,20 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     public async Task<string?> SendAsync(Send.SendRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // A request that names its wallet (the one it was reviewed on) runs against that wallet
+        // and no other; one that does not goes to the active wallet, without any -18 retry.
         if (request.ChangeType is null)
-            return await SendToAddressAsync(request.Address, request.Amount, request.SubtractFeeFromAmount);
+            return request.Wallet is string pinned
+                ? await SendFromWalletAsync(pinned, request.Address, request.Amount, request.SubtractFeeFromAmount)
+                : await SendToAddressAsync(request.Address, request.Amount, request.SubtractFeeFromAmount);
 
         var options = new Dictionary<string, object> { ["change_type"] = request.ChangeType };
         if (request.SubtractFeeFromAmount) options["subtract_fee_from_outputs"] = new[] { 0 };
         var outputs = new[] { new Dictionary<string, decimal> { [request.Address] = request.Amount } };
         // send outputs conf_target estimate_mode fee_rate options
-        var r = await CallWalletRpcAsync<JsonElement>("send", outputs, null!, "unset", null!, options);
+        var r = request.Wallet is string wallet
+            ? await CallPinnedWalletRpcAsync<JsonElement>(wallet, "send", outputs, null!, "unset", null!, options)
+            : await CallWalletRpcAsync<JsonElement>("send", outputs, null!, "unset", null!, options);
         if (r.ValueKind != JsonValueKind.Object) return null;
         var complete = r.TryGetProperty("complete", out var c) && c.ValueKind == JsonValueKind.True;
         return complete && r.TryGetProperty("txid", out var t) ? t.GetString() : null;

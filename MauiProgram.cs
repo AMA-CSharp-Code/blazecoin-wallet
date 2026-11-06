@@ -239,6 +239,9 @@ public static class MauiProgram
 		// /wallet/<name> when more than one wallet is loaded. Registered
 		// before the RPC service, which depends on it.
 		builder.Services.AddSingleton<IWalletContext, WalletContext>();
+		// Tells the user when the app re-pointed itself at another wallet (the selected one was
+		// no longer loaded on the node) — the RPC layer records it, the layout shows it.
+		builder.Services.AddSingleton<IWalletSwitchNotice, WalletSwitchNotice>();
 		// Named HttpClient for the daemon, built by IHttpClientFactory (SOLID
 		// audit #6) instead of `new HttpClient()` inside the RPC service. Timeout
 		// is infinite per-client — the service caps each call with a per-request

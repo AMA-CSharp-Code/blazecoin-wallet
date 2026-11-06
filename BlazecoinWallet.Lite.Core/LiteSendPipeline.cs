@@ -104,18 +104,22 @@ internal sealed class LiteSendPipeline
         }
 
         var relay = await _relay.BroadcastAsync(signed.Hex, ct);
-        if (relay.Success)
-        {
-            _sessionSentTxIds.TryAdd(relay.TxId ?? signed.TxId, 0);
-            await NoteChangeUsedAsync();
-            return new LiteSendResult(true, relay.TxId, null);
-        }
 
-        // Typed verdicts (F1 2026-07-20) — the relays classify, we just switch:
-        // DUPLICATE: attempt #1 delivered the tx but its response was lost — the send
-        // WORKED, and we know our own txid (we computed it while signing).
-        if (relay.Failure == BroadcastFailureKind.Duplicate)
+        // SUCCESS, or DUPLICATE: an earlier attempt delivered the tx but its response was lost —
+        // the send WORKED. Either way the txid is OURS, computed while signing; a relay's txid
+        // string is never used (bug-bounty report 2026-11-06: it replaced the receipt's txid and
+        // poisoned the session's sent-set, so the wallet announced its own change as income).
+        if (relay.Success || relay.Failure == BroadcastFailureKind.Duplicate)
         {
+            // One gateway's word and nobody to back it: that gateway may have kept the
+            // transaction instead of relaying it. Hand it to network nodes directly as well —
+            // harmless when it is already out there, decisive when it is not.
+            if (relay.Uncorroborated && _p2p != null)
+            {
+                try { await _p2p.TryBroadcastAsync(signed.Hex, _p2pNodes, ct: ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch { /* best effort — the relay's answer still stands */ }
+            }
             _sessionSentTxIds.TryAdd(signed.TxId, 0);
             await NoteChangeUsedAsync();
             return new LiteSendResult(true, signed.TxId, null);

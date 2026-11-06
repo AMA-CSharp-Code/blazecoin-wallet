@@ -173,7 +173,8 @@ public class GatewayContractTests : IDisposable
         _rpc.RejectReason = "bad-txns-inputs-missingorspent";
         var rejected = await _client.BroadcastAsync(validHex);
         Assert.False(rejected.Success);
-        Assert.Equal("bad-txns-inputs-missingorspent", rejected.Error);
+        // One gateway here, so the reason arrives as that gateway's word (nobody to confirm it).
+        Assert.StartsWith("bad-txns-inputs-missingorspent", rejected.Error);
         Assert.Equal(BroadcastFailureKind.Rejected, rejected.Failure);
 
         // Daemon down → 503 → Unreachable kind (the wallet's P2P fallback trigger).
@@ -311,6 +312,7 @@ public class GatewayContractTests : IDisposable
         Assert.Contains("\"forkName\":null", body);
         Assert.Contains("\"forkHeight\":null", body);
         Assert.Contains("\"minClientVersion\":null", body);
+        Assert.Contains("\"forkSignature\":null", body);
         Assert.Equal(body, await _factory.CreateClient().GetStringAsync("/indexer/api/status"));
     }
 
@@ -392,6 +394,83 @@ public class StatusForkAnnouncementTests
         // This build carries the fork: no banner for a client that is already fork-ready.
         Assert.Equal(BlazecoinWallet.Lite.Fork.ForkBannerState.None,
             BlazecoinWallet.Lite.Fork.ForkBanner.Evaluate(current, "2.1.0", BlazecoinWallet.Lite.Fork.LiteClientInfo.SupportedForks, current.Tip));
+    }
+}
+
+/// <summary>The announcement SIGNED by the project (bug-bounty report 2026-11-06): the gateway
+/// only passes the signature on; what it means is decided by the wallet, against a key the
+/// gateway never holds.</summary>
+public class StatusSignedForkAnnouncementTests
+{
+    private static WebApplicationFactory<Program> Factory(string name, long height, string minVersion, string? signature, FakeDaemonRpc rpc)
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"lite-gw-signed-fork-{Guid.NewGuid():N}.db");
+        return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Index:DbPath", dbPath);
+            builder.UseSetting("Fork:Name", name);
+            builder.UseSetting("Fork:Height", height.ToString());
+            builder.UseSetting("Fork:MinClientVersion", minVersion);
+            if (signature != null) builder.UseSetting("Fork:Signature", signature);
+            builder.ConfigureServices(services =>
+            {
+                var walker = services.Single(d => d.ImplementationType == typeof(ChainWalkerService));
+                services.Remove(walker);
+                var reg = services.Single(d => d.ServiceType == typeof(DaemonRpcClient));
+                services.Remove(reg);
+                services.AddSingleton<DaemonRpcClient>(rpc);
+            });
+        });
+    }
+
+    [Fact]
+    public async Task A_signed_announcement_reaches_the_wallet_authenticated_and_can_stop_it()
+    {
+        var projectKey = new NBitcoin.Key();
+        var signature = BlazecoinWallet.Lite.Fork.ForkAnnouncement.Sign(projectKey, "nextfork", 4_500_000, "9.9.9");
+        using var factory = Factory("nextfork", 4_500_000, "9.9.9", signature, new FakeDaemonRpc());
+        var status = factory.Services.GetRequiredService<WalkerStatus>();
+        status.DaemonReachable = true;
+        status.DaemonHeight = 4_500_010;
+        status.IndexedHeight = 4_500_010;
+
+        Assert.Contains($"\"forkSignature\":\"{signature}\"", await factory.CreateClient().GetStringAsync("/api/status"));
+
+        // The shipping poller, with the project's key pinned.
+        var svc = new BlazecoinWallet.Lite.Fork.GatewayForkStatusService(factory.CreateClient(),
+            announcementKeys: [projectKey.PubKey.ToHex()]);
+        await svc.RefreshAsync();
+        Assert.True(svc.Current!.Authenticated);
+        Assert.Equal(BlazecoinWallet.Lite.Fork.ForkBannerState.Stopped, svc.State);
+
+        // The same response read by a build that pins a different key — or, like this one, none.
+        var stranger = new BlazecoinWallet.Lite.Fork.GatewayForkStatusService(factory.CreateClient(),
+            announcementKeys: [new NBitcoin.Key().PubKey.ToHex()]);
+        await stranger.RefreshAsync();
+        Assert.False(stranger.Current!.Authenticated);
+        Assert.Equal(BlazecoinWallet.Lite.Fork.ForkBannerState.Warning, stranger.State);
+
+        var shipped = new BlazecoinWallet.Lite.Fork.GatewayForkStatusService(factory.CreateClient());
+        await shipped.RefreshAsync();
+        Assert.NotEqual(BlazecoinWallet.Lite.Fork.ForkBannerState.Stopped, shipped.State);
+    }
+
+    [Fact]
+    public async Task An_unsigned_announcement_past_its_height_warns_and_never_stops_the_wallet()
+    {
+        using var factory = Factory("nextfork", 4_500_000, "9.9.9", signature: null, new FakeDaemonRpc());
+        var status = factory.Services.GetRequiredService<WalkerStatus>();
+        status.DaemonReachable = true;
+        status.DaemonHeight = 5_000_000;
+        status.IndexedHeight = 5_000_000;
+
+        var svc = new BlazecoinWallet.Lite.Fork.GatewayForkStatusService(factory.CreateClient(),
+            announcementKeys: [new NBitcoin.Key().PubKey.ToHex()]);
+        await svc.RefreshAsync();
+
+        Assert.True(svc.Current!.IsAnnounced);
+        Assert.False(svc.Current.Authenticated);
+        Assert.Equal(BlazecoinWallet.Lite.Fork.ForkBannerState.Warning, svc.State);
     }
 }
 

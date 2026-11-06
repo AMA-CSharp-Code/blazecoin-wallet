@@ -1,0 +1,45 @@
+/* The "active wallet changed" notice. A ledger card like the daemon-error panel: the global
+   .card is a translucent WHITE wash that washes out over the animated page backgrounds, so
+   this one is a near-opaque dark body with an amber frame, lifted above the skin layer. */
+.wallet-switch-card {
+    position: relative;
+    z-index: 2;                               /* the skins paint at 0, page cards at 1 */
+    margin: 0 0 1.5rem;
+    background-color: rgba(18, 12, 0, 0.92);
+    border-color: #ffc107;                    /* amber: a warning, not an error */
+    backdrop-filter: none;
+}
+
+/* A notice is not a tile: no lift or glow when the pointer passes over it. */
+.wallet-switch-card:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+.wallet-switch-body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.25rem;
+    padding: 1rem 1.25rem;
+}
+
+.wallet-switch-msg {
+    margin: 0;
+    color: #ffe08a;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.wallet-switch-msg strong {
+    color: #fff;
+}
+
+.wallet-switch-ok {
+    flex: 0 0 auto;
+    padding: 0.5rem 1.5rem;
+}
+
+.wallet-switch-ok:hover {
+    transform: none;                          /* the global button hover scales; keep the row still */
+}

@@ -14,7 +14,13 @@ public sealed record LiteSendResult(bool Success, string? TxId, string? Error, s
 public sealed record LiteMoveResult(bool Success, string? TxId, int MovedCoins, long MovedSatoshis, int RemainingLegacyCoins, string? Error);
 
 /// <summary>A spendable output together with the wallet address that owns it.</summary>
-public sealed record LiteOwnedUtxo(string Address, LiteChainUtxo Utxo);
+/// <param name="Verified">True when the coin's existence and value are PROVEN: the funding
+/// transaction hashes to its id, pays this address this amount, and is mined on the chain — or
+/// the data comes from the user's own node, whose chainstate is authoritative. False for a
+/// coin the gateway lists that the wallet has not (yet) proven, and for every unconfirmed coin
+/// (nothing to prove until it is mined). Only verified coins are spendable balance
+/// (bug-bounty report 2026-11-06).</param>
+public sealed record LiteOwnedUtxo(string Address, LiteChainUtxo Utxo, bool Verified = true);
 
 /// <summary>The Balance card's split: what can be spent now, coinbases still ripening,
 /// and unconfirmed incoming. Coins leaving in an in-flight send are the remainder
@@ -22,7 +28,12 @@ public sealed record LiteOwnedUtxo(string Address, LiteChainUtxo Utxo);
 /// summary still counts them until the spend confirms).</summary>
 /// <param name="SpendableLegacy">The part of <paramref name="Spendable"/> on legacy (ECDSA) B… addresses —
 /// what "Move everything to post-quantum" would move (2026-09-28).</param>
-public sealed record LiteBalanceBreakdown(long Spendable, long ImmatureCoinbase, long UnconfirmedIncoming, long SpendableLegacy = 0);
+/// <param name="Unverified">Confirmed coins the gateway lists that the wallet has NOT proven on
+/// the chain — being checked, or failing the check. Never part of <paramref name="Spendable"/>
+/// or <paramref name="ImmatureCoinbase"/>; shown on its own line so the user sees a claim, not
+/// money (bug-bounty report 2026-11-06).</param>
+public sealed record LiteBalanceBreakdown(long Spendable, long ImmatureCoinbase, long UnconfirmedIncoming,
+    long SpendableLegacy = 0, long Unverified = 0);
 
 /// <summary>What a WIF key holds on-chain — shown before the user commits to a sweep.</summary>
 public sealed record LiteWifCheck(bool Valid, string? Error, string? Address,
@@ -73,7 +84,20 @@ public sealed class LiteWalletService : IWalletUtxoSource
     private readonly HeaderChainSync? _headerSync;
     private readonly LiteTxVerifier? _verifier;
     private readonly IWalletStateStore _stateStore;
+    private readonly ChainCheckQueue? _checks;   // null when the source is authoritative (no verifier)
+    private bool _verifiedCoinsLoaded;
+    private string? _verifiedCoinsSaved;
     private LiteHdWallet? _wallet;
+
+    // How much chain-checking one read may wait for. An ordinary wallet's coins are proven
+    // inside its first balance read; anything beyond this runs in the paced background queue.
+    internal const int InlineCoinChecks = 6;
+    internal static readonly TimeSpan InlineCoinBudget = TimeSpan.FromSeconds(4);
+    internal const int InlineHistoryChecks = 4;
+    internal static readonly TimeSpan InlineHistoryBudget = TimeSpan.FromSeconds(2);
+
+    /// <summary>Most proven coins remembered across restarts (largest first) — bounds the store.</summary>
+    internal const int MaxPersistedVerifiedCoins = 2000;
 
     /// <summary>ISP ctor — reads and relay may come from different sources.</summary>
     /// <param name="p2pFallback">Optional last-resort broadcaster: when the relay is
@@ -101,7 +125,23 @@ public sealed class LiteWalletService : IWalletUtxoSource
         _pipeline = new LiteSendPipeline(relay, p2pFallback, p2pNodes, verifier);
         _headerSync = headerSync;
         _verifier = verifier;
+        if (verifier != null)
+        {
+            _checks = new ChainCheckQueue();
+            _checks.Changed += () => VerificationChanged?.Invoke();
+        }
     }
+
+    /// <summary>Raised (on a worker thread) when background chain checks have settled more coins
+    /// or history rows — a page showing balances re-reads them. Never raised for a source whose
+    /// word is authoritative (personal node).</summary>
+    public event Action? VerificationChanged;
+
+    /// <summary>The read-path chain-check queue (tests pace and await it).</summary>
+    internal ChainCheckQueue? Checks => _checks;
+
+    /// <summary>Completes when no chain check is running or queued.</summary>
+    internal Task WhenVerificationIdleAsync() => _checks?.WhenIdleAsync() ?? Task.CompletedTask;
 
     /// <summary>Convenience ctor for the common case of one full data source.</summary>
     public LiteWalletService(ISeedVault vault, ILiteWalletData data,
@@ -145,7 +185,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
     {
         if (PqActivationHeight == null) return false;
         if (PqActivated) return true;
-        await GetAllUtxosAsync(ct);
+        await ReadOwnedUtxosAsync(ct);   // tip evidence only — nothing here counts a coin
         return PqActivated;
     }
 
@@ -331,6 +371,9 @@ public sealed class LiteWalletService : IWalletUtxoSource
         _wallet = null;
         _pipeline.Reset();
         _pendingSpent.Clear();
+        _checks?.Clear();
+        _verifiedCoinsLoaded = false;
+        _verifiedCoinsSaved = null;
     }
 
     /// <summary>Reveals the next fresh receive address (rotation). See
@@ -393,14 +436,55 @@ public sealed class LiteWalletService : IWalletUtxoSource
                     : e;
             }
         }
-        return merged.Values
+        var window = merged.Values
             .Select(e => e with { Type = e.Amount >= 0 ? "received" : "sent" })
             .OrderByDescending(e => e.BlockHeight)
             .ThenByDescending(e => e.TxId, StringComparer.OrdinalIgnoreCase)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToList();
+        return await MarkHistoryAsync(window, addresses, ct);
     }
+
+    /// <summary>
+    /// Stamps each row with where it stands against the chain (bug-bounty report 2026-11-06: a
+    /// gateway could serve a "received" row for a transaction that does not exist, and the list
+    /// showed it as income). A RECEIVED row is checked: its transaction must be on the chain and
+    /// pay this wallet at least the amount shown. A few rows are checked inside this read, the
+    /// rest in the background; until a row is proven it says so. Sent rows are not checked — a
+    /// made-up one claims no income, and the balance never comes from history.
+    /// </summary>
+    private async Task<IReadOnlyList<LiteHistoryEntry>> MarkHistoryAsync(
+        List<LiteHistoryEntry> rows, IReadOnlyList<string> ownedAddresses, CancellationToken ct)
+    {
+        if (_checks == null) return rows;   // own node: authoritative
+
+        var provable = rows.Where(e => e.Amount > 0 && e.BlockHeight > 0).ToList();
+        await _checks.EnsureAsync(provable.Select(e => ReceiptItem(e, ownedAddresses)).ToList(),
+            InlineHistoryChecks, InlineHistoryBudget, ct);
+
+        return rows.Select(e => e with
+        {
+            Check = e.Amount <= 0 ? LiteHistoryCheck.NotChecked
+                : e.BlockHeight <= 0 ? LiteHistoryCheck.Unconfirmed
+                : _checks.StateOf(ReceiptKey(e)) switch
+                {
+                    ChainCheckState.Verified => LiteHistoryCheck.Verified,
+                    ChainCheckState.Unverified => LiteHistoryCheck.Unverified,
+                    _ => LiteHistoryCheck.Pending,
+                },
+        }).ToList();
+    }
+
+    // The claimed amount is part of the key: a gateway that changes its story is checked again.
+    private static string ReceiptKey(LiteHistoryEntry e) => $"r:{e.TxId}:{e.Amount}";
+
+    private ChainCheckQueue.Item ReceiptItem(LiteHistoryEntry e, IReadOnlyList<string> ownedAddresses) =>
+        new(ReceiptKey(e), async ct =>
+        {
+            var v = await _verifier!.VerifyReceiptAsync(e.TxId, ownedAddresses, e.Amount, e.BlockHeight, ct);
+            return new ChainCheckQueue.Outcome(v.Verified, v.RealSatoshis, v.Error);
+        }, Priority: e.BlockHeight);   // newest first, and behind every coin (a coin's priority is its value)
 
     /// <summary>Spendable satoshis right now: unspent, and past maturity if coinbase.</summary>
     public async Task<long> GetSpendableAsync(CancellationToken ct = default)
@@ -416,19 +500,20 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// </summary>
     public async Task<LiteBalanceBreakdown> GetBalanceBreakdownAsync(CancellationToken ct = default)
     {
-        long spendable = 0, immature = 0, incoming = 0, legacy = 0;
+        long spendable = 0, immature = 0, incoming = 0, legacy = 0, unverified = 0;
         foreach (var u in await GetAllUtxosAsync(ct))
         {
             var conf = TrustedConfirmations(u.Utxo);
-            if (conf >= (u.Utxo.IsCoinbase ? CoinbaseMaturity : 1))
+            if (conf == 0) incoming += u.Utxo.Amount;           // nothing to prove until it is mined
+            else if (!u.Verified) unverified += u.Utxo.Amount;  // the gateway's claim, not money
+            else if (conf >= (u.Utxo.IsCoinbase ? CoinbaseMaturity : 1))
             {
                 spendable += u.Utxo.Amount;
                 if (!Pq.PqAddress.IsValid(u.Address)) legacy += u.Utxo.Amount;
             }
-            else if (conf == 0) incoming += u.Utxo.Amount;
             else immature += u.Utxo.Amount;   // a confirmed coinbase still ripening
         }
-        return new LiteBalanceBreakdown(spendable, immature, incoming, legacy);
+        return new LiteBalanceBreakdown(spendable, immature, incoming, legacy, unverified);
     }
 
     // ── Pending-spent overlay ────────────────────────────────────────────────────────────
@@ -455,8 +540,84 @@ public sealed class LiteWalletService : IWalletUtxoSource
         foreach (var u in inputs) _pendingSpent[OutpointKey(u.TxId, u.Vout)] = now;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Every unspent output across every revealed address, immature included, each marked with
+    /// whether the wallet has PROVEN it (<see cref="LiteOwnedUtxo.Verified"/>). In gateway mode
+    /// the rows are a claim until checked: a confirmed coin is verified against the chain exactly
+    /// as the spend path verifies an input (funding tx hashes to its id, pays this address, is
+    /// mined on the chain), a few inside this read and the rest in the background, and a proven
+    /// coin carries the value the chain commits to, whatever the gateway said.
+    /// </summary>
     public async Task<IReadOnlyList<LiteOwnedUtxo>> GetAllUtxosAsync(CancellationToken ct = default)
+    {
+        var owned = await ReadOwnedUtxosAsync(ct);
+        if (_checks == null) return owned;                    // own node: authoritative
+
+        await LoadVerifiedCoinsAsync();
+        await _checks.EnsureAsync(
+            owned.Where(u => u.Utxo.Confirmations > 0).Select(CoinItem).ToList(),
+            InlineCoinChecks, InlineCoinBudget, ct);
+
+        var marked = owned.Select(u =>
+            u.Utxo.Confirmations > 0 && _checks.TryGetVerified(CoinKey(u), out var real)
+                ? u with { Verified = true, Utxo = u.Utxo with { Amount = real } }
+                : u with { Verified = false }).ToList();
+        await SaveVerifiedCoinsAsync(marked);
+        return marked;
+    }
+
+    // The owning address is part of the key: the proof is "this output pays THIS address".
+    private static string CoinKey(LiteOwnedUtxo u) => $"c:{u.Utxo.TxId}:{u.Utxo.OutputIndex}:{u.Address}";
+
+    private ChainCheckQueue.Item CoinItem(LiteOwnedUtxo u) =>
+        new(CoinKey(u), async ct =>
+        {
+            var v = await _verifier!.VerifyAsync(u.Utxo.TxId, u.Utxo.OutputIndex, u.Utxo.Amount,
+                requireInclusionProof: true, expectedAddress: u.Address, claimedBlockHeight: u.Utxo.BlockHeight, ct: ct);
+            return new ChainCheckQueue.Outcome(v.Verified, v.RealSatoshis, v.Error);
+        }, Priority: u.Utxo.Amount);   // the coins that matter most first
+
+    /// <summary>Adopts the coins proven in an earlier session (once per unlock of the store).</summary>
+    private async Task LoadVerifiedCoinsAsync()
+    {
+        if (_verifiedCoinsLoaded) return;
+        _verifiedCoinsLoaded = true;
+        try
+        {
+            var text = await _stateStore.GetVerifiedCoinsAsync();
+            _verifiedCoinsSaved = text;
+            foreach (var entry in (text ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var p = entry.Split(':');
+                if (p.Length == 4 && p[0].Length == 64 && int.TryParse(p[1], out var vout) && vout >= 0 &&
+                    long.TryParse(p[3], out var sats) && sats > 0)
+                    _checks!.Seed($"c:{p[0]}:{vout}:{p[2]}", sats);
+            }
+        }
+        catch { /* losing the remembered set only costs a re-verification */ }
+    }
+
+    /// <summary>Remembers the proven coins the gateway still lists. An empty view is not saved —
+    /// a failed read returns no coins, and must not forget the proofs.</summary>
+    private async Task SaveVerifiedCoinsAsync(IReadOnlyList<LiteOwnedUtxo> coins)
+    {
+        var proven = coins.Where(u => u.Verified).ToList();
+        if (proven.Count == 0) return;
+        var text = string.Join(';', proven
+            .OrderByDescending(u => u.Utxo.Amount)
+            .Take(MaxPersistedVerifiedCoins)
+            .OrderBy(u => u.Utxo.TxId, StringComparer.Ordinal).ThenBy(u => u.Utxo.OutputIndex)
+            .Select(u => $"{u.Utxo.TxId}:{u.Utxo.OutputIndex}:{u.Address}:{u.Utxo.Amount}"));
+        if (text == _verifiedCoinsSaved) return;
+        _verifiedCoinsSaved = text;
+        try { await _stateStore.SetVerifiedCoinsAsync(text); }
+        catch { /* best effort */ }
+    }
+
+    /// <summary>The gateway's rows as served — owned outputs minus this session's just-spent
+    /// ones. NOTHING here is proven; callers that count coins go through
+    /// <see cref="GetAllUtxosAsync"/>.</summary>
+    private async Task<List<LiteOwnedUtxo>> ReadOwnedUtxosAsync(CancellationToken ct)
     {
         // Advance the PoW-verified tip in the background (self-throttled; no-op without a feed)
         // so the maturity clamp below sharpens over time without blocking the balance read.
@@ -504,9 +665,82 @@ public sealed class LiteWalletService : IWalletUtxoSource
         // coinbase look spendable. Excluding 0-conf (security audit S7) keeps a gateway-fabricated
         // mempool output out of the spendable balance AND sidesteps unconfirmed-txid malleability
         // on this zero-fee chain — the verifier would reject a 0-conf input at spend time anyway.
+        // And the coin must be PROVEN on the chain (2026-11-06): a row claiming confirmations is
+        // still only a row.
         => (await GetAllUtxosAsync(ct))
-            .Where(u => TrustedConfirmations(u.Utxo) >= (u.Utxo.IsCoinbase ? CoinbaseMaturity : 1))
+            .Where(u => u.Verified)
+            .Where(IsMature)
             .ToList();
+
+    private bool IsMature(LiteOwnedUtxo u) =>
+        TrustedConfirmations(u.Utxo) >= (u.Utxo.IsCoinbase ? CoinbaseMaturity : 1);
+
+    /// <summary>The outcome of picking coins for a spend.</summary>
+    /// <param name="Coins">Mature coins proven on the chain, largest first.</param>
+    /// <param name="Candidates">How many mature coins the gateway listed (proven or not).</param>
+    /// <param name="UnprovenSatoshis">What the gateway listed that could not be proven.</param>
+    /// <param name="LastError">Why the last unproven coin failed its check.</param>
+    private sealed record ProvenCoins(List<LiteOwnedUtxo> Coins, int Candidates, long UnprovenSatoshis, string? LastError)
+    {
+        public long Total => Coins.Sum(u => u.Utxo.Amount);
+
+        /// <summary>Coins were listed and not one could be proven — the same words the send
+        /// pipeline uses when an input fails its check.</summary>
+        public string NothingProvenMessage =>
+            $"Could not verify your coins against the chain: {LastError} Refresh and try again.";
+
+        public string ShortfallMessage(long requested)
+        {
+            if (Coins.Count == 0 && UnprovenSatoshis > 0) return NothingProvenMessage;
+            var text = $"Insufficient spendable balance: {AmountText(Total)} BLZ available, {AmountText(requested)} BLZ requested.";
+            return UnprovenSatoshis > 0
+                ? text + $" ({AmountText(UnprovenSatoshis)} BLZ could not be verified against the chain.)"
+                : text;
+        }
+    }
+
+    /// <summary>
+    /// Picks mature coins for a spend, largest first, taking only coins PROVEN on the chain and
+    /// proving them on demand — the user is waiting on exactly these, so their checks run now
+    /// whatever the background queue is doing. A coin that fails its check is passed over, so a
+    /// row the gateway made up cannot be selected (it used to be picked first, being the
+    /// largest, and failed the whole send at signing). Stops once <paramref name="needSatoshis"/>
+    /// is covered (null = take everything) or <paramref name="maxCoins"/> are picked.
+    /// </summary>
+    private async Task<ProvenCoins> SelectProvenCoinsAsync(long? needSatoshis, Func<LiteOwnedUtxo, bool>? filter,
+        int maxCoins, CancellationToken ct)
+    {
+        var candidates = (await GetAllUtxosAsync(ct))
+            .Where(IsMature)
+            .Where(u => filter == null || filter(u))
+            .OrderByDescending(u => u.Utxo.Amount)
+            .ToList();
+
+        var picked = new List<LiteOwnedUtxo>();
+        long gathered = 0, unproven = 0;
+        string? lastError = null;
+        foreach (var candidate in candidates)
+        {
+            if (picked.Count >= maxCoins) break;
+            if (needSatoshis is long need && gathered >= need) break;
+
+            var coin = candidate;
+            if (!coin.Verified)
+            {
+                var outcome = await _checks!.CheckNowAsync(CoinItem(candidate), ct);
+                if (!outcome.Ok)
+                {
+                    unproven += candidate.Utxo.Amount;
+                    lastError = outcome.Error;
+                    continue;
+                }
+                coin = candidate with { Verified = true, Utxo = candidate.Utxo with { Amount = outcome.Value } };
+            }
+            picked.Add(coin);
+            gathered += coin.Utxo.Amount;
+        }
+        return new ProvenCoins(picked, candidates.Count, unproven, lastError);
+    }
 
     /// <summary>
     /// Send a specific amount: select mature coins (largest-first) to cover it, sign
@@ -514,21 +748,12 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// </summary>
     public async Task<LiteSendResult> SendAsync(string destinationAddress, long amountSatoshis, CancellationToken ct = default)
     {
-        var spendable = await GetSpendableUtxosAsync(ct);
-        var available = spendable.Sum(u => u.Utxo.Amount);
-        if (available < amountSatoshis)
-            return new LiteSendResult(false, null,
-                $"Insufficient spendable balance: {AmountText(available)} BLZ available, {AmountText(amountSatoshis)} BLZ requested.");
-
-        // Largest-first keeps input counts (and tx size) small on a zero-fee chain.
-        var inputs = new List<LiteUtxo>();
-        long gathered = 0;
-        foreach (var u in spendable.OrderByDescending(u => u.Utxo.Amount))
-        {
-            inputs.Add(ToInput(u));
-            gathered += u.Utxo.Amount;
-            if (gathered >= amountSatoshis) break;
-        }
+        // Largest-first keeps input counts (and tx size) small on a zero-fee chain; only coins
+        // proven on the chain are picked (see SelectProvenCoinsAsync).
+        var pick = await SelectProvenCoinsAsync(amountSatoshis, filter: null, int.MaxValue, ct);
+        if (pick.Total < amountSatoshis)
+            return new LiteSendResult(false, null, pick.ShortfallMessage(amountSatoshis));
+        var inputs = pick.Coins.Select(ToInput).ToList();
 
         if (PqSpendGate(destinationAddress, inputs) is string refused)
             return new LiteSendResult(false, null, refused);
@@ -592,7 +817,12 @@ public sealed class LiteWalletService : IWalletUtxoSource
         if (legacy.Count == 0)
             return new LiteMoveResult(false, null, 0, 0, 0, "There are no legacy coins to move — everything spendable is already on a post-quantum address.");
 
-        var batch = legacy.Take(MaxInputsPerMove).ToList();
+        // Largest first, proven on the chain (a legacy row the gateway made up is passed over).
+        var pick = await SelectProvenCoinsAsync(needSatoshis: null,
+            u => !Pq.PqAddress.IsValid(u.Address), MaxInputsPerMove, ct);
+        if (pick.Coins.Count == 0)
+            return new LiteMoveResult(false, null, 0, 0, legacy.Count, pick.NothingProvenMessage);
+        var batch = pick.Coins;
         var inputs = batch.Select(ToInput).ToList();
         var destination = await _rotation.EnsurePqAddressAsync(wallet);
         var result = await _pipeline.ExecuteAsync(destination, inputs, amountSatoshis: null, destination,
@@ -624,11 +854,12 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// </summary>
     public async Task<LiteSendResult> SendMaxAsync(string destinationAddress, CancellationToken ct = default)
     {
-        var spendable = await GetSpendableUtxosAsync(ct);
-        if (spendable.Count == 0)
-            return new LiteSendResult(false, null, "There are no spendable coins to send.");
+        var pick = await SelectProvenCoinsAsync(needSatoshis: null, filter: null, int.MaxValue, ct);
+        if (pick.Coins.Count == 0)
+            return new LiteSendResult(false, null,
+                pick.UnprovenSatoshis > 0 ? pick.NothingProvenMessage : "There are no spendable coins to send.");
 
-        var inputs = spendable.Select(ToInput).ToList();
+        var inputs = pick.Coins.Select(ToInput).ToList();
         if (PqSpendGate(destinationAddress, inputs) is string refused)
             return new LiteSendResult(false, null, refused);
 

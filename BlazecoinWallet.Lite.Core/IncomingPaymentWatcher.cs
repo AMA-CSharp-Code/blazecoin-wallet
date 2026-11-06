@@ -9,6 +9,11 @@ public sealed record IncomingPayment(string TxId, string Address, long AmountSat
 /// confirmations, not after maturity) and raises <see cref="PaymentReceived"/> for every
 /// NEW output that this session didn't create itself (change from our own sends and sweep
 /// landings are excluded via <see cref="IWalletUtxoSource.SessionSentTxIds"/>).
+/// A CONFIRMED coin is announced only once the wallet has proven it on the chain
+/// (<see cref="LiteOwnedUtxo.Verified"/>; bug-bounty report 2026-11-06 — a gateway row claiming
+/// confirmations used to raise a confident "Received"). Until then it is neither announced nor
+/// remembered, so it is announced the moment it verifies, and never if it never does. An
+/// unconfirmed coin cannot be proven and is still announced — as unconfirmed.
 /// Depends only on the narrow <see cref="IWalletUtxoSource"/> slice (audit F2).
 /// Polling is the honest v1 on a 30-second chain; the public SignalR hub planned for the
 /// VPS appliance can replace the timer later without touching subscribers.
@@ -85,21 +90,33 @@ public sealed class IncomingPaymentWatcher : IDisposable
         try { utxos = await _wallet.GetAllUtxosAsync(ct); }
         catch { return; } // a flaky poll must never kill the loop; next tick retries
 
-        var current = new HashSet<string>(utxos.Select(u => OutpointKey(u.Utxo.TxId, u.Utxo.OutputIndex)),
-            StringComparer.OrdinalIgnoreCase);
-
         // Swap under the gate (audit C4) so a concurrent Stop/Start can't interleave a
         // stale baseline with a fresh one.
         HashSet<string>? baseline;
+        HashSet<string> current;
         lock (_gate)
         {
             baseline = _knownOutpoints;
+            // A transaction with a confirmed coin still unproven waits as a whole (one event per
+            // txid) — unless it was already known: the first sight records everything, so coins
+            // that were simply there at start-up never announce themselves when they verify.
+            var waiting = baseline == null
+                ? []
+                : utxos.Where(u => u.Utxo.Confirmations > 0 && !u.Verified
+                                   && !baseline.Contains(OutpointKey(u.Utxo.TxId, u.Utxo.OutputIndex)))
+                       .Select(u => u.Utxo.TxId)
+                       .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            current = new HashSet<string>(
+                utxos.Where(u => !waiting.Contains(u.Utxo.TxId) || baseline!.Contains(OutpointKey(u.Utxo.TxId, u.Utxo.OutputIndex)))
+                     .Select(u => OutpointKey(u.Utxo.TxId, u.Utxo.OutputIndex)),
+                StringComparer.OrdinalIgnoreCase);
             _knownOutpoints = current;
         }
         if (baseline == null) return; // first sight — never notify for what was already there
 
         var sent = _wallet.SessionSentTxIds;
         var fresh = utxos
+            .Where(u => current.Contains(OutpointKey(u.Utxo.TxId, u.Utxo.OutputIndex)))
             .Where(u => !baseline.Contains(OutpointKey(u.Utxo.TxId, u.Utxo.OutputIndex)))
             .Where(u => !sent.Contains(u.Utxo.TxId, StringComparer.OrdinalIgnoreCase))
             .GroupBy(u => u.Utxo.TxId, StringComparer.OrdinalIgnoreCase);

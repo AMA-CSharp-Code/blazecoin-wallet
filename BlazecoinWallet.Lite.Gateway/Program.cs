@@ -137,6 +137,9 @@ static object StatusPayload(WalkerStatus status, MempoolOverlay mempool, IConfig
         synced = status.Synced,
         forkName = string.IsNullOrWhiteSpace(forkName) ? null : forkName.Trim(),
         forkHeight = config.GetValue<long?>("Fork:Height", null),
+        // The project's signature over (name, height, minClientVersion) — what lets a wallet tell
+        // this announcement from one a rogue gateway made up. Null until the announcement is signed.
+        forkSignature = config.GetValue<string?>("Fork:Signature", null),
         minClientVersion = string.IsNullOrWhiteSpace(minClient) ? null : minClient.Trim(),
     };
 }

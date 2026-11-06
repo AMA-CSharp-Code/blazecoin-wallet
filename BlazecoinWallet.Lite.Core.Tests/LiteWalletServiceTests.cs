@@ -130,11 +130,12 @@ public class LiteWalletServiceTests
         var result = await service.SendAsync(dest, 6_000_000);
 
         Assert.True(result.Success, result.Error);
-        Assert.Equal("cafe", result.TxId);
 
         // Decode what actually went to the relay: pays the destination exactly, change to a
         // fresh INTERNAL-chain change address (BIP44 change chain), NOT a receive address.
         Assert.NotNull(gateway.CapturedBroadcastHex);
+        // The receipt is the id of the transaction that was signed, not the relay's "cafe".
+        Assert.Equal(LiteTxId.OfHex(gateway.CapturedBroadcastHex), result.TxId);
         var tx = Transaction.Parse(gateway.CapturedBroadcastHex, BlazecoinNetwork.Instance);
         var destScript = new BitcoinPubKeyAddress(dest, BlazecoinNetwork.Instance).ScriptPubKey;
         var changeScript = new BitcoinPubKeyAddress(
@@ -292,7 +293,9 @@ public class LiteWalletServiceTests
         gateway.BroadcastBody = "{\"error\":\"bad-txns-inputs-missingorspent\"}";
         var rejected = await service.SendAsync(dest, 1_000_000);
         Assert.False(rejected.Success);
-        Assert.Equal("bad-txns-inputs-missingorspent", rejected.Error);
+        // One gateway, nobody to ask a second opinion: the reason is passed on as that gateway's word.
+        Assert.StartsWith("bad-txns-inputs-missingorspent", rejected.Error);
+        Assert.Contains("one gateway only", rejected.Error);
     }
 
     [Fact]

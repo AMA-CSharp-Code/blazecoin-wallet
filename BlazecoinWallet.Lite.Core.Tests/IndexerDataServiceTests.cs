@@ -102,7 +102,8 @@ public class IndexerDataServiceTests
         var rejected = await Build(gw).BroadcastAsync("00ff");
         Assert.False(rejected.Success);
         Assert.Equal(BroadcastFailureKind.Rejected, rejected.Failure);
-        Assert.Equal("txn-mempool-conflict", rejected.Error);
+        Assert.StartsWith("txn-mempool-conflict", rejected.Error);   // one gateway: its word, said as such
+        Assert.True(rejected.Uncorroborated);
 
         gw.ByPathSuffix["/broadcast"] = (HttpStatusCode.ServiceUnavailable, """{"error":"node down"}""");
         var down = await Build(gw).BroadcastAsync("00ff");

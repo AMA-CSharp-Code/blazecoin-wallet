@@ -1,0 +1,38 @@
+@implements IDisposable
+@inject IWalletSwitchNotice Notice
+
+@* Shown when the app re-pointed itself at a different wallet because the selected one is no
+   longer loaded on the node (the -18 self-heal on a balance or history read). Until 2026-11-06
+   the only trace of that was a log line, while every figure on screen became another wallet's
+   (bug-bounty report 2026-11-06). Stays on every page until the user acknowledges it.
+   Drawn as one of the wallet's own ledger cards (black header bar, white frame, dark body) so
+   it reads over the animated page backgrounds — a plain alert let them show through. *@
+@if (Notice.Current is { } sw)
+{
+    <div class="card wallet-switch-card" role="alert">
+        <div class="status-header"><span>Active Wallet Changed</span></div>
+        <div class="card-body wallet-switch-body">
+            <p class="wallet-switch-msg">
+                @if (sw.From is { Length: > 0 } from)
+                {
+                    <text>The wallet <strong>@from</strong> is no longer loaded on the node, so this window now shows <strong>@sw.To</strong>.</text>
+                }
+                else
+                {
+                    <text>This window now shows the wallet <strong>@sw.To</strong>.</text>
+                }
+                <text> Balances, history and anything you send are that wallet's. To go back, load the other wallet again and select it.</text>
+            </p>
+            <button type="button" class="btn btn-primary wallet-switch-ok" @onclick="Notice.Dismiss">OK</button>
+        </div>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized() => Notice.Changed += OnChanged;
+
+    // Raised from whichever thread made the RPC call that noticed.
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Notice.Changed -= OnChanged;
+}

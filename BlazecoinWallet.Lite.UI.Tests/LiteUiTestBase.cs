@@ -48,9 +48,14 @@ public abstract class LiteUiTestBase : TestContext
     protected sealed class FakeRelay : ITxRelay
     {
         public int Calls;
+        public string? LastHex;
+        /// <summary>What the relay ANSWERS — deliberately not the transaction's id: the pages
+        /// must show the wallet's own txid, never this (bug-bounty report 2026-11-06).</summary>
         public LiteBroadcastResult Result = LiteBroadcastResult.Ok("cafebabe");
+        /// <summary>The id of the transaction that was actually handed over.</summary>
+        public string SentTxId => LiteTxId.OfHex(LastHex) ?? throw new InvalidOperationException("Nothing was broadcast.");
         public Task<LiteBroadcastResult> BroadcastAsync(string hex, CancellationToken ct = default)
-        { Calls++; return Task.FromResult(Result); }
+        { Calls++; LastHex = hex; return Task.FromResult(Result); }
     }
 
     protected sealed class FakeScanner : IQrScanner

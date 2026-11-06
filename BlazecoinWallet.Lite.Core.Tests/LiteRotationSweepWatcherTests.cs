@@ -482,11 +482,15 @@ public class LiteRotationSweepWatcherTests
         data.AddUtxo(service.Address, TxId('a'), 0, 10_000_000);
         await watcher.PollOnceAsync(); // baseline
 
-        // A send: the relay accepts, and its change lands back as a NEW outpoint.
-        var sentTxId = TxId('c');
-        data.BroadcastResult = LiteBroadcastResult.Ok(sentTxId);
+        // A send: the relay accepts — and answers with a txid that is NOT the transaction's
+        // (bug-bounty report 2026-11-06). The change lands back as a NEW outpoint under the
+        // transaction's TRUE id, which is the one the wallet must have remembered.
+        data.BroadcastResult = LiteBroadcastResult.Ok(TxId('c'));
         var sent = await service.SendAsync(Slot(9), 4_000_000);
         Assert.True(sent.Success, sent.Error);
+        var sentTxId = LiteTxId.OfHex(data.CapturedBroadcastHex)!;
+        Assert.Equal(sentTxId, sent.TxId);
+        Assert.NotEqual(TxId('c'), sent.TxId);
         data.Utxos[service.Address].Clear();
         data.AddUtxo(service.Address, sentTxId, 1, 6_000_000, confs: 0); // the change output
 

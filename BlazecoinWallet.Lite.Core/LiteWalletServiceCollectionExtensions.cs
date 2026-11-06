@@ -166,8 +166,16 @@ public static class LiteWalletServiceCollectionExtensions
         // PQ_SIGNATURES §7.1 "update required before block N": polls the gateway's status for
         // the fork announcement (30 s, the layout starts it). Personal-node mode has no gateway
         // and nobody to announce — a null client keeps the banner silent for ever.
-        services.AddSingleton<Fork.IForkStatusService>(sp => new Fork.GatewayForkStatusService(
-            options.UsePersonalNode ? null : sp.GetRequiredService<HttpClient>()));
+        // The banner is judged at the wallet's OWN verified tip where the head syncs headers
+        // (a gateway's claimed height cannot carry it past a fork height); the web head has no
+        // header sync and falls back to the gateway's figure.
+        services.AddSingleton<Fork.IForkStatusService>(sp =>
+        {
+            var headers = sp.GetRequiredService<HeaderChainSync>();
+            return new Fork.GatewayForkStatusService(
+                options.UsePersonalNode ? null : sp.GetRequiredService<HttpClient>(),
+                verifiedTip: () => headers.Available ? headers.VerifiedTipHeight : null);
+        });
 
         // Transient comet recolour on the Home balance card (green = received, orange = sent).
         services.TryAddSingleton<CometPulse>();

@@ -57,6 +57,12 @@ public interface IWalletRpc
     /// (RPC, rebuild scripts) surface here; keypool addresses never handed out do not.</summary>
     Task<List<AddressBook.AddressBookEntry>> ListLabelledAddressesAsync();
     Task<string?> SendToAddressAsync(string address, decimal amount, bool subtractFeeFromAmount = false);
+
+    /// <summary>A send that must come out of EXACTLY <paramref name="wallet"/> — the one it was
+    /// reviewed or armed on ("" = the node's default wallet endpoint). If that wallet is not
+    /// loaded the call fails (<see cref="WalletNotLoadedException"/>); it is never executed from
+    /// a different wallet (bug-bounty report 2026-11-06).</summary>
+    Task<string?> SendFromWalletAsync(string wallet, string address, decimal amount, bool subtractFeeFromAmount = false);
     Task<decimal?> EstimateSendFeeAsync(string address, decimal amount, bool subtractFeeFromAmount = false);
     Task<List<string>> ListWalletsAsync();
     Task<List<string>> ListWalletDirAsync();

@@ -100,22 +100,76 @@ public sealed class LiteTxVerifier
         var included = false;
         if (requireInclusionProof)
         {
-            var proofHex = await _reader.GetTxOutProofAsync(txId, ct);
-            if (string.IsNullOrWhiteSpace(proofHex))
-                return new UtxoVerification(false, realSatoshis, false, "No merkle inclusion proof was available for the funding transaction.");
-            var (proofOk, blockHash) = CheckProof(proofHex, txId);
-            if (!proofOk || blockHash == null)
-                return new UtxoVerification(false, realSatoshis, false, "The merkle inclusion proof did not verify — the transaction may not be mined.");
-            if (_headerChain is { Available: true })
-            {
-                var where = await _headerChain.LocateAsync(blockHash, claimedBlockHeight, ct);
-                if (where.Membership != ChainMembership.OnChain)
-                    return new UtxoVerification(false, realSatoshis, false, ChainError(where.Membership));
-            }
+            if (await InclusionErrorAsync(txId, claimedBlockHeight, ct) is string notMined)
+                return new UtxoVerification(false, realSatoshis, false, notMined);
             included = true;
         }
 
         return new UtxoVerification(true, realSatoshis, included, null);
+    }
+
+    /// <summary>Step 3 on its own: the tx's merkle proof must verify, and — whenever a header feed
+    /// is wired — its block must be proven on the chain at <paramref name="claimedBlockHeight"/>.
+    /// Null when the tx is proven mined; otherwise why not.</summary>
+    private async Task<string?> InclusionErrorAsync(string txId, long claimedBlockHeight, CancellationToken ct)
+    {
+        var proofHex = await _reader.GetTxOutProofAsync(txId, ct);
+        if (string.IsNullOrWhiteSpace(proofHex))
+            return "No merkle inclusion proof was available for the funding transaction.";
+        var (proofOk, blockHash) = CheckProof(proofHex, txId);
+        if (!proofOk || blockHash == null)
+            return "The merkle inclusion proof did not verify — the transaction may not be mined.";
+        if (_headerChain is { Available: true })
+        {
+            var where = await _headerChain.LocateAsync(blockHash, claimedBlockHeight, ct);
+            if (where.Membership != ChainMembership.OnChain) return ChainError(where.Membership);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Verifies a RECEIVED history row (bug-bounty report 2026-11-06: history showed whatever
+    /// rows the gateway served). The raw transaction must hash to <paramref name="txId"/>, must
+    /// pay at least <paramref name="claimedSatoshis"/> to addresses in
+    /// <paramref name="ownedAddresses"/>, and must be proven mined (as in
+    /// <see cref="VerifyAsync"/>). <see cref="UtxoVerification.RealSatoshis"/> is what the
+    /// transaction really pays the wallet. "At least", because the row is a NET amount: a
+    /// transaction that also spends the wallet's own coins nets lower than its outputs.
+    /// </summary>
+    public async Task<UtxoVerification> VerifyReceiptAsync(
+        string txId, IReadOnlyCollection<string> ownedAddresses, long claimedSatoshis,
+        long claimedBlockHeight = 0, CancellationToken ct = default)
+    {
+        var hex = await _reader.GetRawTransactionHexAsync(txId, ct);
+        if (string.IsNullOrWhiteSpace(hex))
+            return new UtxoVerification(false, 0, false, "Could not fetch the transaction for verification.");
+
+        Transaction tx;
+        try { tx = Transaction.Parse(hex, _network); }
+        catch { return new UtxoVerification(false, 0, false, "The transaction hex was malformed."); }
+
+        if (!string.Equals(tx.GetHash().ToString(), txId, StringComparison.OrdinalIgnoreCase))
+            return new UtxoVerification(false, 0, false, "The transaction does not hash to its claimed id — the data source is untrustworthy.");
+
+        var ownedScripts = ownedAddresses
+            .Select(a => ScriptForAddress(a, _network))
+            .Where(s => s != null)
+            .ToList();
+        long paid = 0;
+        foreach (var output in tx.Outputs)
+        {
+            var script = output.ScriptPubKey.ToBytes();
+            if (ownedScripts.Any(s => s!.AsSpan().SequenceEqual(script)))
+                paid += output.Value.Satoshi;
+        }
+        if (paid < claimedSatoshis)
+            return new UtxoVerification(false, paid, false,
+                "The transaction does not pay this wallet the amount shown — the data source is untrustworthy.");
+
+        if (await InclusionErrorAsync(txId, claimedBlockHeight, ct) is string notMined)
+            return new UtxoVerification(false, paid, false, notMined);
+
+        return new UtxoVerification(true, paid, true, null);
     }
 
     /// <summary>The scriptPubKey an address commits to — the ONE place the wallet maps an

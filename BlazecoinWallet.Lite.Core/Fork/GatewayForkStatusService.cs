@@ -10,6 +10,12 @@ namespace BlazecoinWallet.Lite.Fork;
 /// announce) keeps <see cref="Current"/> null for ever, which renders nothing.
 /// Mirrors <see cref="IncomingPaymentWatcher"/>: a PeriodicTimer loop started by the layout,
 /// per-cycle failures contained, nothing kills the loop silently.
+/// <para>The status response is unauthenticated and comes from a gateway the wallet does not
+/// trust (bug-bounty report 2026-11-06), so what is read is held to <see cref="ForkAnnouncement"/>'s
+/// rules: fields of the wrong shape are dropped, a fork this build does not follow cannot be
+/// announced at or below the shipped checkpoint, and the announcement is
+/// <see cref="ForkStatus.Authenticated"/> only with a valid project signature. The banner is
+/// judged at the wallet's own verified tip where the head has one.</para>
 /// </summary>
 public sealed class GatewayForkStatusService : IForkStatusService, IDisposable
 {
@@ -21,20 +27,32 @@ public sealed class GatewayForkStatusService : IForkStatusService, IDisposable
     private readonly HttpClient? _http;
     private readonly TimeSpan _interval;
     private readonly Func<DateTime> _clock;
+    private readonly Func<long?> _verifiedTip;
+    private readonly IReadOnlyList<string> _announcementKeys;
     private readonly object _gate = new();
     private CancellationTokenSource? _cts;
 
-    public GatewayForkStatusService(HttpClient? http, TimeSpan? interval = null, Func<DateTime>? clock = null)
+    /// <param name="verifiedTip">The wallet's own proof-of-work verified tip, or null when the
+    /// head has none (the web head, or header sync not wired). Null → the gateway's claim.</param>
+    /// <param name="announcementKeys">The project keys an announcement may be signed with;
+    /// null → the keys pinned in this build (<see cref="ForkAnnouncement.PinnedKeys"/>).</param>
+    public GatewayForkStatusService(HttpClient? http, TimeSpan? interval = null, Func<DateTime>? clock = null,
+        Func<long?>? verifiedTip = null, IReadOnlyList<string>? announcementKeys = null)
     {
         _http = http;
         _interval = interval ?? DefaultInterval;
         _clock = clock ?? (() => DateTime.UtcNow);
+        _verifiedTip = verifiedTip ?? (() => null);
+        _announcementKeys = announcementKeys ?? ForkAnnouncement.PinnedKeys;
     }
 
     public ForkStatus? Current { get; private set; }
 
+    /// <inheritdoc />
+    public long EffectiveTip => _verifiedTip() is long verified and > 0 ? verified : Current?.Tip ?? 0;
+
     public ForkBannerState State =>
-        ForkBanner.Evaluate(Current, LiteClientInfo.Version, LiteClientInfo.SupportedForks, Current?.Tip ?? 0);
+        ForkBanner.Evaluate(Current, LiteClientInfo.Version, LiteClientInfo.SupportedForks, EffectiveTip);
 
     public event Action? Changed;
 
@@ -96,12 +114,25 @@ public sealed class GatewayForkStatusService : IForkStatusService, IDisposable
         catch { return; } // a flaky poll keeps the previous status; next tick retries
         if (body == null) return;
 
+        // Nothing the gateway sent is used as it came: a name or version of the wrong shape is
+        // dropped, and a height that cannot be a coming fork for this build withdraws the
+        // announcement altogether (IsAnnounced needs both a name and a height).
+        var name = ForkAnnouncement.CleanName(body.ForkName);
+        var height = name != null && ForkAnnouncement.IsPlausibleHeight(
+            body.ForkHeight, name, LiteClientInfo.SupportedForks, ForkAnnouncement.ShippedCheckpointHeight)
+            ? body.ForkHeight
+            : null;
+        var minVersion = ForkAnnouncement.CleanVersion(body.MinClientVersion);
+        var authenticated = height != null &&
+            ForkAnnouncement.IsSigned(name, height, minVersion, body.ForkSignature, _announcementKeys);
+
         var next = new ForkStatus(
-            string.IsNullOrWhiteSpace(body.ForkName) ? null : body.ForkName.Trim(),
-            body.ForkHeight,
-            string.IsNullOrWhiteSpace(body.MinClientVersion) ? null : body.MinClientVersion.Trim(),
-            body.DaemonHeight,
-            _clock());
+            height == null ? null : name,
+            height,
+            minVersion,
+            Math.Max(body.DaemonHeight, 0),
+            _clock(),
+            authenticated);
 
         var previous = Current;
         Current = next;
@@ -112,7 +143,8 @@ public sealed class GatewayForkStatusService : IForkStatusService, IDisposable
     /// figure and the Notice→Warning→Stopped transitions.</summary>
     private static bool SameAnnouncement(ForkStatus a, ForkStatus b) =>
         a.ForkName == b.ForkName && a.ForkHeight == b.ForkHeight &&
-        a.MinClientVersion == b.MinClientVersion && a.Tip == b.Tip;
+        a.MinClientVersion == b.MinClientVersion && a.Tip == b.Tip &&
+        a.Authenticated == b.Authenticated;
 
     private void RaiseChanged()
     {
@@ -132,5 +164,6 @@ public sealed class GatewayForkStatusService : IForkStatusService, IDisposable
         public string? ForkName { get; set; }
         public long? ForkHeight { get; set; }
         public string? MinClientVersion { get; set; }
+        public string? ForkSignature { get; set; }
     }
 }

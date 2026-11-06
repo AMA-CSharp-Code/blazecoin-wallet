@@ -19,8 +19,10 @@ public class ForkBannerTests
     private static readonly IReadOnlySet<string> PhoenixAndPq =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "phoenix413", "pqsig" };
 
-    private static ForkStatus At(long tip, string? name = "pqsig", long? height = H, string? min = Build)
-        => new(name, height, min, tip, DateTime.UnixEpoch);
+    // Signed by default: these pin §7.1 as designed, and Stopped takes a signed announcement
+    // (what an UNSIGNED one may do is pinned in ForkAnnouncementTests).
+    private static ForkStatus At(long tip, string? name = "pqsig", long? height = H, string? min = Build, bool signed = true)
+        => new(name, height, min, tip, DateTime.UnixEpoch, signed);
 
     // ── The block-distance boundaries (min == build, so only the height branch speaks) ──
 

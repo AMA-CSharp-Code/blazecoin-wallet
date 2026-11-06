@@ -9,6 +9,7 @@
 @inject BlazecoinWallet.Core.Services.Send.ISendRpc SendRpc
 @inject BlazecoinWallet.Core.Services.Send.SendChangePolicy ChangePolicy
 @inject IAutoPayoutService Ap
+@inject IWalletContext WalletContext
 @inject IAddressBookStore AddrBook
 @inject ISettingsService Settings
 @inject IJSRuntime JS
@@ -59,6 +60,11 @@
                 <p class="confirm-amount">@AmountFormat.Format((_sendMax && _estimatedFee.HasValue) ? (_amount!.Value - _estimatedFee.Value) : _amount!.Value, _amtUnit, _amtDecimals)</p>
                 <p class="confirm-text">to</p>
                 <p class="confirm-addr mono">@_recipientAddress</p>
+                @if (_sendWallet.Length > 0)
+                {
+                    @* The wallet this review is for — the send runs against exactly this one. *@
+                    <p class="confirm-text">from wallet <strong>@_sendWallet</strong></p>
+                }
 
                 <div class="confirm-fee">
                     @if (_estimatedFee.HasValue)
@@ -404,7 +410,27 @@
     private BlazecoinWallet.Core.Services.Send.ChangeDecision? _change;
 
     private BlazecoinWallet.Core.Services.Send.SendRequest RequestFor(decimal amount, bool subtractFee) =>
-        new(_recipientAddress.Trim(), amount, subtractFee, _change?.Change);
+        new(_recipientAddress.Trim(), amount, subtractFee, _change?.Change) { Wallet = _sendWallet };
+
+    // The wallet this payment is being prepared against ("" = the node's default wallet, when
+    // none has been chosen). Taken when the review starts and carried into the send, which runs
+    // against exactly this wallet or not at all: if the selected wallet is unloaded on the node
+    // a balance read re-points the app at another one, and a payment reviewed on "Savings" must
+    // never come out of "Primary" (bug-bounty report 2026-11-06).
+    private string _sendWallet = "";
+
+    private static string WalletName(string wallet) => wallet.Length == 0 ? "the default wallet" : $"\"{wallet}\"";
+
+    /// <summary>True (with the message to show) when the active wallet is no longer the one
+    /// this payment was prepared against.</summary>
+    private bool ActiveWalletMoved(out string? message)
+    {
+        var now = WalletContext.Active ?? "";
+        if (now == _sendWallet) { message = null; return false; }
+        message = $"The active wallet changed from {WalletName(_sendWallet)} to {WalletName(now)} while this payment was being " +
+                  "prepared. Nothing was sent — check which wallet is active, then review the payment again.";
+        return true;
+    }
 
     /// <summary>Amount the custom spinner arrows add/subtract per click — 1
     /// satoshi (the smallest BLZ unit, matching the input's step).</summary>
@@ -529,9 +555,10 @@
                     if (kv.Length != 2) continue;
                     var key = Uri.UnescapeDataString(kv[0]);
                     var val = Uri.UnescapeDataString(kv[1]);
+                    // Strict BIP21 grammar (digits, at most one dot) — the lenient number parse
+                    // read "amount=1,5" as 15 (bug-bounty report 2026-11-06).
                     if (key.Equals("amount", StringComparison.OrdinalIgnoreCase)
-                        && decimal.TryParse(val, System.Globalization.NumberStyles.Number,
-                            System.Globalization.CultureInfo.InvariantCulture, out var a) && a > 0)
+                        && AmountText.TryParsePaymentLink(val, out var a) && a > 0)
                         amount = a;
                     else if (label is null && (key.Equals("label", StringComparison.OrdinalIgnoreCase)
                         || key.Equals("message", StringComparison.OrdinalIgnoreCase)))
@@ -633,6 +660,7 @@
     {
         _error = null;
         _sendMax = false;   // normal send (not a max/empty-the-wallet send)
+        _sendWallet = WalletContext.Active ?? "";   // what the user is looking at as they press Review
         if (string.IsNullOrWhiteSpace(_recipientAddress)) { _error = "Please enter a recipient address"; return; }
         if (!_amount.HasValue || _amount.Value <= 0) { _error = "Please enter a valid amount"; return; }
         if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
@@ -655,6 +683,8 @@
             // back to a flat-rate note in the markup.
             _change = await ChangePolicy.DecideAsync();
             _estimatedFee = await SendRpc.EstimateFeeAsync(RequestFor(_amount.Value, subtractFee: false));
+            // Those reads can be what re-points the app at another wallet — never review a stale one.
+            if (ActiveWalletMoved(out var moved)) { _error = moved; return; }
             _confirming = true;       // show the review step
         }
         else
@@ -668,6 +698,7 @@
     private async Task SendMax()
     {
         _error = null;
+        _sendWallet = WalletContext.Active ?? "";   // the wallet whose balance is about to be emptied
         if (string.IsNullOrWhiteSpace(_recipientAddress)) { _error = "Please enter a recipient address"; return; }
         if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
         if (Ap.PayoutInFlight) { _error = "Auto-payout is broadcasting right now — try again in a moment."; return; }
@@ -678,12 +709,15 @@
         }
 
         var spendable = (await RpcService.GetBalancesAsync())?.Mine?.Trusted ?? 0m;
+        // That balance is only this payment's if the wallet is still the one it started on.
+        if (ActiveWalletMoved(out var movedBeforeMax)) { _error = movedBeforeMax; return; }
         if (spendable <= 0m) { _error = "No spendable balance to send."; return; }
 
         _amount = spendable;
         _sendMax = true;
         _change = null;   // a max send leaves no change
         _estimatedFee = await SendRpc.EstimateFeeAsync(RequestFor(spendable, subtractFee: true));
+        if (ActiveWalletMoved(out var movedAfterEstimate)) { _error = movedAfterEstimate; return; }
         _confirming = true;   // always review a max send — it empties the wallet
     }
 
@@ -694,6 +728,10 @@
         if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
         // Mutual exclusion with the Auto Payout engine — don't contend for the same UTXOs.
         if (Ap.PayoutInFlight) { _error = "Auto-payout is broadcasting right now — try again in a moment."; return; }
+        // The payment was reviewed against one wallet; if the app is on another now, stop here
+        // with a plain explanation. (The send below names its wallet too, so it could not come
+        // out of the wrong one even past this check.)
+        if (ActiveWalletMoved(out var moved)) { _error = moved; _confirming = false; return; }
         _sending = true;
         Ap.ManualSendInProgress = true;   // let the engine defer a live payout while we send
         try

@@ -10,11 +10,45 @@ public sealed class AutoPayoutService : IAutoPayoutService
 {
     private readonly IWalletRpc _rpc;
     private readonly IKeyValueStore _store;
+    private readonly IWalletContext? _wallets;
 
-    public AutoPayoutService(IWalletRpc rpc, IKeyValueStore store)
+    /// <param name="wallets">The active-wallet context. With it the engine remembers WHICH wallet
+    /// it was armed on, stops if the active wallet is no longer that one, and sends from exactly
+    /// that wallet (bug-bounty report 2026-11-06). Without it (older callers, tests) a payout
+    /// goes to whatever wallet the RPC layer addresses.</param>
+    public AutoPayoutService(IWalletRpc rpc, IKeyValueStore store, IWalletContext? wallets = null)
     {
         _rpc = rpc;
         _store = store;
+        _wallets = wallets;
+    }
+
+    /// <summary>The wallet the engine was armed on ("" = the node's default wallet endpoint);
+    /// null when it is not armed or has no wallet context.</summary>
+    public string? ArmedWallet { get; private set; }
+
+    private string? ActiveWalletNow => _wallets == null ? null : _wallets.Active ?? "";
+
+    /// <summary>
+    /// True when the engine was armed on one wallet and the app is now on another. A balance
+    /// read can re-point the app at a different wallet when the selected one is no longer loaded
+    /// on the node; an armed payout must never follow it there — the threshold, the figures and
+    /// the user's decision were all about the wallet it was armed on.
+    /// </summary>
+    private bool WalletChangedSinceArmed => ArmedWallet != null && ActiveWalletNow != ArmedWallet;
+
+    private static string WalletLabel(string? wallet) => string.IsNullOrEmpty(wallet) ? "(default)" : $"\"{wallet}\"";
+
+    private async Task StopForWalletChangeAsync(string during)
+    {
+        var message = $"Auto-payout STOPPED {during}: it was armed on wallet {WalletLabel(ArmedWallet)} and the active wallet " +
+                      $"is now {WalletLabel(ActiveWalletNow)}. Press Start to arm it on the wallet you mean.";
+        AddLog("⚠ " + message);
+        Reason = message;
+        Enabled = false;
+        ArmedWallet = null;
+        await SaveSettingsAsync();
+        Notify();
     }
 
     private const string SettingsKey = "blz_autopayout";
@@ -62,6 +96,7 @@ public sealed class AutoPayoutService : IAutoPayoutService
 
     public async Task StartAsync()
     {
+        ArmedWallet = ActiveWalletNow;   // what the user is looking at when they press Start
         Enabled = true;
         await SaveSettingsAsync();
         await TickAsync(fire: false);
@@ -70,6 +105,7 @@ public sealed class AutoPayoutService : IAutoPayoutService
     public async Task StopAsync()
     {
         Enabled = false;
+        ArmedWallet = null;
         Reason = "";
         await SaveSettingsAsync();
     }
@@ -183,6 +219,10 @@ public sealed class AutoPayoutService : IAutoPayoutService
         try
         {
             var spendable = (await _rpc.GetBalancesAsync())?.Mine?.Trusted ?? 0m;
+            // Checked AFTER the read on purpose: the read itself is what re-points the app at
+            // another wallet when the armed one is gone, and this balance would then be that
+            // other wallet's.
+            if (WalletChangedSinceArmed) { await StopForWalletChangeAsync("before sending anything"); return; }
             Spendable = spendable;
 
             if (Threshold is not decimal thr || thr < 0) { Reason = "Set a threshold (0 or more)."; Notify(); return; }
@@ -241,11 +281,17 @@ public sealed class AutoPayoutService : IAutoPayoutService
                 PayoutInFlight = true;
                 await SetInflightAsync($"{amt:N4} BLZ to {Address.Trim()} at {DateTime.Now:HH:mm:ss}");
                 int done = 0; decimal sentAmt = 0m;
+                var walletChanged = false;
                 foreach (var b in batches)
                 {
                     try
                     {
-                        var txid = await _rpc.SendToAddressAsync(Address.Trim(), b);
+                        // Each batch comes out of the wallet the engine was armed on, by name —
+                        // or not at all.
+                        if (WalletChangedSinceArmed) { walletChanged = true; break; }
+                        var txid = ArmedWallet is string armed
+                            ? await _rpc.SendFromWalletAsync(armed, Address.Trim(), b)
+                            : await _rpc.SendToAddressAsync(Address.Trim(), b);
                         if (string.IsNullOrEmpty(txid)) { AddLog($"FAILED tx {done + 1}/{batches.Count} ({b:N4} BLZ): no txid returned — stopping."); break; }
                         done++; sentAmt += b;
                         _sentToday += b; _lastPayoutUtc = DateTime.UtcNow;
@@ -261,6 +307,12 @@ public sealed class AutoPayoutService : IAutoPayoutService
                 Reason = done == batches.Count
                     ? $"Payout complete — sent {sentAmt:N4} BLZ in {done} tx. Auto-payout stopped."
                     : $"Payout PARTIAL — sent {sentAmt:N4} BLZ in {done}/{batches.Count} tx, then stopped. Check the log.";
+                if (walletChanged)
+                {
+                    await SaveStateAsync();
+                    await StopForWalletChangeAsync($"after {done} of {batches.Count} tx");
+                    return;
+                }
             }
 
             await SaveStateAsync();   // persist final cooldown/daily-cap state (durability)
@@ -268,6 +320,7 @@ public sealed class AutoPayoutService : IAutoPayoutService
             // One-shot: disarm after a payout so it can never repeatedly fire. The stopped
             // state is persisted, so a restart won't re-fire either. Re-arm with Start.
             Enabled = false;
+            ArmedWallet = null;
             await SaveSettingsAsync();
             Notify();
         }

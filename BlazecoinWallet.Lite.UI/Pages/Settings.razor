@@ -275,7 +275,8 @@
             <div class="lite-sub"><strong>Fork</strong> · @fork.ForkName</div>
             <div class="lite-sub"><strong>Activation height</strong> · @fork.ForkHeight!.Value.ToString("N0")</div>
             <div class="lite-sub"><strong>Minimum client</strong> · @(string.IsNullOrWhiteSpace(fork.MinClientVersion) ? "not announced" : "v" + fork.MinClientVersion)</div>
-            <div class="lite-sub"><strong>Gateway tip</strong> · @fork.Tip.ToString("N0")</div>
+            <div class="lite-sub"><strong>Gateway tip</strong> · @fork.Tip.ToString("N0") (the gateway's figure)</div>
+            <div class="lite-sub"><strong>Signed by the Blazecoin project</strong> · @(fork.Authenticated ? "yes" : "no — reported by the gateway only")</div>
         </div>
     </div>
 }

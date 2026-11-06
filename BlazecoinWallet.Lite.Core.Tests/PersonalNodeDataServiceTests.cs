@@ -137,8 +137,9 @@ public class PersonalNodeDataServiceTests
         var result = await service.SendAsync(wallet.GetReceiveAddress(5), 5_000_000);
 
         Assert.True(result.Success, result.Error);
-        Assert.Equal("acceptedbymynode", result.TxId);
         Assert.NotNull(rpc.LastSendHex);               // a real signed tx reached the node
+        // The receipt carries the id of the transaction the wallet signed — never the relay's string.
+        Assert.Equal(LiteTxId.OfHex(rpc.LastSendHex), result.TxId);
     }
 
     private sealed class InlineVault(string words) : ISeedVault

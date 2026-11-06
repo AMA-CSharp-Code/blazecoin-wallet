@@ -9,15 +9,22 @@ namespace BlazecoinWallet.Lite.Fork;
 /// against <see cref="LiteClientInfo.SupportedForks"/>.</param>
 /// <param name="ForkHeight">The activation height <c>H_Q</c>.</param>
 /// <param name="MinClientVersion">The first lite build carrying the fork rules.</param>
-/// <param name="Tip">The gateway's daemon height at the time of the read — block counts are the
-/// authority for "how long is left", never the calendar (Phoenix lesson).</param>
+/// <param name="Tip">The gateway's daemon height at the time of the read — the GATEWAY'S CLAIM.
+/// Block counts are the authority for "how long is left", never the calendar (Phoenix lesson),
+/// but a head with a proof-of-work verified tip judges the banner against that instead
+/// (<see cref="IForkStatusService.EffectiveTip"/>).</param>
 /// <param name="FetchedAtUtc">When this status was read.</param>
+/// <param name="Authenticated">True when the announcement carries a valid signature by a project
+/// key pinned in this build (<see cref="ForkAnnouncement"/>). Only an authenticated announcement
+/// can stop sends; anything else is the gateway's word and is shown as a warning at most
+/// (bug-bounty report 2026-11-06).</param>
 public sealed record ForkStatus(
     string? ForkName,
     long? ForkHeight,
     string? MinClientVersion,
     long Tip,
-    DateTime FetchedAtUtc)
+    DateTime FetchedAtUtc,
+    bool Authenticated = false)
 {
     /// <summary>True when the operator has announced a fork (name + height both set).</summary>
     public bool IsAnnounced => ForkHeight.HasValue && !string.IsNullOrWhiteSpace(ForkName);
@@ -32,6 +39,7 @@ public enum ForkBannerState
     Notice,
     /// <summary>Within two weeks, or a newer client is required — amber, not dismissible; Send still works.</summary>
     Warning,
-    /// <summary>The fork height has passed and this build lacks the rules — red, Send blocked.</summary>
+    /// <summary>The fork height has passed, this build lacks the rules, AND the announcement is
+    /// signed by the project — red, Send blocked. An unsigned announcement never gets here.</summary>
     Stopped,
 }

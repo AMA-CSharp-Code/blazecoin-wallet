@@ -42,7 +42,8 @@ public class SendPageTests : LiteUiTestBase
         cut.FindAll("button").First(b => b.TextContent.Contains("Confirm")).Click();
 
         Assert.Equal(1, relay.Calls);
-        Assert.Contains("cafebabe", cut.Markup); // the returned txid
+        Assert.Contains(relay.SentTxId, cut.Markup);      // the receipt: the id of what was signed
+        Assert.DoesNotContain("cafebabe", cut.Markup);    // never the relay's string
     }
 
     [Theory]
@@ -117,6 +118,7 @@ public class SendPageTests : LiteUiTestBase
 
         // The sweep path went through the relay exactly once and reported success.
         Assert.Equal(1, relay.Calls);
-        Assert.Contains("cafebabe", cut.Markup);
+        Assert.Contains(relay.SentTxId, cut.Markup);
+        Assert.DoesNotContain("cafebabe", cut.Markup);
     }
 }

@@ -75,8 +75,14 @@ public sealed class BrowserWalletStateStore : IWalletStateStore
     public Task SetPqAddressCountAsync(int count)
     { BrowserKv.Set("pq_address_count", count.ToString()); return Task.CompletedTask; }
 
+    public Task<string?> GetVerifiedCoinsAsync()
+        => Task.FromResult(BrowserKv.GetOrNull("verified_coins"));
+    public Task SetVerifiedCoinsAsync(string value)
+    { BrowserKv.Set("verified_coins", value); return Task.CompletedTask; }
+
     public Task ClearAsync()
     {
+        BrowserKv.Remove("verified_coins");
         BrowserKv.Remove("revealed_address_count");
         BrowserKv.Remove("change_address_count");
         BrowserKv.Remove("verified_header_checkpoint");

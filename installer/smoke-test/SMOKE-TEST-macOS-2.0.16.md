@@ -1,0 +1,11 @@
+# macOS 2.0.16 — smoke test (2026-10-31)
+
+Built on the M1 Pro from wallet `main` 36e8617 (Windows 2.0.16: Explorer Lineage, send by explorer lineage, paced explorer asks, provenance stack-overflow fix) with the cached universal **Core 2.1.1** node (`~/blz-mac-build-2.0.11/daemon`; Core `src/` unchanged since 07321df144). No macOS 2.0.14/2.0.15 (lite-wallet package versions only). sha256 bc9f27e474f0470cefdac9f73eeb1572ab07535822768969cab91e5ed3173ad8 (133294108 bytes).
+
+- Core tests: 531/531 on macOS, no Mac changes needed. The deep-trace fix uses RuntimeHelpers.TryEnsureSufficientExecutionStack (implemented by Mono, which the Mac app runs on); explorer calls are plain HTTPS (network.client entitlement present).
+- Bundle: 2.0.16 / build 17; wallet + node x86_64 + arm64; blazecoind v2.1.1; codesign --verify --deep OK; entitlements applied; .xamarin/{maccatalyst-arm64,maccatalyst-x64}; blz:// asset scheme.
+- M1: wallet/node not running before; installed over 2.0.13, wallet started the node, no crash reports, Primary loaded, txindex synced, asset_probe 735/735 errors 0; catching up 4,359,715 → 4,363,703.
+- Intel (macOS 26.7.1, logged in): installed over SSH, launched cleanly first time, no crash reports, Radeon active, node 2.1.1, Primary loaded, txindex synced, asset_probe 735/735 errors 0; catching up 4,366,193 → 4,385,248.
+- NOT exercised by me: an Explorer Lineage ask (sends the wallet's addresses to the explorer — needs Andrew's click), send by explorer lineage, a deep trace. Publish authorised in advance by Andrew ("get it out tonight").
+- 2026-10-31 23:29 UTC: v2.0.16-macos PUBLISHED, marked Latest; public download re-hashed and matches.
+- 2026-10-31 (after publish): Andrew could not see the Explorer Lineage button on his Mac. Not a Mac fault: Provenance.razor line 177 renders the card only when the local trace was truncated (`_report.Truncated` = read or time budget reached) or an ask is in flight/answered. On a wallet whose trace completes, the card never appears, on Windows too. The 'Send by explorer lineage' checkbox in Send A Vintage is unconditional. Whether the card should also be offered after a complete trace (as a cross-check) is a product decision for Andrew.

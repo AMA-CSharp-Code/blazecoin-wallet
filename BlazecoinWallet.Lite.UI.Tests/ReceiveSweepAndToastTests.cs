@@ -85,7 +85,8 @@ public class ReceiveSweepAndToastTests : LiteUiTestBase
         cut.WaitForAssertion(() =>
         {
             Assert.Contains("Recovered!", cut.Markup);
-            Assert.Contains("cafebabe", cut.Markup); // the relay's txid
+            Assert.Contains(relay.SentTxId, cut.Markup);      // the sweep's own txid
+            Assert.DoesNotContain("cafebabe", cut.Markup);    // never the relay's string
         });
         Assert.Equal(1, relay.Calls);
     }

@@ -35,9 +35,17 @@ else
         @* The on-chain vs spendable gap has three distinct causes — name the right one
            instead of blaming maturity for everything (an in-flight send used to read
            as "freshly mined coins wait 30 blocks", which was simply wrong). *@
+        @if (_breakdown is { Unverified: > 0 } unproven)
+        {
+            @* Coins the gateway lists that this wallet has not proven on the chain. They are a
+               claim, not money: never in the figure above, never spendable, until the funding
+               transaction is verified (bug-bounty report 2026-11-06). *@
+            <div class="lite-sub lite-unverified">@AmountText(unproven.Unverified) @_sym not verified against the chain yet — not counted until it is proven.</div>
+        }
         @if (_breakdown is { } bd && _summary != null)
         {
-            var inFlight = Math.Max(0, _summary.Balance - bd.Spendable - bd.ImmatureCoinbase);
+            // The summary is the gateway's figure; unverified coins are part of it, not of "leaving".
+            var inFlight = Math.Max(0, _summary.Balance - bd.Spendable - bd.ImmatureCoinbase - bd.Unverified);
             @if (bd.ImmatureCoinbase > 0)
             {
                 <div class="lite-sub">@AmountText(bd.ImmatureCoinbase) @_sym maturing — freshly mined coins wait 30 blocks.</div>
@@ -137,6 +145,20 @@ else
                             {
                                 <span class="lite-sub"> · @label</span>
                             }
+                            @* A received row is the gateway's word until its transaction is proven
+                               on the chain; say which it is (bug-bounty report 2026-11-06). *@
+                            @switch (h.Check)
+                            {
+                                case LiteHistoryCheck.Unverified:
+                                    <span class="lite-sub lite-history-unverified"> · ⚠ not verified on the chain</span>
+                                    break;
+                                case LiteHistoryCheck.Pending:
+                                    <span class="lite-sub lite-history-pending"> · verifying…</span>
+                                    break;
+                                case LiteHistoryCheck.Unconfirmed:
+                                    <span class="lite-sub lite-history-unconfirmed"> · unconfirmed</span>
+                                    break;
+                            }
                         </span>
                         <span class="lite-txid">
                             @Short(h.TxId) · @h.Timestamp.ToLocalTime().ToString("dd MMM HH:mm") ›
@@ -203,9 +225,18 @@ else
         catch (OperationCanceledException) { /* page disposed */ }
     }
 
+    // Background chain checks settled more coins or rows — show the new figures now instead
+    // of at the next 15-second tick.
+    private void OnVerificationChanged() => _ = InvokeAsync(async () =>
+    {
+        if (_ready) await RefreshAsync();
+        StateHasChanged();
+    });
+
     public void Dispose()
     {
         Comet.Changed -= OnCometChanged;
+        Wallet.VerificationChanged -= OnVerificationChanged;
         _pageGone.Cancel();
         _pageGone.Dispose();
     }
@@ -213,6 +244,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Comet.Changed += OnCometChanged;
+        Wallet.VerificationChanged += OnVerificationChanged;
         if (!await Wallet.UnlockAsync())
         {
             Nav.NavigateTo("setup");

@@ -178,17 +178,119 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
         rows?.Select(r => new LiteVintageRow(r.Key, r.Label, r.Kind, r.Satoshis, r.OutputCount,
             r.FirstHeight, r.FirstTimeUtc, r.LastTimeUtc)).ToList() ?? [];
 
+    /// <summary>
+    /// Relays a signed transaction and reports what the NETWORK made of it — as far as that can
+    /// be known through gateways the wallet does not trust (bug-bounty reports 2026-11-06).
+    /// <list type="bullet">
+    /// <item>The txid returned is the wallet's own (<see cref="LiteTxId"/>), never the relay's string.</item>
+    /// <item>Whatever the first gateway answers, a SECOND gateway is given the same transaction.
+    /// Broadcasting is safe to repeat: a node that already has the transaction says so. This both
+    /// delivers a transaction the first gateway only claimed to relay and tests a rejection the
+    /// first gateway may have invented.</item>
+    /// <item>A rejection is the network's judgement only when two gateways agree; one gateway's
+    /// rejection is reported as exactly that. An acceptance stands on one honest gateway.</item>
+    /// <item>Only an answer that judges the transaction (400/422) is a verdict; a 429 or any 5xx
+    /// judged nothing and is treated as an outage, so the peer-to-peer fallback still runs.</item>
+    /// </list>
+    /// With a single gateway (a custom setup, or every other gateway down) there is nobody to
+    /// ask, and the result says so through <see cref="LiteBroadcastResult.Uncorroborated"/>.
+    /// </summary>
     public async Task<LiteBroadcastResult> BroadcastAsync(string rawTxHex, CancellationToken ct = default)
+    {
+        var ownTxId = LiteTxId.OfHex(rawTxHex);
+
+        var first = await PostBroadcastAsync(rawTxHex, exclude: null, ct);
+        if (first.Verdict == RelayVerdict.NoAnswer)
+            return LiteBroadcastResult.Fail(
+                "Could not reach the Blazecoin service — check your connection.",
+                BroadcastFailureKind.Unreachable);
+
+        // Ask someone else. Without a failover list (AnsweredBy unknown) there is no one to ask.
+        var second = first.AnsweredBy == null
+            ? RelayAttempt.None
+            : await PostBroadcastAsync(rawTxHex, exclude: [first.AnsweredBy], ct);
+
+        foreach (var attempt in new[] { first, second })
+            if (attempt.RelayTxId != null && ownTxId != null &&
+                !string.Equals(attempt.RelayTxId, ownTxId, StringComparison.OrdinalIgnoreCase))
+                _logger.LogWarning("A gateway returned a transaction id that is not the id of the transaction it was sent; ignored.");
+
+        var acceptances = Count(first, second, RelayVerdict.Accepted);
+        var duplicates = Count(first, second, RelayVerdict.Duplicate);
+        var rejections = Count(first, second, RelayVerdict.Rejected);
+
+        if (acceptances > 0)
+        {
+            // Backed when the other gateway also took it or already had it.
+            var backed = acceptances + duplicates == 2;
+            var txId = ownTxId ?? first.RelayTxId ?? second.RelayTxId;
+            return string.IsNullOrEmpty(txId)
+                ? LiteBroadcastResult.Fail("The relay accepted the transaction but returned no txid.", BroadcastFailureKind.Rejected, uncorroborated: !backed)
+                : LiteBroadcastResult.Ok(txId, uncorroborated: !backed);
+        }
+
+        if (duplicates > 0)
+        {
+            var reason = (first.Verdict == RelayVerdict.Duplicate ? first : second).Reason
+                ?? "The network already has this transaction.";
+            return LiteBroadcastResult.Fail(reason, BroadcastFailureKind.Duplicate, uncorroborated: duplicates < 2);
+        }
+
+        if (rejections == 2)
+            return LiteBroadcastResult.Fail(first.Reason!, BroadcastFailureKind.Rejected);
+
+        if (rejections == 1)
+        {
+            var reason = (first.Verdict == RelayVerdict.Rejected ? first : second).Reason!;
+            return LiteBroadcastResult.Fail(
+                reason + " — reported by one gateway only; no second gateway could confirm it. " +
+                "If this looks wrong, switch gateway in Settings and try again.",
+                BroadcastFailureKind.Rejected, uncorroborated: true);
+        }
+
+        // Nobody judged anything (outage answers only) — fallback-eligible.
+        return LiteBroadcastResult.Fail(
+            first.Reason ?? second.Reason ?? "The network node is temporarily unreachable — try again shortly.",
+            BroadcastFailureKind.Unreachable);
+    }
+
+    private static int Count(RelayAttempt a, RelayAttempt b, RelayVerdict verdict)
+        => (a.Verdict == verdict ? 1 : 0) + (b.Verdict == verdict ? 1 : 0);
+
+    /// <summary>What ONE gateway said about a broadcast.</summary>
+    private enum RelayVerdict
+    {
+        /// <summary>No gateway could be reached (or there was no other gateway to ask).</summary>
+        NoAnswer,
+        /// <summary>It answered without judging the transaction: 503, 429, any other 5xx.</summary>
+        NotJudged,
+        Accepted,
+        Duplicate,
+        Rejected,
+    }
+
+    private sealed record RelayAttempt(RelayVerdict Verdict, string? Reason, string? RelayTxId, Uri? AnsweredBy)
+    {
+        public static readonly RelayAttempt None = new(RelayVerdict.NoAnswer, null, null, null);
+    }
+
+    private async Task<RelayAttempt> PostBroadcastAsync(string rawTxHex, IReadOnlyCollection<Uri>? exclude, CancellationToken ct)
     {
         try
         {
-            var res = await _http.PostAsJsonAsync("api/tx/broadcast", new { hex = rawTxHex }, Json, ct);
+            using var request = new HttpRequestMessage(HttpMethod.Post, "api/tx/broadcast")
+            {
+                Content = JsonContent.Create(new { hex = rawTxHex }, options: Json),
+            };
+            if (exclude != null) request.Options.Set(GatewayRouting.Exclude, exclude);
+
+            using var res = await _http.SendAsync(request, ct);
+            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var answeredBy);
+
             if (res.IsSuccessStatusCode)
             {
                 var ok = await res.Content.ReadFromJsonAsync<BroadcastOkJson>(Json, ct);
-                return string.IsNullOrEmpty(ok?.TxId)
-                    ? LiteBroadcastResult.Fail("The relay accepted the transaction but returned no txid.", BroadcastFailureKind.Rejected)
-                    : LiteBroadcastResult.Ok(ok.TxId);
+                return new RelayAttempt(RelayVerdict.Accepted, null, ok?.TxId, answeredBy);
             }
 
             string? reason = null;
@@ -199,20 +301,22 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
             }
             catch { /* non-JSON error body — fall through to the status-based message */ }
 
-            if (res.StatusCode == HttpStatusCode.ServiceUnavailable)
-                return LiteBroadcastResult.Fail(
-                    reason ?? "The network node is temporarily unreachable — try again shortly.",
-                    BroadcastFailureKind.Unreachable);
+            // Only 400 (not a transaction) and 422 (the daemon refused it) judge the transaction.
+            var judged = res.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity;
+            if (!judged)
+                return new RelayAttempt(RelayVerdict.NotJudged,
+                    res.StatusCode == HttpStatusCode.ServiceUnavailable ? reason : null, null, answeredBy);
 
             reason ??= $"The network rejected the transaction ({(int)res.StatusCode}).";
-            return LiteBroadcastResult.Fail(reason, BroadcastReasons.Classify(reason));
+            return new RelayAttempt(
+                BroadcastReasons.Classify(reason) == BroadcastFailureKind.Duplicate ? RelayVerdict.Duplicate : RelayVerdict.Rejected,
+                reason, null, answeredBy);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Broadcast request failed");
-            return LiteBroadcastResult.Fail(
-                "Could not reach the Blazecoin service — check your connection.",
-                BroadcastFailureKind.Unreachable);
+            _logger.LogWarning(ex, exclude == null ? "Broadcast request failed" : "No second gateway answered the broadcast");
+            return RelayAttempt.None;
         }
     }
 

@@ -6,6 +6,12 @@ namespace BlazecoinWallet.Core.Services.Send;
 /// <summary>One manual send: who, how much, whether the fee comes out of the amount, and the change kind.</summary>
 public sealed record SendRequest(string Address, decimal Amount, bool SubtractFeeFromAmount, BlazecoinAddressKind? Change)
 {
+    /// <summary>The wallet this send was REVIEWED against ("" = the node's default wallet
+    /// endpoint, when no wallet had been chosen). When set, the send runs against exactly that
+    /// wallet or fails — it can never come out of another one because the active wallet changed
+    /// between review and confirm (bug-bounty report 2026-11-06). Null = the active wallet.</summary>
+    public string? Wallet { get; init; }
+
     /// <summary>The daemon's <c>change_type</c> option, or null to leave the daemon's own default (-changetype).</summary>
     public string? ChangeType => Change switch
     {
