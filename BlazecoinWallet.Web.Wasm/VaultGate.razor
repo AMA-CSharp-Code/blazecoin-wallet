@@ -1,6 +1,8 @@
 @using Microsoft.AspNetCore.Components.Routing
 @inject BrowserEncryptedSeedVault Vault
 @inject BrowserIdleLock IdleLock
+@inject LiteWalletService Wallet
+@inject IPinLock Pin
 @inject NavigationManager Nav
 @implements IDisposable
 
@@ -186,6 +188,9 @@ else
 
     private async Task ForgetAsync()
     {
+        // The wallet, its saved state AND its app-lock PIN: a PIN left behind locks the setup page
+        // that Forget is about to open, with no way past it (bug-bounty report 2026-11-06).
+        await Wallet.ForgetDeviceWalletAsync(Pin);
         await Vault.ClearAsync();
         await EvaluateAsync();
         Nav.NavigateTo("setup");

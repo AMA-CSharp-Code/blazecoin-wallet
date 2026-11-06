@@ -34,27 +34,42 @@ public partial class ReadPathVerificationTests
 
     /// <summary>A gateway on the wire. It lists whatever coins, summaries and history rows a test
     /// scripts — true or not — and serves the raw transaction and merkle proof of the fixture
-    /// block's transactions only (anything else: 404), unless told to withhold them.</summary>
+    /// block's transactions only (anything else: 404), unless told to withhold them.
+    /// <para>Thread-safe on purpose: the wallet checks coins on a background queue, so a test
+    /// that re-scripts the gateway mid-flight (clearing <see cref="Withheld"/>, say) does so
+    /// while that queue may be reading it. With plain collections that was a data race — an
+    /// occasional wrong answer, and once a test host that never finished (2026-11-06).</para></summary>
     private sealed class Gateway : HttpMessageHandler
     {
-        public readonly Dictionary<string, List<string>> Coins = new(StringComparer.Ordinal);
-        public readonly Dictionary<string, List<string>> History = new(StringComparer.Ordinal);
-        public readonly Dictionary<string, string> Summaries = new(StringComparer.Ordinal);
-        public readonly HashSet<string> Withheld = new(StringComparer.OrdinalIgnoreCase);
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, string[]> Coins = new(StringComparer.Ordinal);
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, string[]> History = new(StringComparer.Ordinal);
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Summaries = new(StringComparer.Ordinal);
+        public readonly ConcurrentSet Withheld = new();
+        /// <summary>txid asked for → the txid whose raw transaction is served in its place.</summary>
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Substitute = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>A case-insensitive set of txids that tolerates a reader and a writer at once.</summary>
+        public sealed class ConcurrentSet
+        {
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _items = new(StringComparer.OrdinalIgnoreCase);
+            public void Add(string item) => _items[item] = 0;
+            public bool Contains(string item) => _items.ContainsKey(item);
+            public void Clear() => _items.Clear();
+        }
         public int RawCalls, ProofCalls;
         public string? BroadcastHex;
 
         public void Coin(string address, string txId, int vout, long sats, int confs = 25, bool coinbase = false)
         {
-            if (!Coins.TryGetValue(address, out var list)) Coins[address] = list = [];
-            list.Add($$"""{"txId":"{{txId}}","outputIndex":{{vout}},"amount":{{sats}},"confirmations":{{confs}},"blockHeight":{{(confs > 0 ? F.BlockHeight : 0)}},"isCoinbase":{{(coinbase ? "true" : "false")}}}""");
+            var row = $$"""{"txId":"{{txId}}","outputIndex":{{vout}},"amount":{{sats}},"confirmations":{{confs}},"blockHeight":{{(confs > 0 ? F.BlockHeight : 0)}},"isCoinbase":{{(coinbase ? "true" : "false")}}}""";
+            Coins.AddOrUpdate(address, [row], (_, rows) => [.. rows, row]);
             Used(address);
         }
 
         public void Row(string address, string txId, long amount, long height = F.BlockHeight)
         {
-            if (!History.TryGetValue(address, out var list)) History[address] = list = [];
-            list.Add($$"""{"txId":"{{txId}}","blockHeight":{{height}},"timestamp":"2026-10-01T00:00:00Z","amount":{{amount}},"type":"{{(amount >= 0 ? "received" : "sent")}}"}""");
+            var row = $$"""{"txId":"{{txId}}","blockHeight":{{height}},"timestamp":"2026-10-01T00:00:00Z","amount":{{amount}},"type":"{{(amount >= 0 ? "received" : "sent")}}"}""";
+            History.AddOrUpdate(address, [row], (_, rows) => [.. rows, row]);
             Used(address);
         }
 
@@ -71,12 +86,13 @@ public partial class ReadPathVerificationTests
             if (path.EndsWith("/transactions"))
             {
                 var rows = History.TryGetValue(parts[^2], out var h) ? h : [];
-                return Json($$"""{"page":1,"pageSize":25,"total":{{rows.Count}},"items":[{{string.Join(",", rows)}}]}""");
+                return Json($$"""{"page":1,"pageSize":25,"total":{{rows.Length}},"items":[{{string.Join(",", rows)}}]}""");
             }
             if (path.EndsWith("/raw"))
             {
                 Interlocked.Increment(ref RawCalls);
-                var hex = Withheld.Contains(parts[^2]) ? null : F.RawHex(parts[^2]);
+                var hex = Withheld.Contains(parts[^2]) ? null
+                    : F.RawHex(Substitute.TryGetValue(parts[^2], out var other) ? other : parts[^2]);
                 return hex == null ? NotFound() : Json($$"""{"txId":"{{parts[^2]}}","hex":"{{hex}}"}""");
             }
             if (path.EndsWith("/proof"))

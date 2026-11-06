@@ -48,6 +48,11 @@ public class AddLiteWalletCompositionTests
         // Read + relay slices alias the SAME instance (ISP without duplication).
         Assert.Same(reader, sp.GetRequiredService<ITxRelay>());
         Assert.Same(reader, sp.GetRequiredService<ILiteWalletData>());
+
+        // Every head gets the address look-ahead (bug-bounty round three), and the gateway source
+        // can ask a second gateway during restore discovery.
+        Assert.True(wallet.LookAheadOnFirstRead);
+        Assert.IsAssignableFrom<IAddressUsageCrossCheck>(reader);
     }
 
     [Fact]

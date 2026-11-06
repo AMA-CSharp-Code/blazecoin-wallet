@@ -11,13 +11,23 @@ public sealed class AutoPayoutService : IAutoPayoutService
     private readonly IWalletRpc _rpc;
     private readonly IKeyValueStore _store;
     private readonly IWalletContext? _wallets;
+    private readonly Send.ISendRpc? _sender;
+    private readonly Send.SendChangePolicy? _changePolicy;
 
     /// <param name="wallets">The active-wallet context. With it the engine remembers WHICH wallet
     /// it was armed on, stops if the active wallet is no longer that one, and sends from exactly
     /// that wallet (bug-bounty report 2026-11-06). Without it (older callers, tests) a payout
     /// goes to whatever wallet the RPC layer addresses.</param>
-    public AutoPayoutService(IWalletRpc rpc, IKeyValueStore store, IWalletContext? wallets = null)
+    /// <param name="sender">With <paramref name="changePolicy"/>: payouts go out through the send path
+    /// that can choose where change returns, so a wallet with post-quantum keys keeps its change
+    /// behind them. Without the pair (older wiring, tests) a payout is a plain <c>sendtoaddress</c>
+    /// and change follows the node's default — which is legacy (bug-bounty report 2026-11-06,
+    /// fourth round: an auto-payout from a BQ… coin put the change on an ECDSA address).</param>
+    public AutoPayoutService(IWalletRpc rpc, IKeyValueStore store, IWalletContext? wallets = null,
+        Send.ISendRpc? sender = null, Send.SendChangePolicy? changePolicy = null)
     {
+        _sender = sender;
+        _changePolicy = changePolicy;
         _rpc = rpc;
         _store = store;
         _wallets = wallets;
@@ -282,6 +292,10 @@ public sealed class AutoPayoutService : IAutoPayoutService
                 await SetInflightAsync($"{amt:N4} BLZ to {Address.Trim()} at {DateTime.Now:HH:mm:ss}");
                 int done = 0; decimal sentAmt = 0m;
                 var walletChanged = false;
+                // Where change goes, decided once for the whole payout: post-quantum when this wallet can.
+                Mining.BlazecoinAddressKind? changeKind = null;
+                if (_sender != null && _changePolicy != null)
+                    changeKind = (await _changePolicy.DecideAsync()).Change;
                 foreach (var b in batches)
                 {
                     try
@@ -289,9 +303,11 @@ public sealed class AutoPayoutService : IAutoPayoutService
                         // Each batch comes out of the wallet the engine was armed on, by name —
                         // or not at all.
                         if (WalletChangedSinceArmed) { walletChanged = true; break; }
-                        var txid = ArmedWallet is string armed
-                            ? await _rpc.SendFromWalletAsync(armed, Address.Trim(), b)
-                            : await _rpc.SendToAddressAsync(Address.Trim(), b);
+                        var txid = _sender != null && changeKind != null
+                            ? await _sender.SendAsync(new Send.SendRequest(Address.Trim(), b, false, changeKind) { Wallet = ArmedWallet })
+                            : ArmedWallet is string armed
+                                ? await _rpc.SendFromWalletAsync(armed, Address.Trim(), b)
+                                : await _rpc.SendToAddressAsync(Address.Trim(), b);
                         if (string.IsNullOrEmpty(txid)) { AddLog($"FAILED tx {done + 1}/{batches.Count} ({b:N4} BLZ): no txid returned — stopping."); break; }
                         done++; sentAmt += b;
                         _sentToday += b; _lastPayoutUtc = DateTime.UtcNow;

@@ -158,7 +158,12 @@ public static class LiteWalletServiceCollectionExtensions
                     headerChain: sp.GetRequiredService<HeaderChainSync>())
                 : null,
             sp.GetRequiredService<IWalletStateStore>(),
-            sp.GetRequiredService<HeaderChainSync>()));
+            sp.GetRequiredService<HeaderChainSync>())
+        {
+            // Once per session, look one gap past the saved address counts for coins a restore
+            // was told did not exist (bug-bounty report 2026-11-06, third round).
+            LookAheadOnFirstRead = true,
+        });
 
         // Foreground incoming-payment detection (the layout starts it once unlocked).
         services.AddSingleton(sp => new IncomingPaymentWatcher(sp.GetRequiredService<LiteWalletService>()));

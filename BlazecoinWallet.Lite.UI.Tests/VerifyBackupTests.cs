@@ -23,6 +23,23 @@ public class VerifyBackupTests : LiteUiTestBase
     }
 
     [Fact]
+    public void A_wallet_with_no_record_of_the_flag_is_warned_and_quizzed_not_told_it_is_proven()
+    {
+        // Bug-bounty report 2026-11-06: the vault holds a wallet but the state store has no record of
+        // the backup flag (state cleared, a write that never landed). That used to read as verified.
+        var reader = new FakeReader();
+        Wire(new LoadedVault(), reader, new FakeRelay());
+        Services.AddSingleton(new LiteWalletService(new LoadedVault(), reader, new FakeRelay()));   // last one wins: a fresh store
+
+        var home = RenderComponent<Home>();
+        home.WaitForAssertion(() => Assert.Contains("lite-backup-chip", home.Markup));               // was: no chip
+
+        var verify = RenderComponent<VerifyBackup>();
+        verify.WaitForAssertion(() => Assert.Contains("Show my recovery phrase", verify.Markup));    // the quiz is offered
+        Assert.DoesNotContain("has been", verify.Markup);                                            // was: "…the written copy has been proven"
+    }
+
+    [Fact]
     public async Task Created_wallet_shows_the_chip_and_the_verify_quiz_clears_it()
     {
         var vault = new LoadedVault { Words = null };

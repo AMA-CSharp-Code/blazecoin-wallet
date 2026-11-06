@@ -223,7 +223,7 @@
     protected override Task OnDaemonReconnectedAsync()
     {
         _status = Miner.GetStatus();
-        _payoutAddress = _status.PayoutAddress ?? _payoutAddress;
+        _payoutAddress = _status.PayoutAddress;   // the miner's own memory is the only one: it drops the address when the wallet changes
         return Task.CompletedTask;
     }
 
@@ -235,7 +235,7 @@
     private void OnStatusChanged(MiningStatus s)
     {
         _status = s;
-        _payoutAddress = s.PayoutAddress ?? _payoutAddress;
+        _payoutAddress = s.PayoutAddress;
         InvokeAsync(StateHasChanged);
     }
 

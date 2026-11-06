@@ -45,7 +45,7 @@ public sealed class DevFileWalletStateStore : IWalletStateStore
     }
 
     public async Task<bool> GetBackupVerifiedAsync()
-        => !File.Exists(BackupVerifiedPath) || (await File.ReadAllTextAsync(BackupVerifiedPath)).Trim() == "1";
+        => File.Exists(BackupVerifiedPath) && (await File.ReadAllTextAsync(BackupVerifiedPath)).Trim() == "1";   // no record = not verified
 
     public async Task SetBackupVerifiedAsync(bool verified)
     {

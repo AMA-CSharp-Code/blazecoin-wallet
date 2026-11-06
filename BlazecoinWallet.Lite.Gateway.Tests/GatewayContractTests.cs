@@ -147,6 +147,29 @@ public class GatewayContractTests : IDisposable
     }
 
     [Fact]
+    public async Task An_address_whose_only_payment_is_unconfirmed_is_not_reported_as_unused()
+    {
+        // Bug-bounty report 2026-11-06 (fourth round): the summary answered 404 for such an address while
+        // /utxos listed its pending payment — and a restore's gap scan asks the SUMMARY, so it passed over it.
+        var paid = WalletAddress(7);
+        var quiet = WalletAddress(8);
+        Status.DaemonReachable = true;
+        Status.DaemonHeight = 100;
+        Status.IndexedHeight = 100;
+        Mempool.Replace(
+            [new MempoolUtxo(FakeDaemonRpc.TxId("pending"), 0, paid, 750_000), new MempoolUtxo(FakeDaemonRpc.TxId("pending"), 1, paid, 250_000)],
+            [], 1);
+
+        var summary = await _client.GetAddressAsync(paid);
+
+        Assert.NotNull(summary);                                        // was null: 404
+        Assert.Equal(1, summary!.TxCount);                              // two outputs, one transaction
+        Assert.Equal(0, summary.Balance);                               // the figures stay the confirmed ones
+        Assert.True(await _client.IsAddressUsedByAnyGatewayAsync(paid));   // what restore discovery asks
+        Assert.Null(await _client.GetAddressAsync(quiet));              // a never-seen address is still 404
+    }
+
+    [Fact]
     public async Task Raw_and_proof_passthroughs_feed_the_wallets_trustless_verifier()
     {
         var txId = FakeDaemonRpc.TxId("verified");

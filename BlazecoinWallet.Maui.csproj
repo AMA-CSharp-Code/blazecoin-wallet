@@ -64,8 +64,8 @@
         <ApplicationId Condition="$(TargetFramework.Contains('-maccatalyst'))">uk.co.blazecoin.wallet</ApplicationId>
 
         <!-- Versions -->
-        <ApplicationDisplayVersion>2.0.17</ApplicationDisplayVersion> <!-- 2.0.17 = desktop: a send runs against the wallet it was reviewed on (RPC -18 is retried for reads only), auto-payout stops when the active wallet changes, a notice when the active wallet is switched, strict payment-link amounts (bug-bounty round 2026-11-06); 2.0.16 = desktop: Explorer Lineage + send by explorer lineage + paced asks + the provenance stack-overflow fix + Sign Message in Core; 2.0.15 = Core + Lite.Core packages for lite 1.3.2 (provenance time budgets), no desktop installer; 2.0.14 = Core + Lite.Core packages for the lite 1.3.1 security release; no desktop installer was built at this version -->
-        <ApplicationVersion>18</ApplicationVersion>
+        <ApplicationDisplayVersion>2.0.18</ApplicationDisplayVersion> <!-- 2.0.18 = desktop: change from a Provenance vintage send or an auto-payout returns to a post-quantum address whenever the wallet can make one, the solo miner's payout address follows the active wallet (bug-bounty round four 2026-11-06); 2.0.17 = desktop: a send runs against the wallet it was reviewed on (RPC -18 is retried for reads only), auto-payout stops when the active wallet changes, a notice when the active wallet is switched, strict payment-link amounts (bug-bounty round 2026-11-06); 2.0.16 = desktop: Explorer Lineage + send by explorer lineage + paced asks + the provenance stack-overflow fix + Sign Message in Core; 2.0.15 = Core + Lite.Core packages for lite 1.3.2 (provenance time budgets), no desktop installer; 2.0.14 = Core + Lite.Core packages for the lite 1.3.1 security release; no desktop installer was built at this version -->
+        <ApplicationVersion>19</ApplicationVersion>
 
         <!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
         <WindowsPackageType>None</WindowsPackageType>

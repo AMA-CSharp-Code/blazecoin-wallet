@@ -16,7 +16,7 @@
     <p class="lite-sub">
         Paste a Blazecoin private key (WIF — from the original 2014 wallet's
         <i>dumpprivkey</i> or a paper backup). The wallet checks what it holds on-chain,
-        then sweeps everything into your own address here. The key never leaves this device.
+        then sweeps every coin it has verified into your own address here. The key never leaves this device.
     </p>
 
     @if (_check?.Valid != true)
@@ -42,6 +42,20 @@
             {
                 <div class="lite-sub" style="margin-top:4px">
                     + @AmountText(_check.ImmatureSatoshis) @_sym still maturing (freshly mined — try again after 30 confirmations).
+                </div>
+            }
+            @if (_check.UnconfirmedSatoshis > 0)
+            {
+                <div class="lite-sub" style="margin-top:4px">
+                    + @AmountText(_check.UnconfirmedSatoshis) @_sym not confirmed yet — check the key again after its first confirmation.
+                </div>
+            }
+            @if (_check.UnverifiedSatoshis > 0)
+            {
+                <div class="lite-sub" style="margin-top:4px">
+                    ⚠️ @AmountText(_check.UnverifiedSatoshis) @_sym more is listed by the gateway but could not be
+                    verified against the chain, so it is not counted and will not be swept.
+                    @if (!string.IsNullOrEmpty(_check.UnverifiedReason)) { <text>@_check.UnverifiedReason</text> }
                 </div>
             }
             <div class="lite-sub" style="margin-top:10px">Destination — your wallet@(Lite.BlazecoinAddress.IsPostQuantum(_destination) ? " (post-quantum address)" : "")</div>

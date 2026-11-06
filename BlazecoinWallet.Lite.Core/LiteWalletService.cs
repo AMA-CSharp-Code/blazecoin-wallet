@@ -36,8 +36,24 @@ public sealed record LiteBalanceBreakdown(long Spendable, long ImmatureCoinbase,
     long SpendableLegacy = 0, long Unverified = 0);
 
 /// <summary>What a WIF key holds on-chain — shown before the user commits to a sweep.</summary>
+/// <param name="SpendableSatoshis">Coins PROVEN on the chain and mature — what a sweep moves now.</param>
+/// <param name="ImmatureSatoshis">Proven mined coins still short of coinbase maturity.</param>
+/// <param name="UnverifiedSatoshis">Confirmed coins the gateway lists for the key that the wallet
+/// could NOT prove on the chain (bug-bounty report 2026-11-06, third round: this screen summed the
+/// gateway's rows as served). A claim, never counted and never swept.</param>
+/// <param name="UnconfirmedSatoshis">Coins the gateway lists with no confirmation yet — nothing to
+/// prove until they are mined, so not recoverable yet.</param>
+/// <param name="UnverifiedReason">Why the last unproven coin failed its check.</param>
 public sealed record LiteWifCheck(bool Valid, string? Error, string? Address,
-    long SpendableSatoshis, long ImmatureSatoshis, int UtxoCount);
+    long SpendableSatoshis, long ImmatureSatoshis, int UtxoCount,
+    long UnverifiedSatoshis = 0, long UnconfirmedSatoshis = 0, string? UnverifiedReason = null);
+
+/// <summary>A transaction fetched by id for display.</summary>
+/// <param name="Details">The decoded transaction; null when it could not be fetched or decoded,
+/// or when <paramref name="Mismatch"/> is set.</param>
+/// <param name="Mismatch">The source answered with a transaction that does NOT hash to the id that
+/// was asked for (bug-bounty report 2026-11-06, third round). Nothing from it may be shown.</param>
+public sealed record LiteTxLookup(LiteTxDetails? Details, bool Mismatch);
 
 /// <summary>A transaction checked against the wallet's own PoW-verified header chain.</summary>
 /// <param name="ProofValid">The merkle+PoW inclusion proof is well-formed against its own header
@@ -85,6 +101,13 @@ public sealed class LiteWalletService : IWalletUtxoSource
     private readonly LiteTxVerifier? _verifier;
     private readonly IWalletStateStore _stateStore;
     private readonly ChainCheckQueue? _checks;   // null when the source is authoritative (no verifier)
+
+    /// <summary>What a proven coin IS, read from the proof and not from the gateway's row: whether
+    /// its funding transaction is a coinbase, and the height the header chain placed its block at
+    /// (0 = no header feed). Keyed like the coin checks (bug-bounty report 2026-11-06, fourth round).</summary>
+    private readonly record struct CoinFacts(bool IsCoinbase, long Height);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, CoinFacts> _coinFacts =
+        new(StringComparer.OrdinalIgnoreCase);
     private bool _verifiedCoinsLoaded;
     private string? _verifiedCoinsSaved;
     private LiteHdWallet? _wallet;
@@ -243,6 +266,22 @@ public sealed class LiteWalletService : IWalletUtxoSource
         return new LiteChainProof(inc.ProofValid, inc.OnVerifiedChain, inc.Height, confs, inc.Error, inc.OffChain);
     }
 
+    /// <summary>
+    /// A transaction for the detail page, bound to the id that was asked for: the id IS the hash
+    /// of the transaction, so whatever the source returns must hash to it. Before (bug-bounty
+    /// report 2026-11-06, third round) the page decoded whatever came back and showed its outputs,
+    /// while the "verified on your own chain" badge was earned separately by the REQUESTED id —
+    /// a gateway could put any other transaction's outputs under a genuine badge.
+    /// </summary>
+    public async Task<LiteTxLookup> GetTransactionAsync(string txId, CancellationToken ct = default)
+    {
+        var details = LiteTxDecoder.Decode(await _reader.GetRawTransactionHexAsync(txId, ct));
+        if (details == null) return new LiteTxLookup(null, false);
+        return string.Equals(details.TxId, (txId ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)
+            ? new LiteTxLookup(details, false)
+            : new LiteTxLookup(null, true);
+    }
+
     /// <summary>Confirmations to trust for maturity: capped to the PoW-verified tip when header
     /// sync is live, else the gateway's own count.</summary>
     private int TrustedConfirmations(LiteChainUtxo u) =>
@@ -311,6 +350,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
         await _stateStore.SetBackupVerifiedAsync(false);
         _wallet = wallet;
         await _rotation.InitializeNewAsync();
+        _lookAhead = Task.CompletedTask;   // a brand-new seed has nothing further out to find
         return wallet.MnemonicWords;
     }
 
@@ -328,6 +368,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
         // The PQ chain is only worth scanning once the fork has a height — before that this
         // wallet can never have revealed a BQ address.
         await _rotation.DiscoverFromChainAsync(wallet, discoverPq: PqActivationHeight != null);
+        _lookAhead = Task.CompletedTask;   // the scan above just looked; the next session looks again
     }
 
     /// <summary>False until the recovery-phrase backup is PROVEN (quiz passed / restored
@@ -361,7 +402,11 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// idle/manual lock). The next <see cref="UnlockAsync"/> re-reads the vault, so a vault
     /// that has been re-locked forces the unlock ceremony again. Rotation state is persisted
     /// and reloaded on unlock, so nothing is lost.</summary>
-    public void Lock() => _wallet = null;
+    public void Lock()
+    {
+        _wallet = null;
+        _lookAhead = null;
+    }
 
     /// <summary>Wipes the device wallet (the mnemonic backup remains the only recovery).</summary>
     public async Task ResetAsync()
@@ -369,11 +414,27 @@ public sealed class LiteWalletService : IWalletUtxoSource
         await _vault.ClearAsync();
         await _rotation.ResetAsync();
         _wallet = null;
+        _lookAhead = null;
         _pipeline.Reset();
         _pendingSpent.Clear();
         _checks?.Clear();
+        _coinFacts.Clear();
         _verifiedCoinsLoaded = false;
         _verifiedCoinsSaved = null;
+    }
+
+    /// <summary>
+    /// "Forget this wallet" — everything this device holds about it: the seed, the saved state
+    /// (address positions, proven coins, the backup flag) and the app-lock PIN that guarded it.
+    /// The web wallet's Forget used to clear the vault alone (bug-bounty report 2026-11-06, fourth
+    /// round): the PIN stayed, so the lock screen came up over the setup page — and it has no
+    /// "forgot PIN" path, because until now a PIN could not outlive its wallet — and the next
+    /// wallet inherited the last one's saved state.
+    /// </summary>
+    public async Task ForgetDeviceWalletAsync(IPinLock? pin)
+    {
+        await ResetAsync();
+        pin?.Clear();
     }
 
     /// <summary>Reveals the next fresh receive address (rotation). See
@@ -516,6 +577,43 @@ public sealed class LiteWalletService : IWalletUtxoSource
         return new LiteBalanceBreakdown(spendable, immature, incoming, legacy, unverified);
     }
 
+    // ── Address look-ahead ───────────────────────────────────────────────────────────────
+    // A restore saves how many addresses it found in use, and the gateway it asked could have
+    // under-reported (bug-bounty report 2026-11-06, third round): the saved count then hid every
+    // coin further out, even after switching to an honest gateway, until the user restored again
+    // — and nothing told them to. So once per unlocked session (a gateway change needs a restart,
+    // so that is also once per gateway) the wallet looks one gap past each saved count for coins
+    // it can PROVE and moves the count forward. It only ever moves forward, and only on proof, so
+    // a lying gateway can neither shrink the view nor inflate it. Gateway mode only: the user's
+    // own node is authoritative, and asking a bare node per address is expensive.
+    private Task? _lookAhead;
+
+    /// <summary>Whether the first coin read of a session starts the address look-ahead. The
+    /// composition root switches it ON for every head (<c>AddLiteWallet</c>); a service built by
+    /// hand leaves it off, so a caller that scripts its own data source is never read from a
+    /// second flow it did not ask for.</summary>
+    public bool LookAheadOnFirstRead { get; set; }
+
+    private void StartLookAhead()
+    {
+        if (!LookAheadOnFirstRead || _verifier == null || _lookAhead != null || _wallet == null) return;
+        _lookAhead = LookAheadAsync(_wallet);
+    }
+
+    private async Task LookAheadAsync(LiteHdWallet wallet)
+    {
+        try
+        {
+            await Task.Yield();   // never on the caller's read
+            if (await _rotation.ExtendFromChainAsync(wallet, includePq: PqActivationHeight != null, CancellationToken.None))
+                VerificationChanged?.Invoke();   // more addresses are owned now: pages re-read
+        }
+        catch { /* best effort — the next session looks again */ }
+    }
+
+    /// <summary>Completes when this session's address look-ahead has finished (tests await it).</summary>
+    internal Task WhenLookAheadIdleAsync() => _lookAhead ?? Task.CompletedTask;
+
     // ── Pending-spent overlay ────────────────────────────────────────────────────────────
     // Outpoints THIS session just spent, kept out of every UTXO read until the gateway's own
     // view reflects the spend. The gateway folds a new mempool tx into its UTXO answers on a
@@ -550,6 +648,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// </summary>
     public async Task<IReadOnlyList<LiteOwnedUtxo>> GetAllUtxosAsync(CancellationToken ct = default)
     {
+        StartLookAhead();
         var owned = await ReadOwnedUtxosAsync(ct);
         if (_checks == null) return owned;                    // own node: authoritative
 
@@ -560,10 +659,27 @@ public sealed class LiteWalletService : IWalletUtxoSource
 
         var marked = owned.Select(u =>
             u.Utxo.Confirmations > 0 && _checks.TryGetVerified(CoinKey(u), out var real)
-                ? u with { Verified = true, Utxo = u.Utxo with { Amount = real } }
+                ? u with { Verified = true, Utxo = WithProvenFacts(u, real) }
                 : u with { Verified = false }).ToList();
         await SaveVerifiedCoinsAsync(marked);
         return marked;
+    }
+
+    /// <summary>A proven coin as the chain describes it: its real value, whether it is a coinbase
+    /// (from its own transaction) and, where the header chain placed its block, its real height.
+    /// The gateway's row supplied none of these — only the claim that was then checked. Before
+    /// (bug-bounty report 2026-11-06, fourth round) the coinbase flag and height stayed the
+    /// gateway's, so "isCoinbase: true" on an ordinary coin locked it as immature for as long
+    /// as that gateway was used.</summary>
+    private LiteChainUtxo WithProvenFacts(LiteOwnedUtxo u, long realSatoshis)
+    {
+        var utxo = u.Utxo with { Amount = realSatoshis };
+        if (!_coinFacts.TryGetValue(CoinKey(u), out var facts)) return utxo;
+        return utxo with
+        {
+            IsCoinbase = facts.IsCoinbase,
+            BlockHeight = facts.Height > 0 ? facts.Height : utxo.BlockHeight,
+        };
     }
 
     // The owning address is part of the key: the proof is "this output pays THIS address".
@@ -574,6 +690,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
         {
             var v = await _verifier!.VerifyAsync(u.Utxo.TxId, u.Utxo.OutputIndex, u.Utxo.Amount,
                 requireInclusionProof: true, expectedAddress: u.Address, claimedBlockHeight: u.Utxo.BlockHeight, ct: ct);
+            if (v.Verified) _coinFacts[CoinKey(u)] = new CoinFacts(v.IsCoinbase, v.VerifiedHeight ?? 0);   // before the queue marks it proven
             return new ChainCheckQueue.Outcome(v.Verified, v.RealSatoshis, v.Error);
         }, Priority: u.Utxo.Amount);   // the coins that matter most first
 
@@ -588,10 +705,18 @@ public sealed class LiteWalletService : IWalletUtxoSource
             _verifiedCoinsSaved = text;
             foreach (var entry in (text ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries))
             {
+                // txid:vout:address:sats:coinbase(0|1):height. An entry in the four-field form
+                // 1.3.3 wrote says nothing about the coin's kind, so it is not adopted — the coin
+                // is simply proven again, once, and written back in full.
                 var p = entry.Split(':');
-                if (p.Length == 4 && p[0].Length == 64 && int.TryParse(p[1], out var vout) && vout >= 0 &&
-                    long.TryParse(p[3], out var sats) && sats > 0)
-                    _checks!.Seed($"c:{p[0]}:{vout}:{p[2]}", sats);
+                if (p.Length == 6 && p[0].Length == 64 && int.TryParse(p[1], out var vout) && vout >= 0 &&
+                    long.TryParse(p[3], out var sats) && sats > 0 &&
+                    (p[4] == "0" || p[4] == "1") && long.TryParse(p[5], out var height) && height >= 0)
+                {
+                    var key = $"c:{p[0]}:{vout}:{p[2]}";
+                    _coinFacts[key] = new CoinFacts(p[4] == "1", height);
+                    _checks!.Seed(key, sats);
+                }
             }
         }
         catch { /* losing the remembered set only costs a re-verification */ }
@@ -601,13 +726,17 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// a failed read returns no coins, and must not forget the proofs.</summary>
     private async Task SaveVerifiedCoinsAsync(IReadOnlyList<LiteOwnedUtxo> coins)
     {
-        var proven = coins.Where(u => u.Verified).ToList();
+        var proven = coins.Where(u => u.Verified && _coinFacts.ContainsKey(CoinKey(u))).ToList();
         if (proven.Count == 0) return;
         var text = string.Join(';', proven
             .OrderByDescending(u => u.Utxo.Amount)
             .Take(MaxPersistedVerifiedCoins)
             .OrderBy(u => u.Utxo.TxId, StringComparer.Ordinal).ThenBy(u => u.Utxo.OutputIndex)
-            .Select(u => $"{u.Utxo.TxId}:{u.Utxo.OutputIndex}:{u.Address}:{u.Utxo.Amount}"));
+            .Select(u =>
+            {
+                var facts = _coinFacts[CoinKey(u)];
+                return $"{u.Utxo.TxId}:{u.Utxo.OutputIndex}:{u.Address}:{u.Utxo.Amount}:{(facts.IsCoinbase ? 1 : 0)}:{facts.Height}";
+            }));
         if (text == _verifiedCoinsSaved) return;
         _verifiedCoinsSaved = text;
         try { await _stateStore.SetVerifiedCoinsAsync(text); }
@@ -881,16 +1010,19 @@ public sealed class LiteWalletService : IWalletUtxoSource
 
         try
         {
-            var spendable = holding.Spendable.Sum(u => u.Amount);
-            var immature = holding.All.Sum(u => u.Amount) - spendable;
-            return new LiteWifCheck(true, null, holding.Address, spendable, immature, holding.All.Count);
+            return new LiteWifCheck(true, null, holding.Address,
+                holding.Spendable.Sum(u => u.Amount), holding.ImmatureSatoshis, holding.All.Count,
+                holding.UnverifiedSatoshis, holding.UnconfirmedSatoshis, holding.UnverifiedReason);
         }
         finally { holding.Key.Dispose(); } // the check only needs the address; wipe the key now
     }
 
     /// <summary>
-    /// Sweeps EVERYTHING a legacy WIF key holds into this wallet's current receive address:
-    /// chain-verify the old coins (C1/M3), sign with the imported key on-device, broadcast.
+    /// Sweeps what a legacy WIF key PROVABLY holds into this wallet's current receive address:
+    /// only coins already proven on the chain go in, so a row the gateway made up — or a genuine
+    /// payment not yet mined — can no longer fail the whole sweep and strand the real coins
+    /// (the pipeline verifies every input again before signing, C1/M3, and stops on any failure).
+    /// Signed with the imported key on-device, then broadcast.
     /// The imported key is held only for the duration of the call — the mnemonic remains the
     /// wallet's single backup.
     /// </summary>
@@ -907,7 +1039,12 @@ public sealed class LiteWalletService : IWalletUtxoSource
         try
         {
             if (holding.Spendable.Count == 0)
-                return new LiteSendResult(false, null, "That key holds no spendable coins (freshly mined coins need 30 confirmations first).");
+                return new LiteSendResult(false, null,
+                    holding.UnverifiedSatoshis > 0
+                        ? $"Could not verify this key's coins against the chain: {holding.UnverifiedReason} Refresh and try again, or switch gateway in Settings."
+                        : holding.UnconfirmedSatoshis > 0
+                            ? "This key's coins are not confirmed yet — sweep them after their first confirmation (about 30 seconds)."
+                            : "That key holds no spendable coins (freshly mined coins need 30 confirmations first).");
 
             var inputs = holding.Spendable.Select(u => new LiteUtxo(u.TxId, u.OutputIndex, u.Amount, holding.Address, BlockHeight: u.BlockHeight)).ToList();
             return await _pipeline.ExecuteAsync(destination, inputs, amountSatoshis: null, destination,
@@ -916,11 +1053,23 @@ public sealed class LiteWalletService : IWalletUtxoSource
         finally { holding.Key.Dispose(); } // wipe the imported key the moment the sweep is done
     }
 
-    private sealed record WifHolding(Key Key, string Address, IReadOnlyList<LiteChainUtxo> All, List<LiteChainUtxo> Spendable);
+    /// <param name="All">The gateway's rows for the key, as served.</param>
+    /// <param name="Spendable">Proven on the chain and mature, largest first, each carrying the
+    /// value the chain commits to.</param>
+    private sealed record WifHolding(Key Key, string Address, IReadOnlyList<LiteChainUtxo> All, List<LiteChainUtxo> Spendable,
+        long ImmatureSatoshis, long UnverifiedSatoshis, long UnconfirmedSatoshis, string? UnverifiedReason);
 
-    /// <summary>Shared WIF parse + chain lookup for check and sweep (one truth for both).
+    /// <summary>
+    /// Shared WIF parse + chain lookup for check and sweep (one truth for both). In gateway mode
+    /// the rows are a claim until checked, exactly as on the balance path: a coin counts only once
+    /// its funding transaction hashes to its id, pays this key's address and is proven mined — and
+    /// then at the value the chain commits to, whatever the gateway said (bug-bounty report
+    /// 2026-11-06, third round: this flow summed the rows as served, so "Recoverable now" showed
+    /// whatever a gateway listed, and one made-up row then failed the whole sweep). The checks run
+    /// here, largest coin first — the user is waiting on exactly these.
     /// The caller OWNS the returned <see cref="WifHolding.Key"/> and must dispose it —
-    /// NBitcoin's Key zeroizes its secret on Dispose (security audit S5).</summary>
+    /// NBitcoin's Key zeroizes its secret on Dispose (security audit S5).
+    /// </summary>
     private async Task<WifHolding?> LoadWifHoldingAsync(string wif, CancellationToken ct)
     {
         Key key;
@@ -929,8 +1078,44 @@ public sealed class LiteWalletService : IWalletUtxoSource
 
         var address = key.GetAddress(ScriptPubKeyType.Legacy, BlazecoinNetwork.Instance).ToString();
         var utxos = await _reader.GetUtxosAsync(address, ct);
-        var spendable = utxos.Where(u => !u.IsCoinbase || TrustedConfirmations(u) >= CoinbaseMaturity).ToList();
-        return new WifHolding(key, address, utxos, spendable);
+
+        var spendable = new List<LiteChainUtxo>();
+        long immature = 0, unverified = 0, unconfirmed = 0;
+        string? reason = null;
+        var checkedCoins = 0;
+        foreach (var u in utxos.OrderByDescending(u => u.Amount))
+        {
+            var conf = TrustedConfirmations(u);
+            if (conf <= 0) { unconfirmed += u.Amount; continue; }   // nothing to prove until it is mined
+
+            var coin = u;
+            if (_verifier != null)
+            {
+                if (checkedCoins >= MaxInputsPerMove)
+                {
+                    // One sweep cannot carry more inputs than this anyway: the rest wait for the next pass.
+                    unverified += u.Amount;
+                    reason ??= "This key holds more coins than one sweep can carry — sweep these, then check the key again.";
+                    continue;
+                }
+                checkedCoins++;
+                var v = await _verifier.VerifyAsync(u.TxId, u.OutputIndex, u.Amount,
+                    requireInclusionProof: true, expectedAddress: address, claimedBlockHeight: u.BlockHeight, ct: ct);
+                if (!v.Verified) { unverified += u.Amount; reason = v.Error; continue; }
+                // The chain's value, kind and (where a header chain placed it) height — not the claim.
+                coin = u with
+                {
+                    Amount = v.RealSatoshis,
+                    IsCoinbase = v.IsCoinbase,
+                    BlockHeight = v.VerifiedHeight ?? u.BlockHeight,
+                };
+                conf = TrustedConfirmations(coin);
+            }
+
+            if (coin.IsCoinbase && conf < CoinbaseMaturity) immature += coin.Amount;
+            else spendable.Add(coin);
+        }
+        return new WifHolding(key, address, utxos, spendable, immature, unverified, unconfirmed, reason);
     }
 
     /// <summary>Maps every owned address — revealed receive slots AND used internal-chain

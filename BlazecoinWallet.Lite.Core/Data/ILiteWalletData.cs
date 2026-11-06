@@ -101,6 +101,19 @@ public interface IChainReader
     Task<string?> GetTxOutProofAsync(string txId, CancellationToken ct = default);
 }
 
+/// <summary>
+/// A read source that can put "has this address ever been used?" to more than one gateway
+/// (bug-bounty report 2026-11-06, third round). Restore discovery stops after a run of unused
+/// addresses, so one gateway answering "unused" for a used address hid every coin beyond it.
+/// "Used" is the safe answer to believe — it only makes the scan go further — so the address
+/// counts as used when ANY gateway asked reports activity. A source with one gateway (a custom
+/// setup, the user's own node) simply has nobody else to ask.
+/// </summary>
+public interface IAddressUsageCrossCheck
+{
+    Task<bool> IsAddressUsedByAnyGatewayAsync(string address, CancellationToken ct = default);
+}
+
 /// <summary>Write side: relays a client-signed raw transaction to the network (ISP).</summary>
 public interface ITxRelay
 {

@@ -10,7 +10,13 @@ namespace BlazecoinWallet.Lite.Data;
 /// <param name="IncludedInBlock">True when a merkle proof placed the tx in a block — proven to be on
 /// the chain whenever a header feed is wired (see <see cref="LiteTxVerifier"/>).</param>
 /// <param name="Error">Why verification failed, when it did.</param>
-public sealed record UtxoVerification(bool Verified, long RealSatoshis, bool IncludedInBlock, string? Error);
+/// <param name="IsCoinbase">Whether the funding transaction is a coinbase — read from the transaction
+/// itself, which its txid commits to, never from the gateway's row (bug-bounty report 2026-11-06,
+/// fourth round: a gateway marking an ordinary coin "coinbase" locked it as immature).</param>
+/// <param name="VerifiedHeight">The height the wallet's own header chain places the coin's block at,
+/// when a header feed is wired and the block was placed; null otherwise (the web head).</param>
+public sealed record UtxoVerification(bool Verified, long RealSatoshis, bool IncludedInBlock, string? Error,
+    bool IsCoinbase = false, long? VerifiedHeight = null);
 
 /// <summary>
 /// TRUSTLESS input verification — the C1/M3 fix. A txid is the double-SHA256 of the whole
@@ -98,33 +104,39 @@ public sealed class LiteTxVerifier
 
         // 3. (M3) Optional inclusion proof: prove the tx is really mined.
         var included = false;
+        long? height = null;
         if (requireInclusionProof)
         {
-            if (await InclusionErrorAsync(txId, claimedBlockHeight, ct) is string notMined)
+            var inclusion = await InclusionAsync(txId, claimedBlockHeight, ct);
+            if (inclusion.Error is string notMined)
                 return new UtxoVerification(false, realSatoshis, false, notMined);
             included = true;
+            height = inclusion.Height;
         }
 
-        return new UtxoVerification(true, realSatoshis, included, null);
+        // 4. What kind of coin it is, and where: both from what was just proven, not from the row.
+        return new UtxoVerification(true, realSatoshis, included, null, fundingTx.IsCoinBase, height);
     }
 
     /// <summary>Step 3 on its own: the tx's merkle proof must verify, and — whenever a header feed
     /// is wired — its block must be proven on the chain at <paramref name="claimedBlockHeight"/>.
-    /// Null when the tx is proven mined; otherwise why not.</summary>
-    private async Task<string?> InclusionErrorAsync(string txId, long claimedBlockHeight, CancellationToken ct)
+    /// A null error means the tx is proven mined; the height is where the wallet's own header
+    /// chain places the block (null without a header feed).</summary>
+    private async Task<(string? Error, long? Height)> InclusionAsync(string txId, long claimedBlockHeight, CancellationToken ct)
     {
         var proofHex = await _reader.GetTxOutProofAsync(txId, ct);
         if (string.IsNullOrWhiteSpace(proofHex))
-            return "No merkle inclusion proof was available for the funding transaction.";
+            return ("No merkle inclusion proof was available for the funding transaction.", null);
         var (proofOk, blockHash) = CheckProof(proofHex, txId);
         if (!proofOk || blockHash == null)
-            return "The merkle inclusion proof did not verify — the transaction may not be mined.";
+            return ("The merkle inclusion proof did not verify — the transaction may not be mined.", null);
         if (_headerChain is { Available: true })
         {
             var where = await _headerChain.LocateAsync(blockHash, claimedBlockHeight, ct);
-            if (where.Membership != ChainMembership.OnChain) return ChainError(where.Membership);
+            if (where.Membership != ChainMembership.OnChain) return (ChainError(where.Membership), null);
+            return (null, where.Height);
         }
-        return null;
+        return (null, null);
     }
 
     /// <summary>
@@ -166,10 +178,11 @@ public sealed class LiteTxVerifier
             return new UtxoVerification(false, paid, false,
                 "The transaction does not pay this wallet the amount shown — the data source is untrustworthy.");
 
-        if (await InclusionErrorAsync(txId, claimedBlockHeight, ct) is string notMined)
+        var inclusion = await InclusionAsync(txId, claimedBlockHeight, ct);
+        if (inclusion.Error is string notMined)
             return new UtxoVerification(false, paid, false, notMined);
 
-        return new UtxoVerification(true, paid, true, null);
+        return new UtxoVerification(true, paid, true, null, tx.IsCoinBase, inclusion.Height);
     }
 
     /// <summary>The scriptPubKey an address commits to — the ONE place the wallet maps an

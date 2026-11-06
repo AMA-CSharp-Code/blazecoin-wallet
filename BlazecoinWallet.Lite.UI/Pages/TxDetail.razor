@@ -1,7 +1,6 @@
 @page "/tx/{TxId}"
 @layout LiteLayout
 @inject LiteWalletService Wallet
-@inject BlazecoinWallet.Lite.Data.IChainReader Reader
 @inject ILabelStore Labels
 @inject IUnitSettings Units
 @inject IExplorerSettings Explorer
@@ -29,6 +28,14 @@
 @if (_loading)
 {
     <div class="lite-card"><p class="lite-sub">Loading transaction…</p></div>
+}
+else if (_mismatch)
+{
+    <div class="lite-card">
+        <p class="lite-sub">⚠️ <strong>The gateway returned a different transaction.</strong> What it sent does not
+            hash to the id above, so nothing from it is shown. The explorer link above shows the real transaction;
+            consider switching gateway in Settings.</p>
+    </div>
 }
 else if (_tx == null)
 {
@@ -95,6 +102,7 @@ else
     [SupplyParameterFromQuery(Name = "h")] public long? ClaimedHeight { get; set; }
 
     private LiteTxDetails? _tx;
+    private bool _mismatch;
     private LiteChainProof? _proof;
     private bool _loading = true;
     private string _label = string.Empty;
@@ -108,8 +116,12 @@ else
         _label = Labels.Get(TxId) ?? string.Empty;
         try
         {
-            var hex = await Reader.GetRawTransactionHexAsync(TxId);
-            _tx = LiteTxDecoder.Decode(hex);
+            // Bound to the id asked for: a transaction that does not hash to it is never shown
+            // (bug-bounty report 2026-11-06, third round), and with no transaction there is no
+            // proof line either.
+            var lookup = await Wallet.GetTransactionAsync(TxId);
+            _tx = lookup.Details;
+            _mismatch = lookup.Mismatch;
         }
         finally { _loading = false; }
     }

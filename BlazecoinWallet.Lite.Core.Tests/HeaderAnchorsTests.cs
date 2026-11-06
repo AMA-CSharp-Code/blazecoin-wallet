@@ -337,6 +337,24 @@ public class HeaderAnchorsTests
         }
     }
 
+    // ── What a proven coin is (bug-bounty round four, 2026-11-06) ────────────────────────────
+
+    [Fact]
+    public async Task A_proven_coin_carries_the_chains_own_height_and_coinbase_flag()
+    {
+        var sync = new HeaderChainSync(new CountingFeed(), new InMemoryWalletStateStore(), BlazecoinNetwork.Instance, Checkpoint);
+        var verifier = new LiteTxVerifier(new RealProofReader(), headerChain: sync);
+        var realValue = NBitcoin.Transaction.Parse(HeaderChainFixture.ProofRawTx, BlazecoinNetwork.Instance).Outputs[0].Value.Satoshi;
+
+        // The gateway's row: the right block, but it calls the coin an ordinary payment.
+        var v = await verifier.VerifyAsync(HeaderChainFixture.ProofTxId, 0, realValue,
+            requireInclusionProof: true, claimedBlockHeight: HeaderChainFixture.ProofBlockHeight);
+
+        Assert.True(v.Verified, v.Error);
+        Assert.True(v.IsCoinbase);                                          // the transaction is a coinbase, and says so itself
+        Assert.Equal(HeaderChainFixture.ProofBlockHeight, v.VerifiedHeight);   // where the wallet's own header chain put the block
+    }
+
     /// <summary>Serves the real fixture coinbase and its real merkle proof.</summary>
     private sealed class RealProofReader : IChainReader
     {

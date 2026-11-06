@@ -12,7 +12,7 @@ namespace BlazecoinWallet.Lite.Data;
 /// never-throw contract (null/empty + a log line) so the UI degrades instead of crashing;
 /// Broadcast returns a typed failure because the user must SEE why a send didn't go out.
 /// </summary>
-public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncestryReader
+public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncestryReader, IAddressUsageCrossCheck
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -42,6 +42,41 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
         {
             _logger.LogWarning(ex, "Address summary fetch failed");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Restore discovery's question, asked of up to two gateways (<see cref="IAddressUsageCrossCheck"/>).
+    /// The first answer stands when it says "used". When it says "unused" — or is an error, which
+    /// proves nothing either way — the same question goes to a gateway OTHER than the one that
+    /// answered (<see cref="GatewayRouting"/>), and its "used" wins. With no failover list there
+    /// is nobody else to ask and the first answer is all there is.
+    /// </summary>
+    public async Task<bool> IsAddressUsedByAnyGatewayAsync(string address, CancellationToken ct = default)
+    {
+        var first = await AskUsedAsync(address, exclude: null, ct);
+        if (first.Used) return true;
+        if (first.AnsweredBy == null) return false;
+        return (await AskUsedAsync(address, [first.AnsweredBy], ct)).Used;
+    }
+
+    private async Task<(bool Used, Uri? AnsweredBy)> AskUsedAsync(string address, IReadOnlyCollection<Uri>? exclude, CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/address/{Uri.EscapeDataString(address)}");
+            if (exclude != null) request.Options.Set(GatewayRouting.Exclude, exclude);
+            using var res = await _http.SendAsync(request, ct);
+            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var answeredBy);
+            if (!res.IsSuccessStatusCode) return (false, answeredBy);   // 404 = never seen; an error = no evidence of use
+            var dto = await res.Content.ReadFromJsonAsync<AddressJson>(Json, ct);
+            return (dto is { TxCount: > 0 }, answeredBy);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, exclude == null ? "Address usage fetch failed" : "No second gateway answered the address usage question");
+            return (false, null);
         }
     }
 

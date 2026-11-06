@@ -67,24 +67,37 @@ public interface IHeaderReader
 /// Trustless verification of a forward run of block headers (the M3 residual: the maturity /
 /// confirmation display previously trusted the gateway's tip scalar outright). Anchored at a
 /// shipped checkpoint, each header is checked for (1) scrypt proof-of-work meeting its own
-/// target, (2) that target being in range, (3) linkage to the prior header, and (4) a
-/// permitted ±10% difficulty transition. Forging a chain that passes all four requires real
-/// mining work bounded by the retarget rule, so the verified tip cannot be inflated by a
-/// lying gateway — which is exactly what the maturity gate needs.
+/// target, (2) that target being in range, (3) linkage to the prior header, (4) the difficulty
+/// the retarget rule requires (a ±10% band before Phoenix-413, the exact value after it), and
+/// (5) a timestamp no more than two hours ahead of this device's clock. Forging a chain that
+/// passes all five requires real mining work bounded by the retarget rule, so the verified tip
+/// cannot be inflated by a lying gateway — which is exactly what the maturity gate needs.
+/// <para>Rule 5 is what makes rule 4 mean anything after Phoenix-413, where the required target
+/// is computed from the PARENT's timestamp: without it (bug-bounty report 2026-11-06) a gateway
+/// could date its headers days ahead, which drives the required target to the easiest the chain
+/// allows — every forged header after the first then cost about 2^20 scrypt hashes instead of
+/// the ~2^34 the real chain demands, and a run of them became "the verified chain".</para>
 /// </summary>
 public static class HeaderChainValidator
 {
+    /// <summary>How far ahead of the clock a block's timestamp may be — the node's
+    /// MAX_FUTURE_BLOCK_TIME (2 hours).</summary>
+    public const long MaxFutureBlockTimeSeconds = 2 * 60 * 60;
+
     /// <summary>Extends <paramref name="from"/> by the given ordered raw headers. Returns the new
     /// verified tip and a null error on success; on the first bad header returns the last GOOD
     /// tip reached plus the reason (so a partially-valid batch still advances honestly).
     /// <paramref name="onAccepted"/> fires once per verified header (height + hash), so a caller
     /// can index the chain for per-tx height lookups.</summary>
+    /// <param name="now">The device's clock (null = the system clock). A header dated more than
+    /// <see cref="MaxFutureBlockTimeSeconds"/> past it is refused.</param>
     public static (HeaderCheckpoint Tip, string? Error) Extend(
         HeaderCheckpoint from, IReadOnlyList<string> rawHeaders, Network network,
-        Action<HeaderCheckpoint>? onAccepted = null)
+        Action<HeaderCheckpoint>? onAccepted = null, DateTimeOffset? now = null)
     {
         var factory = network.Consensus.ConsensusFactory;
         var tip = from;
+        var latestAllowed = (now ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds() + MaxFutureBlockTimeSeconds;
 
         for (var i = 0; i < rawHeaders.Count; i++)
         {
@@ -102,6 +115,13 @@ public static class HeaderChainValidator
             // Linkage first — a header that doesn't build on the verified tip is off-chain.
             if (!string.Equals(header.HashPrevBlock.ToString(), tip.Hash, StringComparison.OrdinalIgnoreCase))
                 return (tip, $"Header at height {height} does not link to the verified chain.");
+
+            // Then its date: no block may claim a time more than two hours ahead of the clock (the
+            // node's own rule). Only a LATER time eases the Phoenix-413 target, so this is the bound
+            // that matters; an earlier one only makes a forger's work harder. Checked before the
+            // proof-of-work — a header from the future is refused whatever work it carries.
+            if (header.BlockTime.ToUnixTimeSeconds() > latestAllowed)
+                return (tip, $"Header at height {height} is dated more than two hours ahead of this device's clock, so it is not accepted (if this persists, check the device's date and time).");
 
             var bits = header.Bits.ToCompact();
 
@@ -204,6 +224,10 @@ public sealed class HeaderChainSync
         _tip = checkpoint ?? MainnetCheckpoint;
         Index(_tip);
     }
+
+    /// <summary>This device's clock, for the rule that no header may be dated more than two hours
+    /// ahead of it (tests move it).</summary>
+    public Func<DateTimeOffset> Clock { get; set; } = () => DateTimeOffset.UtcNow;
 
     private void Index(HeaderCheckpoint c)
     {
@@ -349,7 +373,7 @@ public sealed class HeaderChainSync
                 for (var offset = 0; offset < raw.Count && error == null; offset += VerifySlice)
                 {
                     var slice = raw.Skip(offset).Take(VerifySlice).ToList();
-                    var (newTip, sliceError) = HeaderChainValidator.Extend(_tip, slice, _network, Index);
+                    var (newTip, sliceError) = HeaderChainValidator.Extend(_tip, slice, _network, Index, Clock());
                     error = sliceError;
                     if (newTip.Height > _tip.Height)
                     {

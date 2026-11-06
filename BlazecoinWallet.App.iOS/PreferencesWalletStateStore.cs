@@ -54,7 +54,7 @@ public sealed class PreferencesWalletStateStore : IWalletStateStore
     }
 
     public Task<bool> GetBackupVerifiedAsync()
-        => Task.FromResult(Preferences.Default.Get(BackupVerifiedKey, true));
+        => Task.FromResult(Preferences.Default.Get(BackupVerifiedKey, false));   // no record = not verified (bug-bounty report 2026-11-06)
 
     public Task SetBackupVerifiedAsync(bool verified)
     {

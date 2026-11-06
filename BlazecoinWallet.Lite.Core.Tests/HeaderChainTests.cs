@@ -53,6 +53,69 @@ public class HeaderChainTests
 
     // ── Validator against real headers ─────────────────────────────────────────────────────
 
+    // ── Timestamps (bug-bounty report 2026-11-06): no header may be dated ahead of the clock ──
+
+    private static DateTimeOffset TimeOf(string rawHeader) => ParseHeader(rawHeader).BlockTime;
+
+    [Fact]
+    public void A_header_dated_more_than_two_hours_ahead_of_the_clock_is_refused()
+    {
+        var first = TimeOf(HeaderChainFixture.Headers[0]);
+
+        var tooEarly = HeaderChainValidator.Extend(Checkpoint, HeaderChainFixture.Headers, BlazecoinNetwork.Instance,
+            now: first - TimeSpan.FromHours(2) - TimeSpan.FromSeconds(1));
+        Assert.Equal(Checkpoint.Height, tooEarly.Tip.Height);                       // nothing accepted
+        Assert.Contains("more than two hours ahead of this device's clock", tooEarly.Error);
+
+        var justInTime = HeaderChainValidator.Extend(Checkpoint, HeaderChainFixture.Headers.Take(1).ToList(), BlazecoinNetwork.Instance,
+            now: first - TimeSpan.FromHours(2));
+        Assert.Null(justInTime.Error);                                              // exactly two hours ahead is still allowed
+        Assert.Equal(Checkpoint.Height + 1, justInTime.Tip.Height);
+    }
+
+    [Fact]
+    public void The_date_is_checked_before_the_work_so_no_amount_of_work_buys_a_future_header()
+    {
+        // The real first header with its timestamp moved a year ahead (bytes 68..71, little-endian). Its
+        // hash no longer meets its target, but that is not why it is refused — nor would mining it help.
+        var bytes = NBitcoin.DataEncoders.Encoders.Hex.DecodeData(HeaderChainFixture.Headers[0]);
+        var future = (uint)(DateTimeOffset.UtcNow.AddYears(1).ToUnixTimeSeconds());
+        BitConverter.GetBytes(future).CopyTo(bytes, 68);
+        var forged = NBitcoin.DataEncoders.Encoders.Hex.EncodeData(bytes);
+
+        var (tip, error) = HeaderChainValidator.Extend(Checkpoint, [forged], BlazecoinNetwork.Instance);
+
+        Assert.Equal(Checkpoint.Height, tip.Height);
+        Assert.Contains("ahead of this device's clock", error);
+        Assert.DoesNotContain("proof-of-work", error);
+    }
+
+    [Fact]
+    public async Task The_sync_uses_the_devices_clock_and_catches_up_once_the_headers_are_no_longer_in_its_future()
+    {
+        var sync = new HeaderChainSync(new FixtureFeed(), new InMemoryWalletStateStore(), BlazecoinNetwork.Instance, Checkpoint);
+        var clock = TimeOf(HeaderChainFixture.Headers[0]) - TimeSpan.FromDays(1);   // a day before any of these blocks
+        sync.Clock = () => clock;
+
+        await sync.SyncAsync();
+        Assert.Equal(Checkpoint.Height, sync.VerifiedTipHeight);                    // headers "from the future": the tip does not move
+
+        clock = TimeOf(HeaderChainFixture.Headers[^1]);
+        await sync.SyncAsync();
+        Assert.Equal(HeaderChainFixture.TipHeight, sync.VerifiedTipHeight);
+    }
+
+    /// <summary>Serves the real fixture headers by height.</summary>
+    private sealed class FixtureFeed : IHeaderReader
+    {
+        public Task<IReadOnlyList<string>> GetHeadersAsync(long fromHeight, int count, CancellationToken ct = default)
+        {
+            var start = (int)(fromHeight - (HeaderChainFixture.CheckpointHeight + 1));
+            if (start < 0 || start >= HeaderChainFixture.Headers.Length) return Task.FromResult<IReadOnlyList<string>>([]);
+            return Task.FromResult<IReadOnlyList<string>>(HeaderChainFixture.Headers.Skip(start).Take(count).ToList());
+        }
+    }
+
     [Fact]
     public void Validator_accepts_the_real_forward_run_to_the_tip()
     {

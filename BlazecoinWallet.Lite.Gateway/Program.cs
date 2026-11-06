@@ -152,16 +152,24 @@ app.Run();
 
 static void MapWalletSurface(RouteGroupBuilder api)
 {
-    // Address summary — 404 when never seen on-chain (the wallet's rotation gap-scan and
-    // Home summary both rely on exactly that). Same shape as the full Indexer's AddressDto.
-    api.MapGet("/address/{address}", (string address, UtxoIndexDb db, WalkerStatus status) =>
+    // Address summary — 404 when the address has never been SEEN: not in a block, and not in the
+    // mempool either (the wallet's rotation gap-scan and Home summary both rely on exactly that).
+    // Same shape as the full Indexer's AddressDto. The figures are the confirmed ones; an address
+    // whose only payment is still unconfirmed answers with zero balance and its pending
+    // transactions counted, because "404 = unused" made a restore's gap scan pass over an address
+    // that was in the middle of being paid (bug-bounty report 2026-11-06, fourth round) — while
+    // /utxos, asked about the same address, listed the payment.
+    api.MapGet("/address/{address}", (string address, UtxoIndexDb db, MempoolOverlay mempool, WalkerStatus status) =>
     {
         if (!IsAddress(address)) return Results.BadRequest(new { error = "Invalid address." });
         if (!status.Synced) return IndexNotReady();
         var s = db.GetSummary(address);
-        return s == null
+        if (s != null)
+            return Results.Ok(new { address, balance = s.Balance, totalReceived = s.TotalReceived, totalSent = s.TotalSent, txCount = s.TxCount });
+        var pending = mempool.GetForAddress(address).Select(u => u.TxId).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        return pending == 0
             ? Results.NotFound()
-            : Results.Ok(new { address, balance = s.Balance, totalReceived = s.TotalReceived, totalSent = s.TotalSent, txCount = s.TxCount });
+            : Results.Ok(new { address, balance = 0L, totalReceived = 0L, totalSent = 0L, txCount = pending });
     });
 
     // Wallet-grade UTXO listing: confirmed rows (minus outpoints being spent in the

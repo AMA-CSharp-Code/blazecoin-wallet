@@ -92,6 +92,27 @@ public class ReceiveSweepAndToastTests : LiteUiTestBase
     }
 
     [Fact]
+    public void Sweep_does_not_offer_coins_the_wallet_could_not_verify()
+    {
+        // Gateway mode (a verifier is wired): the reader lists 0.1 BLZ for any address but can
+        // produce neither the transaction nor a proof — the third bounty round's made-up coin.
+        var reader = new FakeReader();
+        var relay = new FakeRelay();
+        Wire(new LoadedVault(), reader, relay);
+        Services.AddSingleton(new LiteWalletService(new LoadedVault(), reader, relay, verifier: new BlazecoinWallet.Lite.Data.LiteTxVerifier(reader)));
+        var cut = RenderComponent<Sweep>();
+
+        cut.Find("input").Change(new NBitcoin.Key().GetWif(BlazecoinNetwork.Instance).ToString());
+        cut.FindAll("button").Single(b => b.TextContent.Contains("Check Key")).Click();
+
+        cut.WaitForAssertion(() => Assert.Contains("could not be", cut.Markup));
+        Assert.Contains("not counted and will not be swept", cut.Markup);
+        Assert.Contains("This key holds no spendable coins right now", cut.Markup);   // was: "Recoverable now 0.1" + the button
+        Assert.Empty(cut.FindAll("button").Where(b => b.TextContent.Contains("Sweep It All In")));
+        Assert.Equal(0, relay.Calls);
+    }
+
+    [Fact]
     public void Sweep_rejects_an_invalid_key_with_a_friendly_error()
     {
         Wire(new LoadedVault(), new FakeReader(), new FakeRelay());

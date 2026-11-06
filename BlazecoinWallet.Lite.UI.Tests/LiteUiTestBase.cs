@@ -76,6 +76,9 @@ public abstract class LiteUiTestBase : TestContext
         // module + its start/stop calls no-op in tests.
         JSInterop.Mode = JSRuntimeMode.Loose;
         var svc = new LiteWalletService(vault, reader, relay);
+        // A vault that already holds a wallet stands for an existing, backed-up one. With no record the
+        // flag reads "not verified" (bug-bounty report 2026-11-06), so say so, as a restore would have.
+        if (vault.HasWalletAsync().GetAwaiter().GetResult()) svc.MarkBackupVerifiedAsync().GetAwaiter().GetResult();
         Services.AddSingleton(svc);
         Services.AddSingleton<IChainReader>(reader); // pages (Watch, TxDetail) inject this directly
         Services.AddSingleton(scanner ?? new FakeScanner { IsAvailable = false });

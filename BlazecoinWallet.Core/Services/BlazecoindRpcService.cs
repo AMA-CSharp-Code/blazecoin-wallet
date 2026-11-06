@@ -851,8 +851,23 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     // inputs and may re-order outputs, and under FIFO either of those silently sends
     // different satoshis than the plan promised.
 
+    /// <summary>
+    /// A fresh change address for a vintage send — post-quantum whenever the wallet can make one,
+    /// the same rule <see cref="Send.SendChangePolicy"/> applies on the Send page. This path used
+    /// to mint a legacy address unconditionally (bug-bounty report 2026-11-06, fourth round), so
+    /// spending part of a BQ… coin from the Provenance page put the rest back behind an ECDSA key.
+    /// A wallet that can make post-quantum addresses and then fails to gets NO address (the page
+    /// says so) rather than a quiet legacy one.
+    /// </summary>
     public async Task<string?> GetChangeAddressAsync(CancellationToken ct = default)
-        => await GetNewAddressAsync("vintage change");
+    {
+        if (await CanMintPostQuantumAsync(ct) == true)
+        {
+            var pq = await GetNewPostQuantumAddressAsync("vintage change", ct);
+            return pq.IsOk ? pq.Address : null;
+        }
+        return await GetNewAddressAsync("vintage change");
+    }
 
     public async Task<string?> CreateRawTransactionAsync(
         IReadOnlyList<(string TxId, int Vout)> inputs,

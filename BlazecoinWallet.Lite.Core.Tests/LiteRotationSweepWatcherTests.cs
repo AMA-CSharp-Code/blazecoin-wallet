@@ -88,6 +88,7 @@ public class LiteRotationSweepWatcherTests
         var service = new LiteWalletService(new MemoryVault(), new FakeWalletData());
         await service.CreateNewWalletAsync();
         Assert.False(await service.IsBackupVerifiedAsync());   // set BEFORE the ceremony shows words
+        Assert.False(await new InMemoryWalletStateStore().GetBackupVerifiedAsync());   // and no record at all reads the same
 
         await service.MarkBackupVerifiedAsync();               // the quiz passed
         Assert.True(await service.IsBackupVerifiedAsync());

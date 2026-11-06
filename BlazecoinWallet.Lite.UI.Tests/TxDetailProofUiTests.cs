@@ -78,4 +78,42 @@ public class TxDetailProofUiTests : LiteUiTestBase
         Assert.DoesNotContain("Verified on your own chain", page.Markup);
         Assert.DoesNotContain("Not yet independently confirmed", page.Markup);
     }
+
+    /// <summary>The gateway of the third bounty round (2026-11-06): asked for the fixture
+    /// transaction it serves its REAL merkle proof, but a different transaction's bytes — one
+    /// paying this wallet 99,990 BLZ.</summary>
+    private sealed class SubstitutingReader(string substituteHex) : IChainReader
+    {
+        public bool SupportsHistory => true;
+        public bool SupportsChainVerification => true;
+        public Task<string?> GetRawTransactionHexAsync(string txId, CancellationToken ct = default) =>
+            Task.FromResult<string?>(txId == ProofTxId ? substituteHex : null);
+        public Task<string?> GetTxOutProofAsync(string txId, CancellationToken ct = default) =>
+            Task.FromResult<string?>(txId == ProofTxId ? ProofHex : null);
+        public Task<LiteAddressSummary?> GetAddressAsync(string a, CancellationToken ct = default) => Task.FromResult<LiteAddressSummary?>(null);
+        public Task<IReadOnlyList<LiteChainUtxo>> GetUtxosAsync(string a, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LiteChainUtxo>>([]);
+        public Task<IReadOnlyList<LiteHistoryEntry>> GetHistoryAsync(string a, int p = 1, int ps = 25, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LiteHistoryEntry>>([]);
+    }
+
+    [Fact]
+    public void A_transaction_that_does_not_hash_to_the_id_is_not_shown()
+    {
+        var mine = LiteHdWallet.Restore(TestMnemonic).GetReceiveAddress(0);
+        var substitute = NBitcoin.Transaction.Create(BlazecoinNetwork.Instance);
+        substitute.Inputs.Add(new NBitcoin.TxIn(new NBitcoin.OutPoint(new NBitcoin.uint256(7), 0)));
+        substitute.Outputs.Add(new NBitcoin.TxOut(NBitcoin.Money.Coins(99_990m), new NBitcoin.Script(LiteTxVerifier.ScriptForAddress(mine)!)));
+
+        var reader = new SubstitutingReader(substitute.ToHex());
+        Wire(new LoadedVault(), reader, new FakeRelay());
+        Services.AddSingleton(new LiteWalletService(new LoadedVault(), reader, new FakeRelay(),
+            verifier: new LiteTxVerifier(reader)));
+
+        var page = RenderComponent<TxDetail>(p => p.Add(x => x.TxId, ProofTxId));
+
+        page.WaitForAssertion(() => Assert.Contains("returned a different transaction", page.Markup));
+        Assert.DoesNotContain("Outputs", page.Markup);              // was: the substitute's outputs…
+        Assert.DoesNotContain("99", page.Markup.Replace(ProofTxId, ""));   // …99,990 BLZ marked "yours"
+        Assert.DoesNotContain("yours", page.Markup);
+        Assert.DoesNotContain("Chain Verification", page.Markup);   // …beside the real id's proof card
+    }
 }

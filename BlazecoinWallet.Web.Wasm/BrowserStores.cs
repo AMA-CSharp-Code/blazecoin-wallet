@@ -66,7 +66,7 @@ public sealed class BrowserWalletStateStore : IWalletStateStore
     { BrowserKv.Set("header_anchors", value); return Task.CompletedTask; }
 
     public Task<bool> GetBackupVerifiedAsync()
-        => Task.FromResult(!bool.TryParse(BrowserKv.GetOrNull("backup_verified"), out var v) || v);
+        => Task.FromResult(bool.TryParse(BrowserKv.GetOrNull("backup_verified"), out var v) && v);   // no record = not verified (bug-bounty report 2026-11-06)
     public Task SetBackupVerifiedAsync(bool verified)
     { BrowserKv.Set("backup_verified", verified.ToString()); return Task.CompletedTask; }
 

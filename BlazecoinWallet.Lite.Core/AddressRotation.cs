@@ -36,8 +36,11 @@ internal sealed class AddressRotation
     /// wallet-VERIFIED receipt to treat an address as "used" — closing H1: a lying gateway
     /// reporting fake `TxCount` can no longer push reveals past a real gap so that a
     /// mnemonic-only restore under-discovers. Null (personal node) → own-chainstate TxCount
-    /// is authoritative. Discovery stays TxCount-based (liberal — a gateway lie there only
-    /// makes restore scan further, never less).</param>
+    /// is authoritative. Discovery is TxCount-based: a FALSE "used" only makes restore scan
+    /// further, but a FALSE "unused" makes it stop short (bug-bounty report 2026-11-06, third
+    /// round — the comment here used to claim "never less"). Two things answer that: restore
+    /// asks a second gateway before it believes "unused" (<see cref="Data.IAddressUsageCrossCheck"/>),
+    /// and <see cref="ExtendFromChainAsync"/> lets any later honest session find what a restore missed.</param>
     public AddressRotation(Data.IChainReader reader, IWalletStateStore state, Data.LiteTxVerifier? verifier = null)
     {
         _reader = reader;
@@ -176,6 +179,62 @@ internal sealed class AddressRotation
         await _state.SetPqAddressCountAsync(_pqCount);
     }
 
+    /// <summary>
+    /// The look-ahead that heals an under-discovered restore: from each chain's saved count, look
+    /// <see cref="GapLimit"/> addresses further for a coin the wallet can PROVE is on the chain,
+    /// and move the count past it (then look a further gap, and so on). The counts only ever move
+    /// FORWARD, and only on proof — a gateway that lists made-up coins extends nothing, and one
+    /// that hides coins leaves the counts where they were for the next, honest, session.
+    /// Returns true when any count moved.
+    /// </summary>
+    public async Task<bool> ExtendFromChainAsync(LiteHdWallet wallet, bool includePq, CancellationToken ct = default)
+    {
+        var moved = false;
+
+        var receive = await LookAheadAsync(i => wallet.GetReceiveAddress(i), RevealedCount, MaxRevealed, ct);
+        if (receive > RevealedCount)
+        {
+            _revealedCount = receive;
+            await _state.SetRevealedAddressCountAsync(_revealedCount);
+            moved = true;
+        }
+
+        var change = await LookAheadAsync(i => wallet.GetChangeAddress(i), _changeCount, MaxScanIndex, ct);
+        if (change > _changeCount)
+        {
+            _changeCount = change;
+            await _state.SetChangeAddressCountAsync(_changeCount);
+            moved = true;
+        }
+
+        if (includePq)
+        {
+            var pq = await LookAheadAsync(i => wallet.GetPqAddress(i), _pqCount, MaxRevealed, ct);
+            if (pq > _pqCount)
+            {
+                _pqCount = pq;
+                await _state.SetPqAddressCountAsync(_pqCount);
+                moved = true;
+            }
+        }
+        return moved;
+    }
+
+    /// <summary>The count a chain should have: one past the furthest address at or beyond
+    /// <paramref name="count"/> that holds a proven coin, looking <see cref="GapLimit"/> past the
+    /// last find; <paramref name="count"/> itself when there is none.</summary>
+    private async Task<int> LookAheadAsync(Func<int, string> address, int count, int ceiling, CancellationToken ct)
+    {
+        var found = count;
+        var unused = 0;
+        for (var i = count; i < ceiling && unused < GapLimit; i++)
+        {
+            if (await IsAddressVerifiablyUsedAsync(address(i), ct)) { found = i + 1; unused = 0; }
+            else unused++;
+        }
+        return found;
+    }
+
     /// <summary>Gap-scan a derivation chain; returns the index of the last USED address, or
     /// -1 if none. Stops after <see cref="GapLimit"/> consecutive unused.</summary>
     private async Task<int> ScanChainAsync(Func<int, string> address, CancellationToken ct)
@@ -225,10 +284,14 @@ internal sealed class AddressRotation
         await _state.ClearAsync();
     }
 
-    /// <summary>Discovery-grade "used": the source reports on-chain activity. Liberal by
-    /// design (used for restore scanning — a false "used" only makes restore scan further).</summary>
+    /// <summary>Discovery-grade "used": the source reports on-chain activity. Liberal in one
+    /// direction by design — a false "used" only makes restore scan further. The other direction
+    /// is the dangerous one (a false "unused" ends the scan early), so a source that can ask more
+    /// than one gateway is asked to: the address is used if ANY of them says so.</summary>
     private async Task<bool> IsAddressUsedAsync(string address, CancellationToken ct)
     {
+        if (_reader is Data.IAddressUsageCrossCheck crossCheck)
+            return await crossCheck.IsAddressUsedByAnyGatewayAsync(address, ct);
         var summary = await _reader.GetAddressAsync(address, ct);
         return summary is { TxCount: > 0 };
     }
