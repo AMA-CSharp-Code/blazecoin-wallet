@@ -169,6 +169,99 @@ public class GatewayContractTests : IDisposable
         Assert.Null(await _client.GetAddressAsync(quiet));              // a never-seen address is still 404
     }
 
+    // ── What became of an output (bug-bounty report 2026-11-06, sixth round) ──
+
+    private void SeedSpentAndUnspent(out string spentCoin, out string liveCoin, out string spender)
+    {
+        var address = WalletAddress();
+        spentCoin = FakeDaemonRpc.TxId("spentcoin");
+        liveCoin = FakeDaemonRpc.TxId("livecoin");
+        spender = FakeDaemonRpc.TxId("spender");
+        _rpc.AddBlock(90, "h90",
+            FakeDaemonRpc.Spend(spentCoin, (FakeDaemonRpc.TxId("f1"), 0), FakeDaemonRpc.Out(0, address, 5_000_000)),
+            FakeDaemonRpc.Spend(liveCoin, (FakeDaemonRpc.TxId("f2"), 0), FakeDaemonRpc.Out(0, address, 7_000_000)));
+        Db.ApplyBlock(_rpc.Blocks[90]);
+        _rpc.AddBlock(95, "h95",
+            FakeDaemonRpc.Spend(spender, (spentCoin, 0), FakeDaemonRpc.Out(0, WalletAddress(3), 5_000_000)));
+        Db.ApplyBlock(_rpc.Blocks[95]);
+        Status.IndexedHeight = 100;
+        Status.DaemonHeight = 100;
+        Status.DaemonReachable = true;
+    }
+
+    [Theory]
+    [InlineData("/api")]
+    [InlineData("/indexer/api")]
+    public async Task The_spends_question_names_the_mined_spender_of_each_output(string prefix)
+    {
+        SeedSpentAndUnspent(out var spentCoin, out var liveCoin, out var spender);
+        var never = FakeDaemonRpc.TxId("neverseen");
+        using var http = _factory.CreateClient();
+
+        var body = await http.GetStringAsync($"{prefix}/outputs/spends?o={spentCoin}:0,{liveCoin}:0,{never}:2");
+
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        var items = doc.RootElement.GetProperty("items").EnumerateArray().ToList();
+        Assert.Equal(3, items.Count);
+
+        Assert.Equal(spentCoin, items[0].GetProperty("txId").GetString());
+        Assert.True(items[0].GetProperty("known").GetBoolean());
+        Assert.Equal(spender, items[0].GetProperty("spentTxId").GetString());
+        Assert.Equal(95, items[0].GetProperty("spentHeight").GetInt64());
+
+        Assert.True(items[1].GetProperty("known").GetBoolean());                        // seen, and unspent
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, items[1].GetProperty("spentTxId").ValueKind);
+
+        Assert.False(items[2].GetProperty("known").GetBoolean());                       // never seen at all
+        Assert.Equal(2, items[2].GetProperty("vout").GetInt32());
+    }
+
+    [Fact]
+    public async Task The_spends_question_refuses_junk_and_too_many_and_waits_for_the_index()
+    {
+        SeedSpentAndUnspent(out var spentCoin, out _, out _);
+        using var http = _factory.CreateClient();
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await http.GetAsync("/api/outputs/spends")).StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await http.GetAsync("/api/outputs/spends?o=nonsense")).StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await http.GetAsync($"/api/outputs/spends?o={spentCoin}:-1")).StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await http.GetAsync($"/api/outputs/spends?o={spentCoin}:x")).StatusCode);
+        var tooMany = string.Join(',', Enumerable.Range(0, 51).Select(i => $"{spentCoin}:{i}"));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await http.GetAsync($"/api/outputs/spends?o={tooMany}")).StatusCode);
+        var fifty = string.Join(',', Enumerable.Range(0, 50).Select(i => $"{spentCoin}:{i}"));
+        Assert.Equal(System.Net.HttpStatusCode.OK, (await http.GetAsync($"/api/outputs/spends?o={fifty}")).StatusCode);
+
+        Status.IndexedHeight = 10;                                                      // an index still catching up answers nothing
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, (await http.GetAsync($"/api/outputs/spends?o={spentCoin}:0")).StatusCode);
+    }
+
+    [Fact]
+    public async Task The_shipping_client_gets_a_spend_claim_with_its_evidence_from_this_gateway_as_the_second_opinion()
+    {
+        SeedSpentAndUnspent(out var spentCoin, out var liveCoin, out var spender);
+        _rpc.RawHex[spender] = "beefcafe01";
+        _rpc.Proofs[spender] = "deadbeef02";
+        // The wallet's own client with a failover list: the coins were listed by some other
+        // gateway, so the question must come here (the only gateway that is not the lister).
+        var lister = new Uri("https://lister.test/");
+        var failover = new GatewayFailoverHandler([lister.ToString(), "http://localhost/"], _factory.Server.CreateHandler());
+        var client = new IndexerDataService(new HttpClient(failover) { BaseAddress = failover.Primary }, NullLogger<IndexerDataService>.Instance);
+
+        var claims = await client.FindSpendsFromAnotherGatewayAsync(
+            [new LiteOutpoint(spentCoin, 0, lister), new LiteOutpoint(liveCoin, 0, lister)]);
+
+        var claim = Assert.Single(claims!);                                             // the unspent coin is not claimed
+        Assert.Equal(spentCoin, claim.TxId);
+        Assert.Equal(0, claim.Vout);
+        Assert.Equal(spender, claim.SpenderTxId);
+        Assert.Equal(95, claim.SpenderHeight);
+        Assert.Equal("beefcafe01", claim.SpenderHex);
+        Assert.Equal("deadbeef02", claim.SpenderProofHex);
+
+        // A coin whose lister is unknown has nobody else to be checked against.
+        Assert.Null(await _client.FindSpendsFromAnotherGatewayAsync([new LiteOutpoint(spentCoin, 0)]));
+    }
+
     [Fact]
     public async Task Raw_and_proof_passthroughs_feed_the_wallets_trustless_verifier()
     {

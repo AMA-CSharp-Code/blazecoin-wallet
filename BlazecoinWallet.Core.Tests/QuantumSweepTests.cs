@@ -126,6 +126,19 @@ public class QuantumSweepTests
     }
 
     [Fact]
+    public void A_sweep_whose_one_output_would_be_dust_for_a_BQ_address_is_left_behind()
+    {
+        // Bug-bounty report 2026-11-06 (seventh round): a BQ… output's dust limit is 11,475 satoshis on
+        // node 2.1.2, not the legacy 546 — and a sweep's single output goes to the BQ… destination.
+        var tooSmall = QuantumSweepPlanner.Plan(new[] { U("a", 11_474) }, BqSpec, feeRateSatPerKb: 0);
+        Assert.Null(tooSmall.Plan);                                     // was planned: 11,474 satoshis to a BQ… address
+        var enough = QuantumSweepPlanner.Plan(new[] { U("a", 11_475) }, BqSpec, feeRateSatPerKb: 0);
+        Assert.Equal(11_475, Assert.Single(enough.Plan!.Transactions).OutputSatoshis);
+        // To a legacy destination the legacy limit still applies.
+        Assert.NotNull(QuantumSweepPlanner.Plan(new[] { U("a", 11_474) }, LegacyB, feeRateSatPerKb: 0).Plan);
+    }
+
+    [Fact]
     public void A_31_input_consolidation_to_one_BQ_output_balances_to_the_satoshi()
     {
         // 2026-09-28 shape: 31 legacy outputs, one BQ output, fee out of the total.

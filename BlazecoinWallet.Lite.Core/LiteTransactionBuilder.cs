@@ -40,6 +40,20 @@ public static class LiteTransactionBuilder
     public const long DustSatoshis = 546;
 
     /// <summary>
+    /// The same floor for a post-quantum (BQ…) output. The node prices an output by what it costs
+    /// to create AND spend, and a P2PQH output is spent by a 3,739-byte signature-and-key: 43 bytes
+    /// of output + a 3,782-byte input = 3,825 bytes, 11,475 satoshis at the node's 3,000 sat/kvB.
+    /// Nodes up to 2.1.1 priced it like a legacy output (573); 2.1.2 applies this figure
+    /// (bug-bounty report 2026-11-06), so a smaller BQ… output — a tiny payment, or tiny change —
+    /// is refused as dust. Building to it is right for both.
+    /// </summary>
+    public const long PqDustSatoshis = 11_475;
+
+    /// <summary>The smallest output the network relays to <paramref name="address"/>.</summary>
+    public static long DustFloorFor(string address) =>
+        Pq.PqAddress.TryDecode(address) != null ? PqDustSatoshis : DustSatoshis;
+
+    /// <summary>
     /// Hard ceiling on the fee any single transaction may pay (0.001 BLZ). Blazecoin is a
     /// zero-fee chain, so a build whose CLAIMED-value fee exceeds this is a bug (mis-computed
     /// change, or a runaway sub-dust fold) — refuse rather than burn coins to miners.
@@ -175,8 +189,13 @@ public static class LiteTransactionBuilder
     {
         if (utxos.Count == 0) throw new ArgumentException("No inputs to spend.", nameof(utxos));
         if (amountSatoshis <= 0) throw new ArgumentOutOfRangeException(nameof(amountSatoshis));
-        if (amountSatoshis < DustSatoshis)
-            throw new ArgumentOutOfRangeException(nameof(amountSatoshis), $"Send amount is below the {DustSatoshis}-satoshi dust floor.");
+        // Each output is held to the floor of its own kind: 546 for B…, 11,475 for BQ….
+        var sendFloor = DustFloorFor(destinationAddress);
+        var changeFloor = DustFloorFor(changeAddress);
+        if (amountSatoshis < sendFloor)
+            throw new ArgumentOutOfRangeException(nameof(amountSatoshis), sendFloor == DustSatoshis
+                ? $"Send amount is below the {DustSatoshis}-satoshi dust floor."
+                : $"Send amount is below the {sendFloor:N0}-satoshi dust floor for a post-quantum (BQ…) address.");
         if (feeSatoshis < 0) throw new ArgumentOutOfRangeException(nameof(feeSatoshis));
 
         var destScript = BlazecoinAddress.ScriptPubKeyFor(destinationAddress, network)
@@ -199,12 +218,12 @@ public static class LiteTransactionBuilder
             throw new InvalidOperationException($"Inputs total {totalIn} sat but {required} sat are required.");
 
         var changeValue = totalIn - required;
-        var effectiveFee = feeSatoshis + (changeValue < DustSatoshis ? Math.Max(0, changeValue) : 0);
+        var effectiveFee = feeSatoshis + (changeValue < changeFloor ? Math.Max(0, changeValue) : 0);
         if (effectiveFee > MaxFeeSatoshis)
             throw new InvalidOperationException(
                 $"Refusing to send: the fee would be {effectiveFee} sat (max {MaxFeeSatoshis}). " +
                 "This can indicate stale or incorrect coin data — refresh and try again.");
-        var changeCreated = changeValue >= DustSatoshis;
+        var changeCreated = changeValue >= changeFloor;
 
         // ── Assemble ────────────────────────────────────────────────────────────────────
         var inputs = utxos.ToList();

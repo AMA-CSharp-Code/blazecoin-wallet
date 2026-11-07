@@ -8,6 +8,8 @@ namespace BlazecoinWallet.Lite.Gateway.Index;
 /// address in that case).</param>
 public sealed record ConfirmedUtxo(string TxId, int Vout, long Amount, long BlockHeight, bool IsCoinbase, string? ScriptPubKey = null);
 public sealed record AddressSummary(long Balance, long TotalReceived, long TotalSent, int TxCount);
+/// <summary>The mined spend of an output the index knows: both null while it is unspent.</summary>
+public sealed record OutputFate(string? SpentTxId, long? SpentHeight);
 
 /// <summary>One address-ledger row: a coin RECEIVED (amount &gt; 0) or a coin SENT
 /// (amount &lt; 0) by the address, keyed to the transaction that did it. Matches the full
@@ -218,6 +220,23 @@ public sealed class UtxoIndexDb
             utxos.Add(new ConfirmedUtxo(r.GetString(0), r.GetInt32(1), r.GetInt64(2), r.GetInt64(3), r.GetInt32(4) == 1,
                 r.IsDBNull(5) ? null : r.GetString(5)));
         return utxos;
+    }
+
+    /// <summary>
+    /// What became of one output: null when the index has never seen it; otherwise the mined
+    /// transaction that spent it and that transaction's height, both null while it is unspent.
+    /// (A spend still in the mempool is not here — it has no block to prove it by.)
+    /// </summary>
+    public OutputFate? GetOutputFate(string txId, int vout)
+    {
+        using var db = Open();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT spent_txid, spent_height FROM outputs WHERE txid = $txid AND vout = $vout";
+        cmd.Parameters.AddWithValue("$txid", txId);
+        cmd.Parameters.AddWithValue("$vout", vout);
+        using var r = cmd.ExecuteReader();
+        if (!r.Read()) return null;
+        return new OutputFate(r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetInt64(1));
     }
 
     /// <summary>

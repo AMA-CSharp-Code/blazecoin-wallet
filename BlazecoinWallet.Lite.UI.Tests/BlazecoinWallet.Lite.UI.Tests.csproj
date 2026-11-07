@@ -24,6 +24,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The genuinely mined test blocks of the core tests, compiled in here too: a page test that
+         needs a coin the real verifier accepts (and a real proof that it was spent) has no other
+         way to get one - each block's nonce was found by work and is pinned in its file. -->
+    <Compile Include="..\BlazecoinWallet.Lite.Core.Tests\MinedBlockFixture.cs" Link="Fixtures\MinedBlockFixture.cs" />
+    <Compile Include="..\BlazecoinWallet.Lite.Core.Tests\SpendBlockFixture.cs" Link="Fixtures\SpendBlockFixture.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\BlazecoinWallet.Lite.UI\BlazecoinWallet.Lite.UI.csproj" />
     <ProjectReference Include="..\BlazecoinWallet.Lite.Core\BlazecoinWallet.Lite.Core.csproj" />
   </ItemGroup>

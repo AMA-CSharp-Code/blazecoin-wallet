@@ -89,6 +89,45 @@ public static class VintageCoinControl
     public const long DustThresholdSatoshis = 546;
 
     /// <summary>
+    /// What the manual Send page says when a blz1… (bech32, SegWit) address is entered. SegWit never activates on this
+    /// chain: the node accepts such an output and mines it, and nothing can ever spend it. The Send page and Auto
+    /// Payout have refused these since the start; the vintage planners checked only that the recipient was not blank
+    /// (bug-bounty report 2026-11-06, ninth round), so a Provenance send to a blz1… address would have burned the coins.
+    /// </summary>
+    public const string SegwitAddressProblem =
+        "blz1… (SegWit) addresses can't be used — SegWit is not active on this chain, so coins sent there would be lost. Use a legacy B… or a post-quantum BQ… address.";
+
+    /// <summary>True for a bech32 (blz1…) address — the one shape that is accepted on chain and spendable by nobody.</summary>
+    public static bool IsUnsafeSegwitAddress(string? address) =>
+        (address ?? string.Empty).Trim().StartsWith("blz1", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Why <paramref name="address"/> cannot receive a planned output (<paramref name="role"/> names it in the
+    /// message: "recipient", "change"), or null when it can. Every planner runs this on every address it will pay.</summary>
+    public static string? AddressProblem(string? address, string role)
+    {
+        if (string.IsNullOrWhiteSpace(address)) return $"A {role} address is required.";
+        if (IsUnsafeSegwitAddress(address)) return $"The {role} address is a blz1… (SegWit) address. {SegwitAddressProblem}";
+        return null;
+    }
+
+    /// <summary>
+    /// The same limit for a post-quantum (BQ…) output: 11,475 satoshis. The node prices an output
+    /// by what it takes to create AND spend, and a P2PQH output is spent by a 3,739-byte
+    /// signature-and-key (43 bytes of output + a 3,782-byte input, at 3,000 sat/kvB). Nodes up to
+    /// 2.1.1 priced it like a legacy output; 2.1.2 applies this figure (bug-bounty report
+    /// 2026-11-06). Change goes to BQ… addresses since 2.0.18, so a plan's change is held to it.
+    /// </summary>
+    public const long PqDustThresholdSatoshis = 11_475;
+
+    /// <summary>The smallest output the network relays to <paramref name="address"/>, given the
+    /// legacy limit in force (0 switches the check off, as it always has).</summary>
+    public static long DustThresholdFor(string? address, long legacyThreshold = DustThresholdSatoshis) =>
+        legacyThreshold <= 0 ? 0
+        : Mining.BitcoinProtocol.KindOf(address) == Mining.BlazecoinAddressKind.PostQuantum
+            ? Math.Max(legacyThreshold, PqDustThresholdSatoshis)
+            : legacyThreshold;
+
+    /// <summary>
     /// Names an address a plan would pay twice, or null. `createrawtransaction` refuses a
     /// duplicated address outright, so this is caught at planning time with a reason the
     /// user can act on — the recipient being the wallet's own change address, say.
@@ -110,17 +149,21 @@ public static class VintageCoinControl
     private static string? DustProblem(IEnumerable<PlannedOutput> outputs, long threshold)
     {
         if (threshold <= 0) return null;
-        foreach (var o in outputs.Where(o => o.Satoshis < threshold))
+        foreach (var o in outputs)
         {
+            // Each output against the limit of its own kind (a BQ… output's is much higher).
+            var floor = DustThresholdFor(o.Address, threshold);
+            if (o.Satoshis >= floor) continue;
             var what = o.Role switch
             {
                 OutputRole.Vintage => "The amount being sent",
                 OutputRole.LeadingChange => "The leading change output that positions the vintage",
                 _ => "The change coming back to you",
             };
-            return $"{what} is {o.Satoshis:N0} satoshis, below the network's {threshold:N0}-satoshi dust limit — " +
+            var kind = floor > threshold ? " for a post-quantum (BQ…) address" : "";
+            return $"{what} is {o.Satoshis:N0} satoshis, below the network's {floor:N0}-satoshi dust limit{kind} — " +
                    "it would be rejected as dust. Sends are free here, but every output must still be at least " +
-                   $"{threshold:N0} satoshis.";
+                   $"{floor:N0} satoshis{kind}.";
         }
         return null;
     }
@@ -291,8 +334,10 @@ public static class VintageCoinControl
     {
         if (amountSatoshis <= 0) return VintagePlanResult.Fail("Amount must be positive.");
         if (feeSatoshis < 0) return VintagePlanResult.Fail("Fee cannot be negative.");
-        if (string.IsNullOrWhiteSpace(recipient)) return VintagePlanResult.Fail("A recipient address is required.");
-        if (string.IsNullOrWhiteSpace(changeAddress)) return VintagePlanResult.Fail("A change address is required.");
+        if (AddressProblem(recipient, "recipient") is { } badRecipient) return VintagePlanResult.Fail(badRecipient);
+        if (AddressProblem(changeAddress, "change") is { } badChange) return VintagePlanResult.Fail(badChange);
+        if (leadingChangeAddress != null && IsUnsafeSegwitAddress(leadingChangeAddress))
+            return VintagePlanResult.Fail(AddressProblem(leadingChangeAddress, "leading change")!);
 
         var height = targetHeight;
         var holdings = Holdings(report, heights);
@@ -346,7 +391,7 @@ public static class VintageCoinControl
     {
         if (coinCount <= 0) return VintagePlanResult.Fail("Choose at least one output.");
         if (feeSatoshis < 0) return VintagePlanResult.Fail("Fee cannot be negative.");
-        if (string.IsNullOrWhiteSpace(recipient)) return VintagePlanResult.Fail("A recipient address is required.");
+        if (AddressProblem(recipient, "recipient") is { } badRecipient) return VintagePlanResult.Fail(badRecipient);
 
         // Only whole PURE coins qualify — sending a blended output intact would deliver
         // someone else's lineage along with it.
@@ -457,7 +502,7 @@ public static class VintageCoinControl
         long dustThresholdSatoshis = DustThresholdSatoshis)
     {
         if (feeSatoshis < 0) return VintagePlanResult.Fail("Fee cannot be negative.");
-        if (string.IsNullOrWhiteSpace(recipient)) return VintagePlanResult.Fail("A recipient address is required.");
+        if (AddressProblem(recipient, "recipient") is { } badRecipient) return VintagePlanResult.Fail(badRecipient);
 
         var heights = new HashSet<long> { height };
         var coins = Holdings(report, heights).Where(h => h.IsPure).ToList();

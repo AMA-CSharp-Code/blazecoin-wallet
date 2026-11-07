@@ -19,8 +19,12 @@ public sealed record LiteMoveResult(bool Success, string? TxId, int MovedCoins, 
 /// the data comes from the user's own node, whose chainstate is authoritative. False for a
 /// coin the gateway lists that the wallet has not (yet) proven, and for every unconfirmed coin
 /// (nothing to prove until it is mined). Only verified coins are spendable balance
-/// (bug-bounty report 2026-11-06).</param>
-public sealed record LiteOwnedUtxo(string Address, LiteChainUtxo Utxo, bool Verified = true);
+/// (bug-bounty report 2026-11-06). A coin proven to exist is still NOT verified while the
+/// question "has it been spent since?" is open or answered yes (sixth round).</param>
+/// <param name="ProvenSpent">The gateway lists this coin, and a second gateway has PROVEN it was
+/// already spent (the mined spending transaction, checked by the wallet). Never verified, never
+/// counted — and a sign that the listing gateway is wrong or lying.</param>
+public sealed record LiteOwnedUtxo(string Address, LiteChainUtxo Utxo, bool Verified = true, bool ProvenSpent = false);
 
 /// <summary>The Balance card's split: what can be spent now, coinbases still ripening,
 /// and unconfirmed incoming. Coins leaving in an in-flight send are the remainder
@@ -32,8 +36,11 @@ public sealed record LiteOwnedUtxo(string Address, LiteChainUtxo Utxo, bool Veri
 /// the chain — being checked, or failing the check. Never part of <paramref name="Spendable"/>
 /// or <paramref name="ImmatureCoinbase"/>; shown on its own line so the user sees a claim, not
 /// money (bug-bounty report 2026-11-06).</param>
+/// <param name="ProvenSpent">Coins the gateway still lists that a second gateway has PROVEN were
+/// already spent (bug-bounty report 2026-11-06, sixth round). Not part of any other figure;
+/// shown on its own line, because it says the gateway in use cannot be relied on.</param>
 public sealed record LiteBalanceBreakdown(long Spendable, long ImmatureCoinbase, long UnconfirmedIncoming,
-    long SpendableLegacy = 0, long Unverified = 0);
+    long SpendableLegacy = 0, long Unverified = 0, long ProvenSpent = 0);
 
 /// <summary>What a WIF key holds on-chain — shown before the user commits to a sweep.</summary>
 /// <param name="SpendableSatoshis">Coins PROVEN on the chain and mature — what a sweep moves now.</param>
@@ -101,6 +108,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
     private readonly LiteTxVerifier? _verifier;
     private readonly IWalletStateStore _stateStore;
     private readonly ChainCheckQueue? _checks;   // null when the source is authoritative (no verifier)
+    private readonly SpentCoinGuard? _spends;    // null when there is no verifier, or no way to ask a second gateway
 
     /// <summary>What a proven coin IS, read from the proof and not from the gateway's row: whether
     /// its funding transaction is a coinbase, and the height the header chain placed its block at
@@ -116,6 +124,18 @@ public sealed class LiteWalletService : IWalletUtxoSource
     // inside its first balance read; anything beyond this runs in the paced background queue.
     internal const int InlineCoinChecks = 6;
     internal static readonly TimeSpan InlineCoinBudget = TimeSpan.FromSeconds(4);
+    /// <summary>How long one read waits for a second gateway's word on coins it has not been
+    /// asked about yet (one request for up to fifty coins). Past it the coins simply are not
+    /// counted yet, and the answer arrives through <see cref="VerificationChanged"/>.</summary>
+    internal static readonly TimeSpan InlineSpendBudget = TimeSpan.FromSeconds(4);
+    /// <summary>The same wait on the old-key screen, where the user asked and is watching.</summary>
+    internal static readonly TimeSpan WifSpendBudget = TimeSpan.FromSeconds(12);
+    /// <summary>The words shown for a coin a second gateway proved was already spent.</summary>
+    internal const string SpentElsewhereMessage =
+        "This coin has already been spent — a second gateway proved it. The gateway you are using still lists it; switch gateway in Settings.";
+    /// <summary>The words shown while a second gateway's claim that a coin was spent is still being checked.</summary>
+    internal const string SpendUnsettledMessage =
+        "A second gateway reports this coin as already spent and the wallet has not been able to check that yet — try again in a minute.";
     internal const int InlineHistoryChecks = 4;
     internal static readonly TimeSpan InlineHistoryBudget = TimeSpan.FromSeconds(2);
 
@@ -152,6 +172,11 @@ public sealed class LiteWalletService : IWalletUtxoSource
         {
             _checks = new ChainCheckQueue();
             _checks.Changed += () => VerificationChanged?.Invoke();
+            if (reader is ISpendCrossCheck secondOpinion)
+            {
+                _spends = new SpentCoinGuard(secondOpinion, verifier);
+                _spends.Changed += () => VerificationChanged?.Invoke();
+            }
         }
     }
 
@@ -163,8 +188,15 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// <summary>The read-path chain-check queue (tests pace and await it).</summary>
     internal ChainCheckQueue? Checks => _checks;
 
+    /// <summary>The spent-coin guard (tests set its clock and intervals).</summary>
+    internal SpentCoinGuard? Spends => _spends;
+
     /// <summary>Completes when no chain check is running or queued.</summary>
-    internal Task WhenVerificationIdleAsync() => _checks?.WhenIdleAsync() ?? Task.CompletedTask;
+    internal async Task WhenVerificationIdleAsync()
+    {
+        if (_checks != null) await _checks.WhenIdleAsync();
+        if (_spends != null) await _spends.WhenIdleAsync();
+    }
 
     /// <summary>Convenience ctor for the common case of one full data source.</summary>
     public LiteWalletService(ISeedVault vault, ILiteWalletData data,
@@ -418,6 +450,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
         _pipeline.Reset();
         _pendingSpent.Clear();
         _checks?.Clear();
+        _spends?.Clear();
         _coinFacts.Clear();
         _verifiedCoinsLoaded = false;
         _verifiedCoinsSaved = null;
@@ -561,11 +594,12 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// </summary>
     public async Task<LiteBalanceBreakdown> GetBalanceBreakdownAsync(CancellationToken ct = default)
     {
-        long spendable = 0, immature = 0, incoming = 0, legacy = 0, unverified = 0;
+        long spendable = 0, immature = 0, incoming = 0, legacy = 0, unverified = 0, provenSpent = 0;
         foreach (var u in await GetAllUtxosAsync(ct))
         {
             var conf = TrustedConfirmations(u.Utxo);
             if (conf == 0) incoming += u.Utxo.Amount;           // nothing to prove until it is mined
+            else if (u.ProvenSpent) provenSpent += u.Utxo.Amount;   // listed, and proven gone
             else if (!u.Verified) unverified += u.Utxo.Amount;  // the gateway's claim, not money
             else if (conf >= (u.Utxo.IsCoinbase ? CoinbaseMaturity : 1))
             {
@@ -574,7 +608,7 @@ public sealed class LiteWalletService : IWalletUtxoSource
             }
             else immature += u.Utxo.Amount;   // a confirmed coinbase still ripening
         }
-        return new LiteBalanceBreakdown(spendable, immature, incoming, legacy, unverified);
+        return new LiteBalanceBreakdown(spendable, immature, incoming, legacy, unverified, provenSpent);
     }
 
     // ── Address look-ahead ───────────────────────────────────────────────────────────────
@@ -635,7 +669,13 @@ public sealed class LiteWalletService : IWalletUtxoSource
     private void MarkPendingSpent(IEnumerable<LiteUtxo> inputs)
     {
         var now = DateTime.UtcNow;
-        foreach (var u in inputs) _pendingSpent[OutpointKey(u.TxId, u.Vout)] = now;
+        foreach (var u in inputs)
+        {
+            _pendingSpent[OutpointKey(u.TxId, u.Vout)] = now;
+            // What a second gateway said about the coin before is void now: if a gateway lists it
+            // again once this overlay lapses, it is asked about afresh before it can count.
+            _spends?.NoteOwnSpend(u.TxId, u.Vout);
+        }
     }
 
     /// <summary>
@@ -645,6 +685,12 @@ public sealed class LiteWalletService : IWalletUtxoSource
     /// as the spend path verifies an input (funding tx hashes to its id, pays this address, is
     /// mined on the chain), a few inside this read and the rest in the background, and a proven
     /// coin carries the value the chain commits to, whatever the gateway said.
+    /// <para>That proves the coin was created. Whether it has been SPENT since is a separate
+    /// question no proof of the coin can answer (bug-bounty report 2026-11-06, sixth round: a
+    /// gateway that went on listing a spent coin had it counted and announced, every proof
+    /// genuine), so each proven coin is also put to a second gateway (<see cref="SpentCoinGuard"/>):
+    /// it counts once nobody has shown a spend, and a coin whose spend is proven is marked
+    /// <see cref="LiteOwnedUtxo.ProvenSpent"/>.</para>
     /// </summary>
     public async Task<IReadOnlyList<LiteOwnedUtxo>> GetAllUtxosAsync(CancellationToken ct = default)
     {
@@ -657,13 +703,33 @@ public sealed class LiteWalletService : IWalletUtxoSource
             owned.Where(u => u.Utxo.Confirmations > 0).Select(CoinItem).ToList(),
             InlineCoinChecks, InlineCoinBudget, ct);
 
+        if (_spends != null)
+            await _spends.EnsureAsync(
+                owned.Where(u => u.Utxo.Confirmations > 0 && _checks.TryGetVerified(CoinKey(u), out _)).Select(Outpoint).ToList(),
+                InlineSpendBudget, ct);
+
         var marked = owned.Select(u =>
-            u.Utxo.Confirmations > 0 && _checks.TryGetVerified(CoinKey(u), out var real)
-                ? u with { Verified = true, Utxo = WithProvenFacts(u, real) }
-                : u with { Verified = false }).ToList();
+        {
+            if (u.Utxo.Confirmations <= 0 || !_checks.TryGetVerified(CoinKey(u), out var real))
+                return u with { Verified = false };
+            var proven = u with { Utxo = WithProvenFacts(u, real) };
+            return StandingOf(u) switch
+            {
+                SpendStanding.Clear => proven with { Verified = true },
+                SpendStanding.Spent => proven with { Verified = false, ProvenSpent = true },
+                _ => proven with { Verified = false },   // still being asked about
+            };
+        }).ToList();
         await SaveVerifiedCoinsAsync(marked);
         return marked;
     }
+
+    private static LiteOutpoint Outpoint(LiteOwnedUtxo u) => new(u.Utxo.TxId, u.Utxo.OutputIndex, u.Utxo.Source);
+
+    /// <summary>Clear when there is no guard: a source with no second gateway to ask is exactly
+    /// as trusted on this point as it was.</summary>
+    private SpendStanding StandingOf(LiteOwnedUtxo u) =>
+        _spends?.StandingOf(u.Utxo.TxId, u.Utxo.OutputIndex) ?? SpendStanding.Clear;
 
     /// <summary>A proven coin as the chain describes it: its real value, whether it is a coinbase
     /// (from its own transaction) and, where the header chain placed its block, its real height.
@@ -861,6 +927,15 @@ public sealed class LiteWalletService : IWalletUtxoSource
                 {
                     unproven += candidate.Utxo.Amount;
                     lastError = outcome.Error;
+                    continue;
+                }
+                // Proven to exist; now the other half — nobody may be able to show it was spent. Asked
+                // afresh, whatever was answered before: the user is about to sign with this coin.
+                var standing = _spends == null ? SpendStanding.Clear : await _spends.CheckNowAsync(Outpoint(candidate), ct);
+                if (standing != SpendStanding.Clear)
+                {
+                    unproven += candidate.Utxo.Amount;
+                    lastError = standing == SpendStanding.Spent ? SpentElsewhereMessage : SpendUnsettledMessage;
                     continue;
                 }
                 coin = candidate with { Verified = true, Utxo = candidate.Utxo with { Amount = outcome.Value } };
@@ -1083,6 +1158,13 @@ public sealed class LiteWalletService : IWalletUtxoSource
         long immature = 0, unverified = 0, unconfirmed = 0;
         string? reason = null;
         var checkedCoins = 0;
+        // The same second opinion the wallet's own coins get: a spent coin is not recoverable,
+        // however genuine the proof that it once existed. One question for the coins a sweep can carry.
+        if (_verifier != null && _spends != null)
+            await _spends.EnsureAsync(
+                utxos.Where(u => TrustedConfirmations(u) > 0).OrderByDescending(u => u.Amount).Take(MaxInputsPerMove)
+                     .Select(u => new LiteOutpoint(u.TxId, u.OutputIndex, u.Source)).ToList(),
+                WifSpendBudget, ct);
         foreach (var u in utxos.OrderByDescending(u => u.Amount))
         {
             var conf = TrustedConfirmations(u);
@@ -1102,6 +1184,13 @@ public sealed class LiteWalletService : IWalletUtxoSource
                 var v = await _verifier.VerifyAsync(u.TxId, u.OutputIndex, u.Amount,
                     requireInclusionProof: true, expectedAddress: address, claimedBlockHeight: u.BlockHeight, ct: ct);
                 if (!v.Verified) { unverified += u.Amount; reason = v.Error; continue; }
+                var standing = _spends?.StandingOf(u.TxId, u.OutputIndex) ?? SpendStanding.Clear;
+                if (standing != SpendStanding.Clear)
+                {
+                    unverified += u.Amount;
+                    reason = standing == SpendStanding.Spent ? SpentElsewhereMessage : SpendUnsettledMessage;
+                    continue;
+                }
                 // The chain's value, kind and (where a header chain placed it) height — not the claim.
                 coin = u with
                 {

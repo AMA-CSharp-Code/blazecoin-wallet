@@ -9,6 +9,10 @@ using BlazecoinWallet.Lite.Gateway.Rpc;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 
+// How many outputs one /outputs/spends request may ask about (about 3.4 KB of query string —
+// well inside Kestrel's request-line limit, and one indexed lookup each).
+const int MaxSpendQuestions = 50;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Kestrel sits on loopback behind Caddy. Hard caps so a flood can't exhaust the 4 GB VPS:
@@ -190,6 +194,36 @@ static void MapWalletSurface(RouteGroupBuilder api)
             .Select(u => new UtxoResponse(u.TxId, u.Vout, u.Amount, 0, 0, false, u.ScriptPubKey));
         return Results.Ok(confirmed.Concat(unconfirmed)
             .OrderByDescending(u => u.Confirmations).ThenBy(u => u.TxId).ThenBy(u => u.OutputIndex));
+    });
+
+    // What became of some outputs — the question a wallet puts to a SECOND gateway (bug-bounty
+    // report 2026-11-06, sixth round). A wallet can prove a coin was created (raw transaction +
+    // merkle proof) but nothing proves it is still unspent, so a gateway that kept a spent coin
+    // in its /utxos answer had it counted, and announced, as money. A spend, unlike an absence,
+    // CAN be proven: this names the mined transaction that spent each output, and the wallet
+    // fetches that transaction and its proof (/tx/{id}/raw, /tx/{id}/proof) and checks them
+    // itself — so this answer is a pointer to evidence, never something to be believed.
+    // ?o=txid:vout,txid:vout… (at most MaxSpendQuestions). Mined spends only: a spend still in the
+    // mempool has no block to prove it by. An output the index has never seen is known = false.
+    api.MapGet("/outputs/spends", (string? o, UtxoIndexDb db, WalkerStatus status) =>
+    {
+        if (!status.Synced) return IndexNotReady();
+        var asked = (o ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (asked.Length is 0 or > MaxSpendQuestions)
+            return Results.BadRequest(new { error = $"Ask about 1 to {MaxSpendQuestions} outputs: ?o=txid:vout,txid:vout" });
+
+        var items = new List<object>(asked.Length);
+        foreach (var one in asked)
+        {
+            var sep = one.IndexOf(':');
+            if (sep != 64 || !IsTxId(one[..sep]) || !int.TryParse(one[(sep + 1)..], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var vout))
+                return Results.BadRequest(new { error = "Each output is txid:vout." });
+            var txId = one[..sep].ToLowerInvariant();
+            var fate = db.GetOutputFate(txId, vout);
+            items.Add(new { txId, vout, known = fate != null, spentTxId = fate?.SpentTxId, spentHeight = fate?.SpentHeight });
+        }
+        return Results.Ok(new { height = status.IndexedHeight, items });
     });
 
     // Address transaction history (newest-first, paginated): signed per-output/input rows,

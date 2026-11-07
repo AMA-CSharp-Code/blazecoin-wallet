@@ -42,10 +42,17 @@ else
                transaction is verified (bug-bounty report 2026-11-06). *@
             <div class="lite-sub lite-unverified">@AmountText(unproven.Unverified) @_sym not verified against the chain yet — not counted until it is proven.</div>
         }
+        @if (_breakdown is { ProvenSpent: > 0 } gone)
+        {
+            @* Coins the gateway still lists although a second gateway has PROVEN they were spent
+               (bug-bounty report 2026-11-06, sixth round). Not money, and not "being checked"
+               either: it means the gateway in use is wrong, so say that and say what to do. *@
+            <div class="lite-sub lite-unverified lite-spent-elsewhere">⚠ @AmountText(gone.ProvenSpent) @_sym is listed by your gateway but was already spent — a second gateway proved it. Not counted. Consider switching gateway in Settings.</div>
+        }
         @if (_breakdown is { } bd && _summary != null)
         {
-            // The summary is the gateway's figure; unverified coins are part of it, not of "leaving".
-            var inFlight = Math.Max(0, _summary.Balance - bd.Spendable - bd.ImmatureCoinbase - bd.Unverified);
+            // The summary is the gateway's figure; unverified and proven-spent coins are part of it, not of "leaving".
+            var inFlight = Math.Max(0, _summary.Balance - bd.Spendable - bd.ImmatureCoinbase - bd.Unverified - bd.ProvenSpent);
             @if (bd.ImmatureCoinbase > 0)
             {
                 <div class="lite-sub">@AmountText(bd.ImmatureCoinbase) @_sym maturing — freshly mined coins wait 30 blocks.</div>

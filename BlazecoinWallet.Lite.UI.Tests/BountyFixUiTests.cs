@@ -4,6 +4,8 @@ using BlazecoinWallet.Lite.UI.Pages;
 using BlazecoinWallet.Lite.UI.Shared;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using F = BlazecoinWallet.Lite.Tests.MinedBlockFixture;
+using S = BlazecoinWallet.Lite.Tests.SpendBlockFixture;
 
 namespace BlazecoinWallet.Lite.UI.Tests;
 
@@ -94,6 +96,67 @@ public class BountyFixUiTests : LiteUiTestBase
         // Not explained away as an in-flight send, and no provenance chip for coins that are not proven.
         Assert.DoesNotContain("leaving in an unconfirmed send", cut.Markup);
         Assert.DoesNotContain("Coin Provenance", cut.Markup);
+    }
+
+    // ── a coin that was already spent (round six) ──
+
+    /// <summary>A source that lists a genuinely mined coin and serves its genuine proof — and, in
+    /// the role of the second gateway, proves the coin was spent in a later block. Both blocks are
+    /// the core tests' mined fixtures, so the real verifier judges everything.</summary>
+    private sealed class ResurrectingSource : IChainReader, ISpendCrossCheck
+    {
+        private static readonly string Coin = F.TxId(0);
+        private static readonly string Spender = S.TxId(0);
+        public const long CoinSats = 1_000_000_000;
+
+        public bool SupportsHistory => true;
+        public bool SupportsChainVerification => true;
+        public int MaxOutpointsPerCall => 50;
+
+        public Task<LiteAddressSummary?> GetAddressAsync(string a, CancellationToken ct = default)
+            => Task.FromResult(a == F.Receive0 ? new LiteAddressSummary(CoinSats, CoinSats, 0, 1) : null);
+        public Task<IReadOnlyList<LiteChainUtxo>> GetUtxosAsync(string a, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<LiteChainUtxo>>(a == F.Receive0
+                ? [new LiteChainUtxo(Coin, 0, CoinSats, 25, F.BlockHeight, false) { Source = new Uri("https://a.test/") }]
+                : []);
+        public Task<IReadOnlyList<LiteHistoryEntry>> GetHistoryAsync(string a, int p = 1, int ps = 25, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<LiteHistoryEntry>>([]);
+        public Task<string?> GetRawTransactionHexAsync(string txId, CancellationToken ct = default)
+            => Task.FromResult(F.RawHex(txId));
+        public Task<string?> GetTxOutProofAsync(string txId, CancellationToken ct = default)
+            => Task.FromResult(F.ProofHex(txId));
+
+        public Task<IReadOnlyList<LiteSpendClaim>?> FindSpendsFromAnotherGatewayAsync(
+            IReadOnlyList<LiteOutpoint> outpoints, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<LiteSpendClaim>?>(outpoints.Any(o => o.TxId == Coin && o.Vout == 0)
+                ? [new LiteSpendClaim(Coin, 0, Spender, S.BlockHeight,
+                    S.RawHex(Spender), S.ProofHex(Spender))]
+                : []);
+    }
+
+    [Fact]
+    public void Home_says_a_listed_coin_was_already_spent_and_does_not_count_it()
+    {
+        // Bug-bounty report 2026-11-06 (sixth round): the gateway lists a coin whose proof is genuine and
+        // which was spent since. It used to be the balance (10 BLZ here). A second gateway proves the spend.
+        var source = new ResurrectingSource();
+        Wire(new LoadedVault(), source, new FakeRelay());
+        var service = new LiteWalletService(new LoadedVault(), source, new FakeRelay(), verifier: new LiteTxVerifier(source));
+        service.Checks!.Pace = TimeSpan.Zero;
+        Services.AddSingleton(service);   // after Wire — the last registration wins
+        var cut = RenderComponent<Home>();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal("0", cut.Find(".lite-balance").TextContent.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]);
+            var line = cut.Find(".lite-spent-elsewhere").TextContent;
+            Assert.Contains("10", line);
+            Assert.Contains("already spent", line);
+            Assert.Contains("switching gateway", line);
+        });
+        // It is not "being checked", and it is not an in-flight send of the user's own.
+        Assert.DoesNotContain("not verified against the chain yet", cut.Markup);
+        Assert.DoesNotContain("leaving in an unconfirmed send", cut.Markup);
     }
 
     [Fact]

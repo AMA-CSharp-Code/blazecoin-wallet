@@ -758,8 +758,27 @@ public partial class ReadPathVerificationTests
     public void Regrind_the_fixture_nonce()
     {
         if (Environment.GetEnvironmentVariable("BLZ_GRIND") != "1") return;
+        Assert.Fail($"MinedBlockFixture.Nonce = {Grind(F.Block.Header)}");
+    }
 
-        var template = F.Block.Header.ToBytes();
+    /// <summary>The same for <see cref="SpendBlockFixture"/> (BLZ_GRIND=spend).</summary>
+    [Fact]
+    public void Regrind_the_spend_fixture_nonce()
+    {
+        if (Environment.GetEnvironmentVariable("BLZ_GRIND") != "spend") return;
+        Assert.Fail($"SpendBlockFixture.Nonce = {Grind(SpendBlockFixture.Block.Header)}");
+    }
+
+    [Fact]
+    public void The_spend_fixture_block_is_really_mined()
+    {
+        Assert.True(BlazecoinPoW.MeetsTarget(SpendBlockFixture.Block.Header),
+            "SpendBlockFixture.Nonce no longer fits the block — regrind it (see the fixture).");
+    }
+
+    private static long Grind(BlockHeader blockHeader)
+    {
+        var template = blockHeader.ToBytes();
         long found = -1;
         Parallel.For(0L, uint.MaxValue, (nonce, loop) =>
         {
@@ -776,7 +795,7 @@ public partial class ReadPathVerificationTests
 
         var outFile = Environment.GetEnvironmentVariable("BLZ_GRIND_OUT");
         if (!string.IsNullOrEmpty(outFile)) File.WriteAllText(outFile, found.ToString());
-        Assert.Fail($"MinedBlockFixture.Nonce = {found}");
+        return found;
     }
 
     [Fact]

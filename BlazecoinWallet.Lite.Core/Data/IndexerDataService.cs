@@ -12,7 +12,7 @@ namespace BlazecoinWallet.Lite.Data;
 /// never-throw contract (null/empty + a log line) so the UI degrades instead of crashing;
 /// Broadcast returns a typed failure because the user must SEE why a send didn't go out.
 /// </summary>
-public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncestryReader, IAddressUsageCrossCheck
+public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncestryReader, IAddressUsageCrossCheck, ISpendCrossCheck
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -84,15 +84,104 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
     {
         try
         {
-            var utxos = await _http.GetFromJsonAsync<List<UtxoJson>>(
-                $"indexer/api/address/{Uri.EscapeDataString(address)}/utxos", Json, ct);
-            return utxos?.Select(u => new LiteChainUtxo(u.TxId, u.OutputIndex, u.Amount, u.Confirmations, u.BlockHeight, u.IsCoinbase, u.ScriptPubKey))
+            // Sent as a request (not GetFromJsonAsync) so the listing can be stamped with the
+            // gateway that served it: a second opinion on these coins must come from another one.
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/address/{Uri.EscapeDataString(address)}/utxos");
+            using var res = await _http.SendAsync(request, ct);
+            res.EnsureSuccessStatusCode();
+            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var source);
+            var utxos = await res.Content.ReadFromJsonAsync<List<UtxoJson>>(Json, ct);
+            return utxos?.Select(u => new LiteChainUtxo(u.TxId, u.OutputIndex, u.Amount, u.Confirmations, u.BlockHeight, u.IsCoinbase, u.ScriptPubKey) { Source = source })
                         .ToList() ?? [];
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "UTXO fetch failed");
             return [];
+        }
+    }
+
+    /// <summary>One request's worth of outputs for <c>outputs/spends</c> (the gateway's own cap).</summary>
+    public int MaxOutpointsPerCall => 50;
+
+    /// <summary>The most claimed spends whose evidence is fetched in one call — two requests each,
+    /// so a gateway answering "all spent" cannot make the wallet burn its read allowance.</summary>
+    internal const int MaxSpendEvidencePerCall = 10;
+
+    /// <summary>
+    /// <see cref="ISpendCrossCheck"/>: asks a gateway other than the one that listed each coin
+    /// which of them it holds a mined spend for, and fetches the spending transaction and its
+    /// merkle proof FROM THAT SAME SIDE (never from the gateway that listed the coin — it would
+    /// simply not have them). Coins are grouped by the gateway that listed them; a coin with no
+    /// known source has nobody else to be checked against. Null = no second opinion was had.
+    /// </summary>
+    public async Task<IReadOnlyList<LiteSpendClaim>?> FindSpendsFromAnotherGatewayAsync(
+        IReadOnlyList<LiteOutpoint> outpoints, CancellationToken ct = default)
+    {
+        var claims = new List<LiteSpendClaim>();
+        var answered = false;
+        foreach (var group in outpoints.Where(o => o.Source != null).GroupBy(o => o.Source!))
+        {
+            IReadOnlyCollection<Uri> exclude = [group.Key];
+            foreach (var chunk in group.Chunk(MaxOutpointsPerCall))
+            {
+                var spent = await AskSpendsAsync(chunk, exclude, ct);
+                if (spent == null) continue;          // nobody else answered for this chunk
+                answered = true;
+                foreach (var s in spent.Take(MaxSpendEvidencePerCall))
+                    claims.Add(new LiteSpendClaim(s.TxId, s.Vout, s.SpentTxId!, s.SpentHeight ?? 0,
+                        await GetFromAnotherGatewayAsync<RawTxJson>($"indexer/api/tx/{Uri.EscapeDataString(s.SpentTxId!)}/raw", exclude, b => b.Hex, ct),
+                        await GetFromAnotherGatewayAsync<ProofJson>($"indexer/api/tx/{Uri.EscapeDataString(s.SpentTxId!)}/proof", exclude, b => b.Proof, ct)));
+            }
+        }
+        return answered ? claims : null;
+    }
+
+    /// <summary>The outputs a second gateway says were spent in a block; null when it gave no usable
+    /// answer (unreachable, none configured, or it does not serve the question — an older gateway
+    /// or a full Indexer site answers 404).</summary>
+    private async Task<List<SpendJson>?> AskSpendsAsync(IReadOnlyList<LiteOutpoint> outpoints, IReadOnlyCollection<Uri> exclude, CancellationToken ct)
+    {
+        try
+        {
+            var asked = string.Join(',', outpoints.Select(o => $"{o.TxId}:{o.Vout}"));
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/outputs/spends?o={asked}");
+            request.Options.Set(GatewayRouting.Exclude, exclude);
+            using var res = await _http.SendAsync(request, ct);
+            if (!res.IsSuccessStatusCode) return null;
+            var body = await res.Content.ReadFromJsonAsync<SpendsJson>(Json, ct);
+            if (body?.Items == null) return null;
+            // Only answers to what was asked, and only ones that name a spender.
+            return body.Items
+                .Where(i => i is { TxId: not null, SpentTxId.Length: 64 } &&
+                            outpoints.Any(o => o.Vout == i.Vout && string.Equals(o.TxId, i.TxId, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No second gateway answered the spent-output question");
+            return null;
+        }
+    }
+
+    private async Task<string?> GetFromAnotherGatewayAsync<TBody>(string path, IReadOnlyCollection<Uri> exclude,
+        Func<TBody, string?> pick, CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, path);
+            request.Options.Set(GatewayRouting.Exclude, exclude);
+            using var res = await _http.SendAsync(request, ct);
+            if (!res.IsSuccessStatusCode) return null;
+            var body = await res.Content.ReadFromJsonAsync<TBody>(Json, ct);
+            return body == null ? null : pick(body);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Spend evidence fetch from a second gateway failed");
+            return null;
         }
     }
 
@@ -367,6 +456,8 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
     private sealed record RawTxJson(string? Hex);
     private sealed record ProofJson(string? Proof);
     private sealed record HeadersJson(List<string>? Headers);
+    private sealed record SpendJson(string? TxId, int Vout, bool Known, string? SpentTxId, long? SpentHeight);
+    private sealed record SpendsJson(List<SpendJson>? Items);
     private sealed record AncestryRowJson(string Key, string Label, string Kind, long Satoshis,
         int OutputCount, long FirstHeight, DateTime FirstTimeUtc, DateTime LastTimeUtc);
     private sealed record AncestryModelJson(long AttributedSatoshis,

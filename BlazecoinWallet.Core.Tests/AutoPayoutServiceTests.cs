@@ -49,6 +49,34 @@ public class AutoPayoutServiceTests
     }
 
     [Fact]
+    public async Task a_dry_run_uses_up_neither_the_daily_cap_nor_the_cooldown()
+    {
+        // Bug-bounty report 2026-11-06 (seventh round): the rehearsal charged the amount it "would send"
+        // to the day's cap and started the cooldown, and both were saved — so the real payout right
+        // after it was refused for the rest of the day although nothing had been sent.
+        var (svc, rpc, store) = Make(spendable: 200m);
+        rpc.SendToAddressAsync(Arg.Any<string>(), Arg.Any<decimal>())
+           .Returns(Task.FromResult<string?>("txid123"));
+        svc.Threshold = 100m; svc.Address = "Bvalid"; svc.Mode = "above"; svc.Batch = "single";
+        svc.DailyCap = 100m; svc.CooldownMin = 60;
+
+        svc.Live = false;                                           // the rehearsal
+        await svc.StartAsync();
+        await svc.TickAsync(fire: true);
+
+        await rpc.DidNotReceive().SendToAddressAsync(Arg.Any<string>(), Arg.Any<decimal>());
+        var saved = JsonSerializer.Deserialize<AutoPayoutState>(store.Data[StateKey])!;
+        Assert.Equal(0m, saved.SentToday);                          // was 100: the whole cap, spent on nothing
+        Assert.True(DateTime.UtcNow - saved.LastPayoutUtc > TimeSpan.FromHours(1));   // and no cooldown was started
+
+        svc.Live = true;                                            // now for real, straight away
+        await svc.StartAsync();
+        await svc.TickAsync(fire: true);
+
+        await rpc.Received(1).SendToAddressAsync("Bvalid", 100m);   // was refused: "Daily cap … reached for today"
+    }
+
+    [Fact]
     public async Task live_sends_amount_above_threshold_then_stops()
     {
         var (svc, rpc, _) = Make(spendable: 200m);

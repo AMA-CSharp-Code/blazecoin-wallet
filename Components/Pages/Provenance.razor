@@ -77,8 +77,9 @@
                     Every satoshi traces back to the block that minted it. This reads your own
                     coins from your own node — nothing leaves this machine. Sends are free on
                     this chain, but every output must still clear the
-                    @VintageCoinControl.DustThresholdSatoshis.ToString("N0")-satoshi dust limit,
-                    so that is the smallest amount that can be sent.
+                    @VintageCoinControl.DustThresholdSatoshis.ToString("N0")-satoshi dust limit
+                    (@VintageCoinControl.PqDustThresholdSatoshis.ToString("N0") for an output to a
+                    post-quantum BQ… address), so that is the smallest amount that can be sent.
                 </p>
 
                 <div class="prov-actions">
@@ -794,7 +795,8 @@
                         satoshis (when a mixed coin has to be cut, a leading change output pushes
                         the send onto the right run). Every output must clear the
                         @VintageCoinControl.DustThresholdSatoshis.ToString("N0")-satoshi dust
-                        floor, change included.
+                        floor — @VintageCoinControl.PqDustThresholdSatoshis.ToString("N0") for an output
+                        to a post-quantum BQ… address — change included.
                     </p>
 
                     <h4>The verification line</h4>

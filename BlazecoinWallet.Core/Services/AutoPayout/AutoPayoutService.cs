@@ -101,8 +101,7 @@ public sealed class AutoPayoutService : IAutoPayoutService
 
     // SegWit is consensus-disabled on this chain (SegwitHeight = INT_MAX), so coins
     // sent to a bech32 (blz1...) address are unspendable and permanently lost. Block them.
-    private static bool IsUnsafeSegwitAddress(string? addr) =>
-        (addr ?? "").Trim().StartsWith("blz1", StringComparison.OrdinalIgnoreCase);
+    private static bool IsUnsafeSegwitAddress(string? addr) => Provenance.VintageCoinControl.IsUnsafeSegwitAddress(addr);
 
     public async Task StartAsync()
     {
@@ -283,8 +282,10 @@ public sealed class AutoPayoutService : IAutoPayoutService
             {
                 AddLog($"DRY RUN: would send {amt:N8} BLZ to {Address.Trim()}{lbl} as {batches.Count} tx [{string.Join(", ", batches.Select(b => b.ToString("N2")))}].");
                 Reason = $"Dry-run fired ({batches.Count} tx) — auto-payout stopped. Press Start to arm again.";
-                _lastPayoutUtc = DateTime.UtcNow;
-                _sentToday += amt;
+                // A rehearsal sends nothing, so it uses up nothing: neither the day's cap nor the
+                // cooldown. It used to charge both and persist them (bug-bounty report 2026-11-06,
+                // seventh round), so the real payout that followed a dry run was refused — "Daily
+                // cap reached for today" — until midnight UTC, with not one transaction attempted.
             }
             else // LIVE — real broadcasts: per-batch commit, stop on the first failure.
             {

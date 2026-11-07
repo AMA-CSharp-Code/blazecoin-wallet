@@ -143,7 +143,7 @@ public static class ExplorerVintageSend
     {
         if (coinCount <= 0) return VintagePlanResult.Fail("Choose at least one output.");
         if (feeSatoshis < 0) return VintagePlanResult.Fail("Fee cannot be negative.");
-        if (string.IsNullOrWhiteSpace(recipient)) return VintagePlanResult.Fail("A recipient address is required.");
+        if (VintageCoinControl.AddressProblem(recipient, "recipient") is { } badRecipient) return VintagePlanResult.Fail(badRecipient);
         if (minPurity is < 0 or > 1) return VintagePlanResult.Fail("The purity must be between 0 and 100 %.");
 
         var candidates = holdings.Where(h => h.Purity >= minPurity).ToList();
@@ -168,8 +168,9 @@ public static class ExplorerVintageSend
             return VintagePlanResult.Fail($"The fee ({feeSatoshis:N0}) would consume the whole output ({total:N0} satoshis).");
 
         var sendAmount = total - feeSatoshis;
-        if (sendAmount < dustThresholdSatoshis)
-            return VintagePlanResult.Fail($"The recipient's output ({sendAmount:N0} satoshis) is below the {dustThresholdSatoshis:N0}-satoshi dust limit.");
+        var recipientFloor = VintageCoinControl.DustThresholdFor(recipient, dustThresholdSatoshis);
+        if (sendAmount < recipientFloor)
+            return VintagePlanResult.Fail($"The recipient's output ({sendAmount:N0} satoshis) is below the {recipientFloor:N0}-satoshi dust limit.");
 
         var outputs = new List<PlannedOutput> { new(recipient, sendAmount, OutputRole.Vintage) };
         var share = total > 0 ? (double)lineage / total : 0;

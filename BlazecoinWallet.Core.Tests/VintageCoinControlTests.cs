@@ -215,6 +215,71 @@ public class VintageCoinControlTests
         Assert.Contains("400 satoshis", result.Problem);
     }
 
+    [Fact]
+    public void an_output_to_a_post_quantum_address_is_held_to_its_own_higher_dust_limit()
+    {
+        // Bug-bounty report 2026-11-06 (seventh round): node 2.1.2 prices a BQ… output by the 3,782-byte
+        // input that spends it — 11,475 satoshis, not 546 — and change goes to BQ… addresses since 2.0.18.
+        const string bq = "BQGeaQmsowAjL1ZG8q1AfVH4NgBvtJKJSsjnnKEf62BMjekdU82n";   // PQ_SIGNATURES.md §5 example
+        Assert.Equal(546, VintageCoinControl.DustThresholdFor("Brecipient"));
+        Assert.Equal(11_475, VintageCoinControl.DustThresholdFor(bq));
+        Assert.Equal(0, VintageCoinControl.DustThresholdFor(bq, legacyThreshold: 0));   // switched off stays off
+
+        var report = Report(Utxo("pure", 100_000, (100_000, Pure413)));
+        var heights = new HashSet<long> { Pure413 };
+
+        // Change of 11,474 satoshis to a BQ… address: refused, with the change and the right figure named.
+        var refused = VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_474, "Brecipient", bq, 0);
+        Assert.Null(refused.Plan);
+        Assert.Contains("change coming back to you", refused.Problem);
+        Assert.Contains("11,475", refused.Problem);
+        Assert.Contains("post-quantum", refused.Problem);
+        // One satoshi more clears it; and the same small change to a legacy address always did.
+        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_475, "Brecipient", bq, 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_474, "Brecipient", "Bchange", 0).Plan);
+
+        // The amount itself, when the recipient is a BQ… address.
+        var small = VintageCoinControl.PlanSend(report, heights, Pure413, 11_474, bq, "Bchange", 0);
+        Assert.Null(small.Plan);
+        Assert.Contains("amount being sent", small.Problem);
+        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 11_475, bq, "Bchange", 0).Plan);
+    }
+
+    [Fact]
+    public void a_segwit_address_is_refused_by_every_vintage_planner_before_a_plan_is_built()
+    {
+        // Bug-bounty report 2026-11-06 (ninth round): the Send page and Auto Payout refuse blz1… addresses — SegWit never
+        // activates here, the node mines such an output, and nothing can spend it — but these planners checked only that
+        // the recipient was not blank, so a Provenance send to one would have burned the coins. The repo's own vector:
+        const string bech32 = "blz1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+        var report = Report(Utxo("pure", 41_300_000_000, (41_300_000_000, Pure413)));
+        var heights = new HashSet<long> { Pure413 };
+
+        foreach (var refused in new[]
+        {
+            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, bech32, "Bchange", 0),
+            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "Brecipient", bech32, 0),
+            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "Brecipient", "Bchange", 0, leadingChangeAddress: bech32),
+            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, bech32, 0),
+            VintageCoinControl.PlanWholeBlock(report, Pure413, bech32, 0),
+            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "  BLZ1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4 ", "Bchange", 0),   // case and spaces change nothing
+        })
+        {
+            Assert.Null(refused.Plan);                                                  // was BUILT, in every case
+            Assert.Contains("SegWit", refused.Problem);
+            Assert.Contains("would be lost", refused.Problem);
+        }
+        Assert.True(VintageCoinControl.IsUnsafeSegwitAddress(bech32));
+        Assert.False(VintageCoinControl.IsUnsafeSegwitAddress("Brecipient"));
+        Assert.False(VintageCoinControl.IsUnsafeSegwitAddress("BQGeaQmsowAjL1ZG8q1AfVH4NgBvtJKJSsjnnKEf62BMjekdU82n"));
+        Assert.Equal("A recipient address is required.", VintageCoinControl.AddressProblem(" ", "recipient"));
+
+        // The same sends to a legacy recipient still plan.
+        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "Brecipient", "Bchange", 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, "Brecipient", 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanWholeBlock(report, Pure413, "Brecipient", 0).Plan);
+    }
+
     // ── whole coins (the collector's send) ──
 
     [Fact]

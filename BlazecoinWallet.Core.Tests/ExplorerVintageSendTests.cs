@@ -122,7 +122,14 @@ public class ExplorerVintageSendTests
         Assert.Contains("consume the whole output", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, "Bdest", 1_000).Problem);
         Assert.Contains("dust limit", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, "Bdest", 999).Problem);
         Assert.Contains("recipient", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, " ", 0).Problem);
+        // A blz1… (SegWit) recipient is refused too - the coins would be unspendable (bug-bounty report 2026-11-06, ninth round).
+        Assert.Contains("SegWit", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, "blz1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 0).Problem);
         Assert.Contains("at least one", ExplorerVintageSend.PlanWholeCoins(h, V2014, 0, 0.9, "Bdest", 0).Problem);
+        // The same 2,000 satoshis that reach a legacy address are dust for a post-quantum one: its limit
+        // is 11,475 on node 2.1.2 (bug-bounty report 2026-11-06, seventh round).
+        const string bq = "BQGeaQmsowAjL1ZG8q1AfVH4NgBvtJKJSsjnnKEf62BMjekdU82n";
+        Assert.Null(ExplorerVintageSend.PlanWholeCoins(h, V2014, 2, 0.9, "Bdest", 0).Problem);
+        Assert.Contains("11,475-satoshi dust limit", ExplorerVintageSend.PlanWholeCoins(h, V2014, 2, 0.9, bq, 0).Problem);
     }
 
     [Fact]

@@ -34,7 +34,13 @@ public enum LiteHistoryCheck
 /// script from the owning address anyway — P2PKH for "B…", P2PQH for "BQ…" — so this is
 /// informational, and its absence is never an error.</param>
 public sealed record LiteChainUtxo(string TxId, int OutputIndex, long Amount, int Confirmations, long BlockHeight, bool IsCoinbase,
-    string? ScriptPubKey = null);
+    string? ScriptPubKey = null)
+{
+    /// <summary>The gateway whose listing this row came from, when the client has a failover
+    /// list to tell gateways apart (null otherwise: a single gateway, a personal node). A second
+    /// opinion about the coin is asked of a gateway that is NOT this one (<see cref="ISpendCrossCheck"/>).</summary>
+    public Uri? Source { get; init; }
+}
 
 /// <summary>Why a broadcast did not succeed — typed so callers never parse error strings (F1).</summary>
 public enum BroadcastFailureKind
@@ -72,6 +78,39 @@ public sealed record LiteBroadcastResult(bool Success, string? TxId, string? Err
 /// <summary>
 /// Read side of the lite wallet's chain window (ISP — the Dashboard needs only this).
 /// </summary>
+/// <summary>One output, and the gateway whose listing put it in front of the wallet.</summary>
+/// <param name="Source">The gateway that listed the coin (<see cref="LiteChainUtxo.Source"/>); null
+/// when there is no failover list to tell gateways apart.</param>
+public sealed record LiteOutpoint(string TxId, int Vout, Uri? Source = null);
+
+/// <summary>A gateway's claim that an output was spent, with the evidence it served: the spending
+/// transaction and its merkle proof. A claim only — <see cref="LiteTxVerifier.VerifySpend"/> decides.</summary>
+public sealed record LiteSpendClaim(string TxId, int Vout, string SpenderTxId, long SpenderHeight,
+    string? SpenderHex, string? SpenderProofHex);
+
+/// <summary>
+/// A second opinion on whether coins are still unspent (bug-bounty report 2026-11-06, sixth
+/// round). The wallet proves a coin was CREATED; nothing a single gateway serves can prove it
+/// has not been spent since, so a gateway that kept a spent coin in its listing had it counted
+/// as balance and announced as a payment. A spend can be proven, though — so the question goes
+/// to a gateway OTHER than the one that listed the coin, and its answer is evidence to check,
+/// not a verdict.
+/// </summary>
+public interface ISpendCrossCheck
+{
+    /// <summary>The most outputs one call may ask about.</summary>
+    int MaxOutpointsPerCall { get; }
+
+    /// <summary>
+    /// Asks a gateway other than each coin's <see cref="LiteOutpoint.Source"/> which of the
+    /// outputs it holds a mined spend for. Returns the claims (empty = asked, none spent), or
+    /// null when nobody else could be asked — a single gateway, none other reachable, or one
+    /// that does not serve the question.
+    /// </summary>
+    Task<IReadOnlyList<LiteSpendClaim>?> FindSpendsFromAnotherGatewayAsync(
+        IReadOnlyList<LiteOutpoint> outpoints, CancellationToken ct = default);
+}
+
 public interface IChainReader
 {
     /// <summary>False when this source cannot serve history at all (e.g. a bare personal

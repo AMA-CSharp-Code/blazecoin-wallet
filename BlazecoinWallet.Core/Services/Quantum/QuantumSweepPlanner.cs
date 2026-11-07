@@ -116,9 +116,11 @@ public static class QuantumSweepPlanner
             var fee = FeeFor(bytes, feeRateSatPerKb);
             var total = inputs.Sum(i => i.Satoshis);
             var output = total - fee;
-            if (output < dustThresholdSatoshis)
+            // The sweep's one output, against the limit for the destination's kind (BQ… is 11,475).
+            var floor = VintageCoinControl.DustThresholdFor(destination.Trim(), dustThresholdSatoshis);
+            if (output < floor)
             {
-                warnings.Add($"A batch of {inputs.Count} output(s) worth {total:N0} sats would leave {output:N0} sats after the fee — below the {dustThresholdSatoshis} dust floor, left behind.");
+                warnings.Add($"A batch of {inputs.Count} output(s) worth {total:N0} sats would leave {output:N0} sats after the fee — below the {floor} dust floor, left behind.");
                 continue;
             }
             txs.Add(new SweepTx(inputs, destination.Trim(), output, fee, bytes));

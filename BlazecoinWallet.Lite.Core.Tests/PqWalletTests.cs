@@ -124,6 +124,45 @@ public class PqWalletTests
     }
 
     [Fact]
+    public void A_post_quantum_output_is_held_to_its_own_dust_floor()
+    {
+        // Bug-bounty report 2026-11-06 (seventh round): the node priced a BQ… output's dust threshold as if
+        // a 148-byte legacy input spent it. Node 2.1.2 prices the real 3,782-byte input — 11,475 satoshis —
+        // so the wallet must not build a smaller BQ… output, as a payment or as change.
+        var wallet = LiteHdWallet.Restore(TestMnemonic);
+        var legacy = wallet.GetReceiveAddress(0);
+        var otherLegacy = wallet.GetReceiveAddress(1);
+        var legacyChange = wallet.GetChangeAddress(0);
+        var pqChange = wallet.GetPqKey(0).Address();
+        var pqDest = wallet.GetPqKey(1).Address();
+        Key K(string _) => wallet.GetPrivateKey(0);
+        List<LiteUtxo> Coin(long sats) => [new(new string('a', 64), 0, sats, legacy)];
+
+        Assert.Equal(546, LiteTransactionBuilder.DustFloorFor(legacy));
+        Assert.Equal(11_475, LiteTransactionBuilder.DustFloorFor(pqDest));
+
+        // A payment to a BQ… address: one satoshi under its floor is refused, the floor itself goes through.
+        var refused = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            LiteTransactionBuilder.BuildAndSign(Coin(1_000_000), pqDest, 11_474, legacyChange, K));
+        Assert.Contains("post-quantum", refused.Message);
+        var paid = Transaction.Parse(LiteTransactionBuilder.BuildAndSign(Coin(1_000_000), pqDest, 11_475, legacyChange, K).Hex, Net);
+        Assert.Equal(11_475, paid.Outputs[0].Value.Satoshi);
+
+        // Change to a BQ… address: under its floor it folds into the fee (no output); at the floor it is paid.
+        var folded = LiteTransactionBuilder.BuildAndSign(Coin(1_000_000 + 11_474), otherLegacy, 1_000_000, pqChange, K);
+        Assert.False(folded.ChangeCreated);                             // was an 11,474-satoshi BQ… output the node now refuses
+        Assert.Single(Transaction.Parse(folded.Hex, Net).Outputs);
+        var kept = LiteTransactionBuilder.BuildAndSign(Coin(1_000_000 + 11_475), otherLegacy, 1_000_000, pqChange, K);
+        Assert.True(kept.ChangeCreated);
+        Assert.Equal(11_475, Transaction.Parse(kept.Hex, Net).Outputs[1].Value.Satoshi);
+
+        // A legacy output on the same path keeps the legacy floor.
+        var legacyKept = LiteTransactionBuilder.BuildAndSign(Coin(11_475 + 546), pqDest, 11_475, legacyChange, K);
+        Assert.True(legacyKept.ChangeCreated);
+        Assert.Equal(546, Transaction.Parse(legacyKept.Hex, Net).Outputs[1].Value.Satoshi);
+    }
+
+    [Fact]
     public void The_pq_path_refuses_too_many_pq_inputs_bad_scripts_and_missing_keys()
     {
         var wallet = LiteHdWallet.Restore(TestMnemonic);

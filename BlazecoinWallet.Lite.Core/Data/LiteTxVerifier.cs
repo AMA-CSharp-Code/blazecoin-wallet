@@ -127,6 +127,12 @@ public sealed class LiteTxVerifier
         var proofHex = await _reader.GetTxOutProofAsync(txId, ct);
         if (string.IsNullOrWhiteSpace(proofHex))
             return ("No merkle inclusion proof was available for the funding transaction.", null);
+        return await InclusionFromProofAsync(proofHex, txId, claimedBlockHeight, ct);
+    }
+
+    /// <summary>The same test for a proof already in hand (whoever served it).</summary>
+    private async Task<(string? Error, long? Height)> InclusionFromProofAsync(string proofHex, string txId, long claimedBlockHeight, CancellationToken ct)
+    {
         var (proofOk, blockHash) = CheckProof(proofHex, txId);
         if (!proofOk || blockHash == null)
             return ("The merkle inclusion proof did not verify — the transaction may not be mined.", null);
@@ -137,6 +143,39 @@ public sealed class LiteTxVerifier
             return (null, where.Height);
         }
         return (null, null);
+    }
+
+    /// <summary>
+    /// Checks a claim that an output has been SPENT (bug-bounty report 2026-11-06, sixth round).
+    /// Everything above proves a coin was created; none of it can show the coin is still there,
+    /// and a gateway that went on listing a spent coin had it counted as balance. Unspentness
+    /// cannot be proven without the whole chain — but a spend can: the spending transaction
+    /// must hash to its id (so it is the transaction, not a description of one), must name this
+    /// exact output among its inputs, and must be mined — the same inclusion test a coin's own
+    /// transaction passes, against the header chain wherever one is wired. The evidence comes
+    /// with the claim (<see cref="LiteSpendClaim"/>), served by a gateway other than the one that
+    /// listed the coin; nothing here asks the reader, so the lister cannot withhold it.
+    /// <para>The spender's signature is not evaluated: with a header chain the block's work is
+    /// what makes the transaction real, and a head without one already treats every proof as a
+    /// sanity check (see the class summary).</para>
+    /// </summary>
+    public async Task<bool> VerifySpendAsync(LiteSpendClaim claim, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(claim.SpenderHex) || string.IsNullOrWhiteSpace(claim.SpenderProofHex))
+            return false;
+
+        Transaction spender;
+        try { spender = Transaction.Parse(claim.SpenderHex, _network); }
+        catch { return false; }
+
+        if (!string.Equals(spender.GetHash().ToString(), claim.SpenderTxId, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (claim.Vout < 0 || !spender.Inputs.Any(i => i.PrevOut.N == (uint)claim.Vout &&
+                string.Equals(i.PrevOut.Hash.ToString(), claim.TxId, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        var inclusion = await InclusionFromProofAsync(claim.SpenderProofHex, claim.SpenderTxId, claim.SpenderHeight, ct);
+        return inclusion.Error == null;
     }
 
     /// <summary>
