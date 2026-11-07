@@ -12,7 +12,7 @@ namespace BlazecoinWallet.Lite.Data;
 /// never-throw contract (null/empty + a log line) so the UI degrades instead of crashing;
 /// Broadcast returns a typed failure because the user must SEE why a send didn't go out.
 /// </summary>
-public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncestryReader, IAddressUsageCrossCheck, ISpendCrossCheck
+public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IHeaderCrossCheck, IAncestryReader, IAddressUsageCrossCheck, ISpendCrossCheck
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -238,13 +238,53 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IAncest
     {
         try
         {
-            var body = await _http.GetFromJsonAsync<HeadersJson>($"indexer/api/headers/{fromHeight}?count={count}", Json, ct);
+            // Sent as a request so the batch can be stamped with the gateway that served it: the
+            // second opinion on the run it belongs to must come from another one.
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/headers/{fromHeight}?count={count}");
+            using var res = await _http.SendAsync(request, ct);
+            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var source);
+            _headersSource = source;
+            if (!res.IsSuccessStatusCode) return [];
+            var body = await res.Content.ReadFromJsonAsync<HeadersJson>(Json, ct);
             return body?.Headers ?? [];
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Header range fetch failed");
             return [];
+        }
+    }
+
+    // The gateway that served the most recent header batch (IHeaderCrossCheck excludes it).
+    private Uri? _headersSource;
+
+    /// <summary>
+    /// The header at <paramref name="height"/> from a gateway other than the one that served the
+    /// last batch (<see cref="IHeaderCrossCheck"/>; bug-bounty report 2026-11-07). Without a
+    /// failover list there is nobody else to ask — and a client that ignores the exclusion (no
+    /// <see cref="GatewayFailoverHandler"/>) is recognised by the same gateway answering again.
+    /// </summary>
+    public async Task<HeaderSecondOpinion> HeaderFromAnotherGatewayAsync(long height, CancellationToken ct = default)
+    {
+        var source = _headersSource;
+        if (source == null) return new(SecondGateway.None, null);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/headers/{height}?count=1");
+            request.Options.Set(GatewayRouting.Exclude, [source]);
+            using var res = await _http.SendAsync(request, ct);
+            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var other);
+            if (other == null || other == source) return new(SecondGateway.None, null);
+            if (!res.IsSuccessStatusCode) return new(SecondGateway.Unavailable, null);
+            var body = await res.Content.ReadFromJsonAsync<HeadersJson>(Json, ct);
+            return new(SecondGateway.Answered, body?.Headers?.FirstOrDefault());
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (NoOtherGatewayException) { return new(SecondGateway.None, null); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No second gateway answered the header question");
+            return new(SecondGateway.Unavailable, null);
         }
     }
 

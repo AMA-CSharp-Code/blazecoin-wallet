@@ -83,8 +83,19 @@ public sealed class GatewayFailoverHandler : DelegatingHandler
             }
         }
 
-        throw lastFailure ?? new HttpRequestException("No other gateway is configured.");
+        throw lastFailure ?? new NoOtherGatewayException();
     }
+}
+
+/// <summary>
+/// A second-opinion request (<see cref="GatewayRouting.Exclude"/>) had nobody left to ask: every
+/// configured gateway was excluded. Distinct from "the others did not answer" (a plain
+/// <see cref="HttpRequestException"/>) because a caller treats the two differently — with one
+/// gateway configured there is no second opinion to wait for; with two, there is one to retry.
+/// </summary>
+public sealed class NoOtherGatewayException : HttpRequestException
+{
+    public NoOtherGatewayException() : base("No other gateway is configured.") { }
 }
 
 /// <summary>

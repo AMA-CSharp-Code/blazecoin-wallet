@@ -406,7 +406,7 @@ public class BroadcastTrustTests
 
         using var nobody = new HttpRequestMessage(HttpMethod.Get, "indexer/api/address/Bx/utxos");
         nobody.Options.Set(GatewayRouting.Exclude, [new Uri("https://a.test/"), new Uri("https://b.test/")]);
-        await Assert.ThrowsAsync<HttpRequestException>(() => client.SendAsync(nobody));
+        await Assert.ThrowsAsync<NoOtherGatewayException>(() => client.SendAsync(nobody)); // still an HttpRequestException, now a named one
     }
 
     /// <summary>Stub chain data + relay: one scripted coin set, captures the broadcast, answers

@@ -258,6 +258,10 @@
         <div class="lite-address" style="text-align:left">
             Verified to block <strong>@(_verifiedHeight > 0 ? _verifiedHeight.ToString("N0") : "checking…")</strong>
         </div>
+        @if (HeaderSync.TipHeld)
+        {
+            <p class="lite-held-tip" style="margin-top:.4rem">@HeaderSync.TipHeldMessage</p>
+        }
     </div>
 }
 
@@ -349,6 +353,7 @@
         Fork.Changed += OnForkChanged; // the Fork Status card follows the 30 s status poll
         if (!HeaderSync.Available) return;
         HeaderSync.TipAdvanced += OnTipAdvanced;
+        HeaderSync.SyncStateChanged += OnTipAdvanced; // a held tip (second gateway disagreeing) is announced here, not by TipAdvanced
         _verifiedHeight = HeaderSync.VerifiedTipHeight;
         // Fire-and-forget (2026-08-23): awaiting here held the WHOLE page behind a full header
         // catch-up (minutes on a fresh browser install). The TipAdvanced subscription keeps the
@@ -366,7 +371,11 @@
     public void Dispose()
     {
         Fork.Changed -= OnForkChanged;
-        if (HeaderSync.Available) HeaderSync.TipAdvanced -= OnTipAdvanced;
+        if (HeaderSync.Available)
+        {
+            HeaderSync.TipAdvanced -= OnTipAdvanced;
+            HeaderSync.SyncStateChanged -= OnTipAdvanced;
+        }
     }
 
     private void OnForkChanged() => _ = InvokeAsync(StateHasChanged);

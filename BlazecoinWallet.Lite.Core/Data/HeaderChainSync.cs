@@ -63,6 +63,46 @@ public interface IHeaderReader
     Task<IReadOnlyList<string>> GetHeadersAsync(long fromHeight, int count, CancellationToken ct = default);
 }
 
+/// <summary>Whether a gateway other than the one that served the last header batch could be asked.</summary>
+public enum SecondGateway
+{
+    /// <summary>Another gateway answered; <see cref="HeaderSecondOpinion.RawHeader"/> is its header at
+    /// that height, or null when it has not seen that height yet.</summary>
+    Answered,
+    /// <summary>Another gateway is configured but did not answer (unreachable, timed out, error).</summary>
+    Unavailable,
+    /// <summary>No other gateway is configured — there is nobody else to ask.</summary>
+    None,
+}
+
+/// <summary>A second gateway's word on the header at a height (see <see cref="IHeaderCrossCheck"/>).</summary>
+public sealed record HeaderSecondOpinion(SecondGateway Status, string? RawHeader);
+
+/// <summary>
+/// Optional capability of an <see cref="IHeaderReader"/> (the <see cref="ISpendCrossCheck"/> pattern):
+/// the raw header at a height from a gateway OTHER than the one that served the most recent header
+/// batch. The sync puts every run of verified headers to it before the verified tip moves (bug-bounty
+/// report 2026-11-07: with the two-hour clock rule alone, one gateway could still forge the chain
+/// cheaply — see <see cref="HeaderChainValidator"/>).
+/// </summary>
+public interface IHeaderCrossCheck
+{
+    Task<HeaderSecondOpinion> HeaderFromAnotherGatewayAsync(long height, CancellationToken ct = default);
+}
+
+/// <summary>How the last run of verified headers fared with a second gateway.</summary>
+public enum HeaderCorroboration
+{
+    /// <summary>A second gateway served the same header hash at the run's top height; the tip moved.</summary>
+    Confirmed,
+    /// <summary>A second gateway served a DIFFERENT header at that height; the run was discarded and the tip held.</summary>
+    Contradicted,
+    /// <summary>A second gateway exists but gave no usable answer (unreachable, or not yet at that height); the tip held.</summary>
+    Unavailable,
+    /// <summary>Only one gateway is configured, so the run stood on its own proof-of-work; the tip moved.</summary>
+    NoSecondGateway,
+}
+
 /// <summary>
 /// Trustless verification of a forward run of block headers (the M3 residual: the maturity /
 /// confirmation display previously trusted the gateway's tip scalar outright). Anchored at a
@@ -77,6 +117,17 @@ public interface IHeaderReader
 /// could date its headers days ahead, which drives the required target to the easiest the chain
 /// allows — every forged header after the first then cost about 2^20 scrypt hashes instead of
 /// the ~2^34 the real chain demands, and a run of them became "the verified chain".</para>
+/// <para>Rule 5 is necessary, not sufficient (bug-bounty report 2026-11-07, Juan Alfonsus): the
+/// Phoenix anchor is frozen at the fork while the clock keeps moving, so the LATEST time a header
+/// may claim drifts away from the anchor at one second per second. One header stamped now+2h on top
+/// of a checkpoint that is a day old eases every header after it by 2^((1 day + 2 h) / 3.44 h) ≈ 190×,
+/// and the shipped checkpoint reaches powLimit within two days of its harvest. No per-header rule can
+/// close that: a genuine stall and a forged one look the same header by header, and a bound on the
+/// gap to the parent is defeated by chaining gaps (the whole forged chain then costs about three real
+/// blocks). What closes it is the rule the rest of the lite wallet lives by — one gateway's word is not
+/// enough: <see cref="HeaderChainSync"/> moves the verified tip only when a second gateway reproduces
+/// the run's top header hash (<see cref="IHeaderCrossCheck"/>). Forging the verified chain then takes
+/// every configured gateway, not one.</para>
 /// </summary>
 public static class HeaderChainValidator
 {
@@ -188,7 +239,13 @@ public sealed class HeaderChainSync
     private const int MaxBatchesPerSync = 400; // ≥ 100k headers per call — plenty; a backstop
     private const int MaxIndexedHeaders = 100_000; // rolling hash↔height window (~5 weeks of blocks)
 
+    /// <summary>Verified headers are committed — and first put to a second gateway — in runs of at
+    /// most this many batches (2,500 headers): a long first catch-up asks the other gateway ~40
+    /// times for 100k headers and loses at most one run to a crash; an incremental sync asks once.</summary>
+    public const int BatchesPerCorroboration = 10;
+
     private readonly IHeaderReader? _headers;
+    private readonly IHeaderCrossCheck? _crossCheck;
     private readonly IWalletStateStore _state;
     private readonly Network _network;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -214,10 +271,15 @@ public sealed class HeaderChainSync
     // Every index/anchor/link map is read by proof checks while a sync writes it.
     private readonly object _indexLock = new();
 
+    /// <param name="crossCheck">Where a second gateway's header comes from. Null ⇒ the feed itself
+    /// when it is an <see cref="IHeaderCrossCheck"/> (the gateway data service), else none — a run
+    /// then stands on its own proof-of-work, as before the 2026-11-07 report.</param>
     public HeaderChainSync(IHeaderReader? headers = null, IWalletStateStore? state = null,
-        Network? network = null, HeaderCheckpoint? checkpoint = null, HeaderAnchors? anchors = null)
+        Network? network = null, HeaderCheckpoint? checkpoint = null, HeaderAnchors? anchors = null,
+        IHeaderCrossCheck? crossCheck = null)
     {
         _headers = headers;
+        _crossCheck = crossCheck ?? headers as IHeaderCrossCheck;
         _state = state ?? new InMemoryWalletStateStore();
         _network = network ?? BlazecoinNetwork.Instance;
         _anchors = anchors ?? HeaderAnchors.Mainnet;
@@ -351,20 +413,34 @@ public sealed class HeaderChainSync
             await EnsureLoadedAsync();
 
             var rolledBack = false;
+            // Headers verified by proof-of-work but not yet committed: the run grows across batches
+            // and is committed — after a second gateway has confirmed its top — every
+            // BatchesPerCorroboration batches and when the feed runs dry. Until then nothing below
+            // reads it: the tip, the index and the store all stay where the last run left them.
+            var run = new List<HeaderCheckpoint>();
+            var runTip = _tip;
+            var batchesInRun = 0;
             for (var batch = 0; batch < MaxBatchesPerSync; batch++)
             {
                 ct.ThrowIfCancellationRequested();
-                var raw = await _headers.GetHeadersAsync(_tip.Height + 1, BatchSize, ct);
-                if (raw.Count == 0) break; // caught up to the tip (or the feed had nothing new)
+                var raw = await _headers.GetHeadersAsync(runTip.Height + 1, BatchSize, ct);
+                if (raw.Count == 0)
+                {
+                    // Caught up to the tip (or the feed had nothing new): commit what the run holds.
+                    if (run.Count > 0) await CommitRunAsync(run, ct);
+                    break;
+                }
 
                 // The next header not building on our tip means one of two things: the feed is
                 // serving junk, or OUR tip block was orphaned in a reorg. Only the second can be
                 // fixed here — roll back to the nearest trusted anchor and re-sync from it — and
-                // without it the verified chain would stall at the orphan for ever.
-                if (!rolledBack && !LinksTo(raw[0], _tip.Hash))
+                // without it the verified chain would stall at the orphan for ever. A feed that
+                // contradicts the run IT JUST SERVED is the first kind: the run is dropped unspent.
+                if (!rolledBack && !LinksTo(raw[0], runTip.Hash))
                 {
                     rolledBack = true; // once per sync: a feed that keeps contradicting itself gets no second rewind
-                    if (await TryRollBackAsync(ct)) continue;
+                    if (run.Count > 0) break;
+                    if (await TryRollBackAsync(ct)) { runTip = _tip; continue; }
                     break;
                 }
 
@@ -373,19 +449,23 @@ public sealed class HeaderChainSync
                 for (var offset = 0; offset < raw.Count && error == null; offset += VerifySlice)
                 {
                     var slice = raw.Skip(offset).Take(VerifySlice).ToList();
-                    var (newTip, sliceError) = HeaderChainValidator.Extend(_tip, slice, _network, Index, Clock());
+                    var (newTip, sliceError) = HeaderChainValidator.Extend(runTip, slice, _network, run.Add, Clock());
                     error = sliceError;
-                    if (newTip.Height > _tip.Height)
-                    {
-                        _tip = newTip;
-                        await PersistAnchorsAsync(); // before the tip, so a crash never leaves the tip ahead of its anchors
-                        await _state.SetVerifiedCheckpointAsync(_tip.Serialize());
-                        TipAdvanced?.Invoke();
-                    }
+                    runTip = newTip;
                     await YieldToHostAsync(ct);
                 }
-                if (error != null) break;      // a bad header — stop at the last good height
-                if (raw.Count < BatchSize) break; // short batch ⇒ reached the tip
+                batchesInRun++;
+
+                var feedDone = error != null || raw.Count < BatchSize; // a bad header, or a short batch ⇒ the tip
+                if (run.Count > 0 && (feedDone || batchesInRun >= BatchesPerCorroboration))
+                {
+                    var committed = await CommitRunAsync(run, ct);
+                    run.Clear();
+                    batchesInRun = 0;
+                    if (!committed) break; // held — the tip stays; the next sync asks again
+                    runTip = _tip;
+                }
+                if (feedDone) break;
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -396,6 +476,71 @@ public sealed class HeaderChainSync
             _gate.Release();
             SyncStateChanged?.Invoke();
         }
+    }
+
+    /// <summary>How the most recent run of verified headers fared with a second gateway (null until a
+    /// run has been put to one this session). <see cref="HeaderCorroboration.Contradicted"/> and
+    /// <see cref="HeaderCorroboration.Unavailable"/> mean the verified tip is being HELD below what
+    /// the feed served — the wallet keeps working on the older tip (confirmations read lower, never
+    /// higher) and asks again on the next sync.</summary>
+    public HeaderCorroboration? LastCorroboration { get; private set; }
+
+    /// <summary>True while the newest headers the feed served are being held back for want of a
+    /// second gateway's agreement (see <see cref="LastCorroboration"/>).</summary>
+    public bool TipHeld => LastCorroboration is HeaderCorroboration.Contradicted or HeaderCorroboration.Unavailable;
+
+    /// <summary>Words for <see cref="TipHeld"/>, or null when the tip is not held.</summary>
+    public string? TipHeldMessage => LastCorroboration switch
+    {
+        HeaderCorroboration.Contradicted => "The newest headers from the gateway in use are not confirmed by a second gateway (it knows a different block at that height), so the verified chain is held where it was. If this persists, the gateway in use is serving a chain of its own.",
+        HeaderCorroboration.Unavailable => "The newest headers from the gateway in use could not be confirmed by a second gateway (none answered, or it has not seen those blocks yet), so the verified chain is held where it was until one does.",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Commits a run of verified headers: the tip moves to the run's top, every header is indexed
+    /// and the tip persisted — but only after a second gateway has reproduced the top header's hash
+    /// (bug-bounty report 2026-11-07). With no second gateway configured the run stands on its own
+    /// proof-of-work, which is where it stood before the report; with one that disagrees or is
+    /// silent, nothing is committed and the caller stops — the run is re-fetched and re-asked on the
+    /// next sync. Returns true when the tip moved.
+    /// </summary>
+    private async Task<bool> CommitRunAsync(List<HeaderCheckpoint> run, CancellationToken ct)
+    {
+        var top = run[^1];
+        var verdict = await CorroborateAsync(top, ct);
+        LastCorroboration = verdict;
+        if (verdict is HeaderCorroboration.Contradicted or HeaderCorroboration.Unavailable)
+        {
+            SyncStateChanged?.Invoke(); // the hold is news even though the tip did not move
+            return false;
+        }
+
+        foreach (var verified in run) Index(verified);
+        _tip = top;
+        await PersistAnchorsAsync(); // before the tip, so a crash never leaves the tip ahead of its anchors
+        await _state.SetVerifiedCheckpointAsync(_tip.Serialize());
+        TipAdvanced?.Invoke();
+        return true;
+    }
+
+    private async Task<HeaderCorroboration> CorroborateAsync(HeaderCheckpoint top, CancellationToken ct)
+    {
+        if (_crossCheck == null) return HeaderCorroboration.NoSecondGateway;
+        HeaderSecondOpinion opinion;
+        try { opinion = await _crossCheck.HeaderFromAnotherGatewayAsync(top.Height, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch { return HeaderCorroboration.Unavailable; }
+
+        switch (opinion.Status)
+        {
+            case SecondGateway.None: return HeaderCorroboration.NoSecondGateway;
+            case SecondGateway.Unavailable: return HeaderCorroboration.Unavailable;
+        }
+        // Answered. No header at that height yet = it is behind the gateway in use; a header that
+        // does not parse is no answer either. Only the same hash confirms the run.
+        if (opinion.RawHeader == null || ParseHeader(opinion.RawHeader) is not { } theirs) return HeaderCorroboration.Unavailable;
+        return Same(theirs.GetHash().ToString(), top.Hash) ? HeaderCorroboration.Confirmed : HeaderCorroboration.Contradicted;
     }
 
     private static HeaderCheckpoint? TryLoadPersisted(string? serialized) => HeaderCheckpoint.TryParse(serialized);
