@@ -277,14 +277,18 @@ public class QuantumSweepTests
         public List<(IReadOnlyList<(string TxId, int Vout)> Inputs, IReadOnlyList<(string Address, long Satoshis)> Outputs)> Created { get; } = new();
         public List<string> SentHex { get; } = new();
 
-        public Task<string?> GetChangeAddressAsync(CancellationToken ct = default) => Task.FromResult<string?>(null);
         public Task<string?> CreateRawTransactionAsync(IReadOnlyList<(string TxId, int Vout)> inputs, IReadOnlyList<(string Address, long Satoshis)> outputs, CancellationToken ct = default)
         { CreateCalls++; Created.Add((inputs, outputs)); return Task.FromResult(Create(CreateCalls)); }
-        public Task<string?> SignRawTransactionAsync(string rawHex, CancellationToken ct = default)
-        { SignCalls++; return Task.FromResult(Sign(SignCalls)); }
+        public List<string> SignedIn { get; } = new();
+        public Task<string?> SignRawTransactionAsync(string wallet, string rawHex, CancellationToken ct = default)
+        { SignCalls++; SignedIn.Add(wallet); return Task.FromResult(Sign(SignCalls)); }
         public Task<string?> SendRawTransactionAsync(string signedHex, CancellationToken ct = default)
         { SendCalls++; SentHex.Add(signedHex); return Task.FromResult(Send(SendCalls)); }
     }
+
+    /// <summary>The wallet every sweep in these tests is bound to, and a binding on which it stays the active one.</summary>
+    private const string W = "Savings";
+    private static WalletBinding Bound() => new(new TestWalletContext(W), new WalletSwitchNotice());
 
     private static SweepPlan ThreeBatchPlan()
         => QuantumSweepPlanner.Plan(Enumerable.Range(0, 5).Select(i => U($"u{i}", 10_000_000, vout: i)).ToList(), BqSpec, maxInputsPerTx: 2).Plan!;
@@ -295,7 +299,7 @@ public class QuantumSweepTests
         var rpc = new FakeSendRpc();
         var plan = ThreeBatchPlan();
 
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(plan);
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(plan, W);
 
         Assert.True(r.Succeeded);
         Assert.Equal(new[] { "txid1", "txid2", "txid3" }, r.SentTxIds);
@@ -316,7 +320,7 @@ public class QuantumSweepTests
     {
         var rpc = new FakeSendRpc { Create = n => n == 2 ? null : $"raw{n}" };
 
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(ThreeBatchPlan());
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(ThreeBatchPlan(), W);
 
         Assert.Equal(SweepSendStatus.BuildFailed, r.Status);
         Assert.Equal(2, r.FailedBatch);
@@ -330,7 +334,7 @@ public class QuantumSweepTests
     public async Task A_build_exception_is_a_build_failure_not_a_crash()
     {
         var rpc = new FakeSendRpc { Create = _ => throw new RpcException(-8, "bad input") };
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(ThreeBatchPlan());
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(ThreeBatchPlan(), W);
         Assert.Equal(SweepSendStatus.BuildFailed, r.Status);
         Assert.Equal(0, rpc.SendCalls);
     }
@@ -340,7 +344,7 @@ public class QuantumSweepTests
     {
         var rpc = new FakeSendRpc { Sign = _ => null };
 
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(ThreeBatchPlan());
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(ThreeBatchPlan(), W);
 
         Assert.Equal(SweepSendStatus.SignFailed, r.Status);
         Assert.Equal(1, r.FailedBatch);
@@ -353,7 +357,7 @@ public class QuantumSweepTests
     public async Task A_signing_exception_is_a_sign_failure()
     {
         var rpc = new FakeSendRpc { Sign = _ => throw new RpcException(-13, "Please enter the wallet passphrase") };
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(ThreeBatchPlan());
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(ThreeBatchPlan(), W);
         Assert.Equal(SweepSendStatus.SignFailed, r.Status);
         Assert.Contains("passphrase", r.Detail!);
         Assert.Equal(0, rpc.SendCalls);
@@ -364,7 +368,7 @@ public class QuantumSweepTests
     {
         var rpc = new FakeSendRpc { Send = n => n == 2 ? throw new RpcException(-26, "non-mandatory-script-verify-flag") : $"txid{n}" };
 
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(ThreeBatchPlan());
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(ThreeBatchPlan(), W);
 
         Assert.Equal(SweepSendStatus.Rejected, r.Status);
         Assert.Equal(2, r.FailedBatch);
@@ -378,7 +382,7 @@ public class QuantumSweepTests
     public async Task A_null_txid_is_treated_as_a_rejection()
     {
         var rpc = new FakeSendRpc { Send = _ => null };
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(ThreeBatchPlan());
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(ThreeBatchPlan(), W);
         Assert.Equal(SweepSendStatus.Rejected, r.Status);
         Assert.Equal(1, rpc.SendCalls);
     }
@@ -397,7 +401,7 @@ public class QuantumSweepTests
         };
         var rpc = new FakeSendRpc { Send = n => n == 2 ? throw ex : $"txid{n}" };
 
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(ThreeBatchPlan());
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(ThreeBatchPlan(), W);
 
         Assert.Equal(SweepSendStatus.Unknown, r.Status);
         Assert.Equal(2, r.FailedBatch);
@@ -416,7 +420,7 @@ public class QuantumSweepTests
         // HTTP 503 is answered before the request reaches a worker: provably not executed.
         var rpc = new FakeSendRpc { Send = _ => throw new DaemonBusyException() };
 
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(ThreeBatchPlan());
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(ThreeBatchPlan(), W);
 
         Assert.Equal(SweepSendStatus.NotSentDaemonBusy, r.Status);
         Assert.Equal(1, rpc.SendCalls);
@@ -429,7 +433,7 @@ public class QuantumSweepTests
         var bad = new SweepPlan(new[] { new SweepTx(new[] { U("a", 1_000) }, BqSpec, 999, 5, 200) }, Array.Empty<string>(), SweepDestinationKind.PostQuantum);
         var rpc = new FakeSendRpc();
 
-        var r = await new SweepBroadcaster(rpc).BroadcastAsync(bad);
+        var r = await new SweepBroadcaster(rpc, Bound()).BroadcastAsync(bad, W);
 
         Assert.Equal(SweepSendStatus.BuildFailed, r.Status);
         Assert.Equal(0, rpc.CreateCalls + rpc.SignCalls + rpc.SendCalls);
@@ -437,11 +441,14 @@ public class QuantumSweepTests
 
     [Fact]
     public void The_broadcaster_needs_an_rpc()
-        => Assert.Throws<ArgumentNullException>(() => new SweepBroadcaster(null!));
+    {
+        Assert.Throws<ArgumentNullException>(() => new SweepBroadcaster(null!, Bound()));
+        Assert.Throws<ArgumentNullException>(() => new SweepBroadcaster(new FakeSendRpc(), null!));
+    }
 
     // ════════════════════════════════════════════════════════════ session
 
-    private sealed class FakeDestinations : ISweepDestinationRpc
+    private sealed class FakeDestinations : IBoundWalletRpc
     {
         public Queue<PqAddressResult> PqResults { get; } = new();
         public Exception? PqThrows { get; set; }
@@ -450,27 +457,32 @@ public class QuantumSweepTests
         public List<string> PqLabels { get; } = new();
         public List<string> LegacyLabels { get; } = new();
         public int IsMineCalls;
+        /// <summary>The wallet every call named, in order.</summary>
+        public List<string> Wallets { get; } = new();
 
-        public Task<PqAddressResult> GetNewPostQuantumAddressAsync(string label, CancellationToken ct = default)
+        public Task<PqAddressResult> MintPostQuantumAddressAsync(string wallet, string label, CancellationToken ct = default)
         {
+            Wallets.Add(wallet);
             PqLabels.Add(label);
             if (PqThrows is not null) throw PqThrows;
             return Task.FromResult(PqResults.Count > 0 ? PqResults.Dequeue() : PqAddressResult.Ok(BqSpec));
         }
-        public Task<string?> GetNewLegacyAddressAsync(string label, CancellationToken ct = default)
-        { LegacyLabels.Add(label); return Task.FromResult(Legacy); }
-        public Task<bool?> IsMineAsync(string address, CancellationToken ct = default)
-        { IsMineCalls++; return Task.FromResult(Mine.TryGetValue(address, out var m) ? m : true); }
-        public Task<bool?> CanMintPostQuantumAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
+        public Task<string?> MintLegacyAddressAsync(string wallet, string label, CancellationToken ct = default)
+        { Wallets.Add(wallet); LegacyLabels.Add(label); return Task.FromResult(Legacy); }
+        public Task<bool?> OwnsAddressAsync(string wallet, string address, CancellationToken ct = default)
+        { Wallets.Add(wallet); IsMineCalls++; return Task.FromResult(Mine.TryGetValue(address, out var m) ? m : true); }
+        public Task<bool?> HasPostQuantumKeysAsync(string wallet, CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 
     private sealed class FakeBroadcaster : ISweepBroadcaster
     {
         public List<SweepPlan> Plans { get; } = new();
         public TaskCompletionSource<SweepBroadcastResult>? Gate { get; set; }
-        public Task<SweepBroadcastResult> BroadcastAsync(SweepPlan plan, CancellationToken ct = default)
+        public List<string> Wallets { get; } = new();
+        public Task<SweepBroadcastResult> BroadcastAsync(SweepPlan plan, string wallet, CancellationToken ct = default)
         {
             Plans.Add(plan);
+            Wallets.Add(wallet);
             return Gate?.Task ?? Task.FromResult(new SweepBroadcastResult(SweepSendStatus.AllSent, new[] { "tx" }, plan.Transactions.Count, 0, null));
         }
     }
@@ -497,7 +509,7 @@ public class QuantumSweepTests
         var d = new FakeDestinations();
         var b = new FakeBroadcaster();
         creator = new FakeCreator();
-        return (new QuantumSweepSession(d, b, creator), d, b);
+        return (new QuantumSweepSession(d, b, creator, Bound()), d, b);
     }
 
     [Fact]
@@ -805,9 +817,10 @@ public class QuantumSweepTests
     [Fact]
     public void The_session_needs_both_collaborators()
     {
-        Assert.Throws<ArgumentNullException>(() => new QuantumSweepSession(null!, new FakeBroadcaster(), new FakeCreator()));
-        Assert.Throws<ArgumentNullException>(() => new QuantumSweepSession(new FakeDestinations(), null!, new FakeCreator()));
-        Assert.Throws<ArgumentNullException>(() => new QuantumSweepSession(new FakeDestinations(), new FakeBroadcaster(), null!));
+        Assert.Throws<ArgumentNullException>(() => new QuantumSweepSession(null!, new FakeBroadcaster(), new FakeCreator(), Bound()));
+        Assert.Throws<ArgumentNullException>(() => new QuantumSweepSession(new FakeDestinations(), null!, new FakeCreator(), Bound()));
+        Assert.Throws<ArgumentNullException>(() => new QuantumSweepSession(new FakeDestinations(), new FakeBroadcaster(), null!, Bound()));
+        Assert.Throws<ArgumentNullException>(() => new QuantumSweepSession(new FakeDestinations(), new FakeBroadcaster(), new FakeCreator(), null!));
     }
 
     // ════════════════════════════════════════════════════════════ session: create a post-quantum wallet
@@ -976,7 +989,7 @@ public class QuantumSweepTests
             Row(LegacyB, ExposureStatus.Unexposed, U("b", 2_500_000_87654321L, LegacyB)),
             Row(BqOther, ExposureStatus.PostQuantum, U("p", 1_000, BqOther)));
         var send = new FakeSendRpc();
-        var s = new QuantumSweepSession(new FakeDestinations(), new SweepBroadcaster(send), new FakeCreator());
+        var s = new QuantumSweepSession(new FakeDestinations(), new SweepBroadcaster(send, Bound()), new FakeCreator(), Bound());
 
         await s.SelectAsync(SweepSelection.AllLegacy(report));
         await s.PlanAsync(QuantumSweepPlanner.DefaultFeeRateSatPerKb);

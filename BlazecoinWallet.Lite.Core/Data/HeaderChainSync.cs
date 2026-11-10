@@ -61,9 +61,28 @@ public interface IHeaderReader
     /// <summary>Raw header hexes for heights [fromHeight, fromHeight+count), in order. Returns
     /// fewer than requested (or empty) at the tip, and empty on any failure — never throws.</summary>
     Task<IReadOnlyList<string>> GetHeadersAsync(long fromHeight, int count, CancellationToken ct = default);
+
+    /// <summary>
+    /// The same read, saying WHO served it (audit 2026-11-09: who served a batch is a fact of the
+    /// batch — it used to be remembered beside the feed, where a later read overwrote it). With
+    /// <paramref name="notFrom"/> the read is steered away from those gateways' servers, and
+    /// comes back EMPTY when it cannot be: headers that place a block must not come from the
+    /// party whose word is being checked. The default is a feed with one source — nobody to name,
+    /// and nobody else to ask.
+    /// </summary>
+    async Task<HeaderBatch> GetHeaderBatchAsync(long fromHeight, int count,
+        IReadOnlyCollection<Uri>? notFrom = null, CancellationToken ct = default) =>
+        notFrom is { Count: > 0 } ? HeaderBatch.Nothing : new(await GetHeadersAsync(fromHeight, count, ct));
 }
 
-/// <summary>Whether a gateway other than the one that served the last header batch could be asked.</summary>
+/// <summary>Headers and the gateway that served them (<see cref="Source"/> is null when the feed
+/// cannot tell gateways apart: a single gateway, a client with no failover list).</summary>
+public sealed record HeaderBatch(IReadOnlyList<string> Headers, Uri? Source = null)
+{
+    public static readonly HeaderBatch Nothing = new([]);
+}
+
+/// <summary>Whether a gateway other than the one that served a header run could be asked.</summary>
 public enum SecondGateway
 {
     /// <summary>Another gateway answered; <see cref="HeaderSecondOpinion.RawHeader"/> is its header at
@@ -80,14 +99,17 @@ public sealed record HeaderSecondOpinion(SecondGateway Status, string? RawHeader
 
 /// <summary>
 /// Optional capability of an <see cref="IHeaderReader"/> (the <see cref="ISpendCrossCheck"/> pattern):
-/// the raw header at a height from a gateway OTHER than the one that served the most recent header
-/// batch. The sync puts every run of verified headers to it before the verified tip moves (bug-bounty
-/// report 2026-11-07: with the two-hour clock rule alone, one gateway could still forge the chain
-/// cheaply — see <see cref="HeaderChainValidator"/>).
+/// the raw header at a height from a gateway OTHER than the ones the caller names — the gateway
+/// that served the run being checked. The sync puts every run of verified headers to it before the
+/// verified tip moves (bug-bounty report 2026-11-07: with the two-hour clock rule alone, one gateway
+/// could still forge the chain cheaply — see <see cref="HeaderChainValidator"/>).
 /// </summary>
 public interface IHeaderCrossCheck
 {
-    Task<HeaderSecondOpinion> HeaderFromAnotherGatewayAsync(long height, CancellationToken ct = default);
+    /// <param name="servedBy">Who served the headers in question (<see cref="HeaderBatch.Source"/>);
+    /// no server of theirs is asked. Empty = unknown, so there is nobody to ask instead
+    /// (<see cref="SecondGateway.None"/>). Passed by the caller, never remembered here (audit 2026-11-09).</param>
+    Task<HeaderSecondOpinion> HeaderFromAnotherGatewayAsync(long height, IReadOnlyCollection<Uri> servedBy, CancellationToken ct = default);
 }
 
 /// <summary>How the last run of verified headers fared with a second gateway.</summary>
@@ -224,15 +246,15 @@ public static class HeaderChainValidator
 public sealed class HeaderChainSync
 {
     /// <summary>The shipped anchor — a real mainnet block, refreshed at every lite release so a
-    /// fresh install's forward sync stays short (harvested 2026-11-06 from the live daemon at tip
-    /// 4,400,483; it is also an entry of the shipped <see cref="HeaderAnchors"/> table). Being
+    /// fresh install's forward sync stays short (harvested 2026-11-10 from the live daemon at tip
+    /// 4,411,363; it is also an entry of the shipped <see cref="HeaderAnchors"/> table). Being
     /// past H_A, it BAKES the Phoenix-413 anchor the per-block rule needs: AnchorBits = block
     /// 4,194,000's nBits, AnchorParentTime = block 4,193,999's timestamp (both constant since
     /// the fork). Trusting it is the same assumption Core's checkpoints/assumevalid make.
     /// (The 2026-08-26 → 10-25 anchor was 4,193,880, deliberately below the fork so the sync
     /// captured those two values from the header stream; Phoenix413Tests pins them.)</summary>
     public static readonly HeaderCheckpoint MainnetCheckpoint =
-        new(4_400_000, "6eb06d2a4b7d09606715b10e706e1b1bdd4be4846150b844ac22f848ecc7a03c", 0x1c315235, 1793940557,
+        new(4_411_000, "485ddf39ad6860640d9f471394e28734e73e82c5259daa1ef2538902f77b1eb8", 0x1c049db9, 1794228127,
             AnchorBits: 0x1c404193, AnchorParentTime: 1787765193);
 
     private const int BatchSize = 250;   // headers per gateway call (~40 KB)
@@ -271,15 +293,16 @@ public sealed class HeaderChainSync
     // Every index/anchor/link map is read by proof checks while a sync writes it.
     private readonly object _indexLock = new();
 
-    /// <param name="crossCheck">Where a second gateway's header comes from. Null ⇒ the feed itself
-    /// when it is an <see cref="IHeaderCrossCheck"/> (the gateway data service), else none — a run
-    /// then stands on its own proof-of-work, as before the 2026-11-07 report.</param>
+    /// <param name="crossCheck">Where a second gateway's header comes from. Handed in — it used to
+    /// default to the feed itself when the feed happened to be one, so a wrapped feed lost it
+    /// silently (audit 2026-11-09). Null ⇒ none: a run then stands on its own proof-of-work, as
+    /// before the 2026-11-07 report.</param>
     public HeaderChainSync(IHeaderReader? headers = null, IWalletStateStore? state = null,
         Network? network = null, HeaderCheckpoint? checkpoint = null, HeaderAnchors? anchors = null,
         IHeaderCrossCheck? crossCheck = null)
     {
         _headers = headers;
-        _crossCheck = crossCheck ?? headers as IHeaderCrossCheck;
+        _crossCheck = crossCheck;
         _state = state ?? new InMemoryWalletStateStore();
         _network = network ?? BlazecoinNetwork.Instance;
         _anchors = anchors ?? HeaderAnchors.Mainnet;
@@ -287,9 +310,36 @@ public sealed class HeaderChainSync
         Index(_tip);
     }
 
+    /// <summary>True when a second gateway is asked before the verified tip moves (the composition
+    /// root hands one in for every gateway-mode head that syncs headers).</summary>
+    public bool HasCrossCheck => _crossCheck != null;
+
     /// <summary>This device's clock, for the rule that no header may be dated more than two hours
     /// ahead of it (tests move it).</summary>
     public Func<DateTimeOffset> Clock { get; set; } = () => DateTimeOffset.UtcNow;
+
+    /// <summary>The <see cref="LiteHdWallet.DeriveStateKey"/> purpose that seals the stored tip.</summary>
+    public const string CheckpointSealPurpose = "header-checkpoint/v1";
+    /// <summary>The <see cref="LiteHdWallet.DeriveStateKey"/> purpose that seals the stored anchors.</summary>
+    public const string AnchorsSealPurpose = "header-anchors/v1";
+
+    /// <summary>
+    /// Where the keys that seal this chain's stored state come from: a purpose in, the wallet's key
+    /// for it out — or null while no wallet is unlocked (audit 2026-11-09). The verified tip and the
+    /// learned anchors live in ordinary app storage and are what a proof's block is linked to; they
+    /// used to be adopted from there on their format alone. They are read and written only under a
+    /// <see cref="SealedValue"/> seal: with no key to be had (locked, or nobody attached) nothing
+    /// stored is adopted and nothing is written — the chain stands on the shipped checkpoint and
+    /// on what this session verifies — and adoption is tried again at the next sync. The wallet
+    /// service attaches itself here when it is built.
+    /// </summary>
+    public Func<string, byte[]?>? StateKeys { get; set; }
+
+    private byte[]? StateKey(string purpose)
+    {
+        try { return StateKeys?.Invoke(purpose); }
+        catch { return null; }   // no key to be had is the same as locked
+    }
 
     private void Index(HeaderCheckpoint c)
     {
@@ -420,14 +470,20 @@ public sealed class HeaderChainSync
             var run = new List<HeaderCheckpoint>();
             var runTip = _tip;
             var batchesInRun = 0;
+            // Who served the run's TOP header — the gateway the second opinion must not come from.
+            // Carried with the run (audit 2026-11-09): it used to be whoever answered the feed's
+            // most recent header request, which a proof check's own fetch could change mid-run.
+            // The headers beneath the top are bound to it by hash, so its source is the one that matters.
+            Uri? topServedBy = null;
             for (var batch = 0; batch < MaxBatchesPerSync; batch++)
             {
                 ct.ThrowIfCancellationRequested();
-                var raw = await _headers.GetHeadersAsync(runTip.Height + 1, BatchSize, ct);
+                var served = await _headers.GetHeaderBatchAsync(runTip.Height + 1, BatchSize, null, ct);
+                var raw = served.Headers;
                 if (raw.Count == 0)
                 {
                     // Caught up to the tip (or the feed had nothing new): commit what the run holds.
-                    if (run.Count > 0) await CommitRunAsync(run, ct);
+                    if (run.Count > 0) await CommitRunAsync(run, topServedBy, ct);
                     break;
                 }
 
@@ -446,6 +502,7 @@ public sealed class HeaderChainSync
 
                 // Verify the batch in slices, yielding to the host between them (see VerifySlice).
                 string? error = null;
+                var before = run.Count;
                 for (var offset = 0; offset < raw.Count && error == null; offset += VerifySlice)
                 {
                     var slice = raw.Skip(offset).Take(VerifySlice).ToList();
@@ -455,12 +512,14 @@ public sealed class HeaderChainSync
                     await YieldToHostAsync(ct);
                 }
                 batchesInRun++;
+                if (run.Count > before) topServedBy = served.Source;   // this batch supplied the run's top
 
                 var feedDone = error != null || raw.Count < BatchSize; // a bad header, or a short batch ⇒ the tip
                 if (run.Count > 0 && (feedDone || batchesInRun >= BatchesPerCorroboration))
                 {
-                    var committed = await CommitRunAsync(run, ct);
+                    var committed = await CommitRunAsync(run, topServedBy, ct);
                     run.Clear();
+                    topServedBy = null;
                     batchesInRun = 0;
                     if (!committed) break; // held — the tip stays; the next sync asks again
                     runTip = _tip;
@@ -505,10 +564,10 @@ public sealed class HeaderChainSync
     /// silent, nothing is committed and the caller stops — the run is re-fetched and re-asked on the
     /// next sync. Returns true when the tip moved.
     /// </summary>
-    private async Task<bool> CommitRunAsync(List<HeaderCheckpoint> run, CancellationToken ct)
+    private async Task<bool> CommitRunAsync(List<HeaderCheckpoint> run, Uri? topServedBy, CancellationToken ct)
     {
         var top = run[^1];
-        var verdict = await CorroborateAsync(top, ct);
+        var verdict = await CorroborateAsync(top, topServedBy, ct);
         LastCorroboration = verdict;
         if (verdict is HeaderCorroboration.Contradicted or HeaderCorroboration.Unavailable)
         {
@@ -519,16 +578,16 @@ public sealed class HeaderChainSync
         foreach (var verified in run) Index(verified);
         _tip = top;
         await PersistAnchorsAsync(); // before the tip, so a crash never leaves the tip ahead of its anchors
-        await _state.SetVerifiedCheckpointAsync(_tip.Serialize());
+        await PersistTipAsync();
         TipAdvanced?.Invoke();
         return true;
     }
 
-    private async Task<HeaderCorroboration> CorroborateAsync(HeaderCheckpoint top, CancellationToken ct)
+    private async Task<HeaderCorroboration> CorroborateAsync(HeaderCheckpoint top, Uri? topServedBy, CancellationToken ct)
     {
         if (_crossCheck == null) return HeaderCorroboration.NoSecondGateway;
         HeaderSecondOpinion opinion;
-        try { opinion = await _crossCheck.HeaderFromAnotherGatewayAsync(top.Height, ct); }
+        try { opinion = await _crossCheck.HeaderFromAnotherGatewayAsync(top.Height, topServedBy == null ? [] : [topServedBy], ct); }
         catch (OperationCanceledException) { throw; }
         catch { return HeaderCorroboration.Unavailable; }
 
@@ -545,7 +604,10 @@ public sealed class HeaderChainSync
 
     private static HeaderCheckpoint? TryLoadPersisted(string? serialized) => HeaderCheckpoint.TryParse(serialized);
 
-    /// <summary>Loads the persisted tip and learned anchors once (idempotent, concurrency-safe).</summary>
+    /// <summary>Adopts the persisted tip and learned anchors once (idempotent, concurrency-safe) —
+    /// each only if its seal opens (<see cref="StateKeys"/>). A value that does not open is ignored,
+    /// never an error: the chain re-syncs from where it stands. With no key to be had yet nothing
+    /// is adopted and this is tried again on the next call.</summary>
     private async Task EnsureLoadedAsync()
     {
         if (_loaded) return;
@@ -553,12 +615,20 @@ public sealed class HeaderChainSync
         try
         {
             if (_loaded) return;
-            var persisted = TryLoadPersisted(await _state.GetVerifiedCheckpointAsync());
+            var tipKey = StateKey(CheckpointSealPurpose);
+            var anchorsKey = StateKey(AnchorsSealPurpose);
+            if (tipKey == null || anchorsKey == null) return;
+
+            var persisted = SealedValue.TryOpen(tipKey, await _state.GetVerifiedCheckpointAsync(), out var tipText)
+                ? TryLoadPersisted(tipText)
+                : null;
             // Only adopt a persisted tip AHEAD of the shipped one — never let a stale/rolled
             // store drag verification backwards below the baked-in anchor.
             if (persisted != null && persisted.Height > _tip.Height) { _tip = persisted; Index(_tip); TipAdvanced?.Invoke(); }
 
-            var learned = ParseAnchors(await _state.GetHeaderAnchorsAsync()).ToList();
+            var learned = SealedValue.TryOpen(anchorsKey, await _state.GetHeaderAnchorsAsync(), out var anchorsText)
+                ? ParseAnchors(anchorsText).ToList()
+                : [];
             lock (_indexLock)
             {
                 var dirty = _anchorsDirty; // loading what is already persisted dirties nothing
@@ -571,8 +641,20 @@ public sealed class HeaderChainSync
         finally { _loadGate.Release(); }
     }
 
+    /// <summary>Writes the tip under its seal. Skipped while there is no key to seal it with, and
+    /// until the stored state has been adopted — what was not read is not written over. Losing a
+    /// write is safe: the next commit with a key writes the tip of the day.</summary>
+    private async Task PersistTipAsync()
+    {
+        if (!_loaded || StateKey(CheckpointSealPurpose) is not { } key) return;
+        await _state.SetVerifiedCheckpointAsync(SealedValue.Seal(key, _tip.Serialize()));
+    }
+
+    /// <summary>Writes the learned anchors under their seal, on the same terms as the tip (they stay
+    /// marked for writing until they are).</summary>
     private async Task PersistAnchorsAsync()
     {
+        if (!_loaded || StateKey(AnchorsSealPurpose) is not { } key) return;
         string serialized;
         lock (_indexLock)
         {
@@ -580,7 +662,7 @@ public sealed class HeaderChainSync
             serialized = string.Join(",", _learnedAnchors.Select(a => $"{a.Key}:{a.Value}"));
             _anchorsDirty = false;
         }
-        await _state.SetHeaderAnchorsAsync(serialized);
+        await _state.SetHeaderAnchorsAsync(SealedValue.Seal(key, serialized));
     }
 
     private static IEnumerable<(long Height, string Hash)> ParseAnchors(string? serialized)
@@ -605,10 +687,21 @@ public sealed class HeaderChainSync
     /// of headers (~80 KB) in the normal case; proven blocks are cached, and anchors passed on
     /// the way above the shipped table are learned (backfilling after an upgrade).
     /// </summary>
-    public async Task<BlockLocation> LocateAsync(string blockHash, long claimedHeight, CancellationToken ct = default)
+    /// <param name="notFrom">Gateways the linking headers must NOT be fetched from — the party whose
+    /// word the block is being used to check (audit 2026-11-09: a gateway asked for the headers that
+    /// would prove it wrong can answer with none, or with junk that breaks the link). When no other
+    /// server can serve them the verdict is <see cref="ChainMembership.CannotCheck"/>.</param>
+    public async Task<BlockLocation> LocateAsync(string blockHash, long claimedHeight, CancellationToken ct = default,
+        IReadOnlyCollection<Uri>? notFrom = null)
     {
         if (_headers == null) return new(ChainMembership.CannotCheck);
-        await EnsureLoadedAsync();
+        // Stored state is adopted between syncs, never under a running one: its run was built on
+        // the tip it started from (a sync tries the adoption itself as it starts).
+        if (!_loaded && await _gate.WaitAsync(0, ct))
+        {
+            try { await EnsureLoadedAsync(); }
+            finally { _gate.Release(); }
+        }
 
         if (VerifiedHeightOf(blockHash) is long placed) return new(ChainMembership.OnChain, placed);
         if (claimedHeight <= 0) return new(ChainMembership.CannotCheck);
@@ -643,7 +736,12 @@ public sealed class HeaderChainSync
         var height = claimedHeight;
         while (height < anchorHeight)
         {
-            var raw = await _headers.GetHeadersAsync(height + 1, (int)Math.Min(BatchSize, anchorHeight - height), ct);
+            var served = await _headers.GetHeaderBatchAsync(height + 1, (int)Math.Min(BatchSize, anchorHeight - height), notFrom, ct);
+            // Asked to stay away from someone, a batch that does not say it came from another
+            // server is not used — whatever the feed made of the request.
+            if (notFrom is { Count: > 0 } && (served.Source == null || GatewaySite.SameAsAny(served.Source, notFrom)))
+                return new(ChainMembership.CannotCheck);
+            var raw = served.Headers;
             if (raw.Count == 0) return new(ChainMembership.CannotCheck);
             foreach (var hex in raw)
             {
@@ -725,7 +823,7 @@ public sealed class HeaderChainSync
         _tip = rewound;
         Index(_tip);
         await PersistAnchorsAsync();
-        await _state.SetVerifiedCheckpointAsync(_tip.Serialize());
+        await PersistTipAsync();
         TipAdvanced?.Invoke(); // moved, not advanced — subscribers just re-read the tip
         return true;
     }

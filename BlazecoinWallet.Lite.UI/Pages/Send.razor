@@ -4,7 +4,6 @@
 @inject NavigationManager Nav
 @inject IQrScanner Scanner
 @inject IUnitSettings Units
-@inject IExplorerSettings Explorer
 @inject IAddressBook Book
 @inject IBiometricAuth Biometric
 @inject CometPulse Comet
@@ -89,18 +88,12 @@
     }
     @if (_sentTxId != null)
     {
-        <div class="lite-success">
-            Sent! The network accepted transaction<br />
-            @{ var txUrl = LiteExplorer.TxUrl(Explorer.BaseUrl, _sentTxId); }
-            @if (txUrl != null)
-            {
-                <a href="@txUrl" target="_blank" rel="noopener" class="lite-link"><strong>@_sentTxId</strong></a>
-            }
-            else
-            {
-                <strong>@_sentTxId</strong>
-            }
-        </div>
+        @* One gateway's word and nobody to back it is not a delivery (bug-bounty report 2026-11-09):
+           the receipt says so instead of reading "Sent!". *@
+        <SendReceipt Unconfirmed="_sentUnconfirmed" TxId="@_sentTxId">
+            <UnconfirmedLead>Sent, but <strong>not confirmed yet</strong> — transaction</UnconfirmedLead>
+            <ConfirmedLead>Sent! The network accepted transaction</ConfirmedLead>
+        </SendReceipt>
     }
 </div>
 
@@ -114,6 +107,7 @@
     private bool _busy;
     private string? _error;
     private string? _sentTxId;
+    private bool _sentUnconfirmed;   // the receipt rests on one gateway's word alone
     private string _sym => LiteUnits.Symbol(Units.Unit);
 
     private void OnAmountInput(ChangeEventArgs e)
@@ -175,7 +169,7 @@
     /// <summary>Validate + parse, then show the confirmation screen — no keys touched yet.</summary>
     private void Review()
     {
-        _error = null; _sentTxId = null;
+        _error = null; _sentTxId = null; _sentUnconfirmed = false;
 
         if (Stopped)
         {
@@ -185,6 +179,15 @@
         if (string.IsNullOrWhiteSpace(_destination))
         {
             _error = "Enter a destination address.";
+            return;
+        }
+        // The review screen is where the user re-reads what will be signed, so it must never show
+        // something that is not an address (bug-bounty report 2026-11-09: any text got there, and the
+        // first complaint came after Confirm - about the balance). The builder refuses a bad address
+        // too; this is the same rule, asked where it helps.
+        if (!BlazecoinAddress.IsValid(_destination))
+        {
+            _error = "That is not a valid Blazecoin address. Check it against the original - a Blazecoin address starts with B or BQ.";
             return;
         }
         // Parse in the user's display unit; the helper also bounds to the money supply and
@@ -223,6 +226,7 @@
             if (result.Success)
             {
                 _sentTxId = result.TxId;
+                _sentUnconfirmed = result.Unconfirmed;
                 // The Home balance-card comet runs orange for a window after a send.
                 Comet.Pulse(CometPulseKind.Sent);
                 _amountText = string.Empty;

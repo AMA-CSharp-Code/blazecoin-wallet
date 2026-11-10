@@ -318,6 +318,12 @@ label.lite-sub { font-weight: 600; letter-spacing: .02em; }
     background: rgba(6, 214, 160, 0.10); border: 1px solid var(--blz-success);
     border-radius: 0; padding: 10px 13px; margin: 12px 0; font-size: .9rem; word-break: break-all;
 }
+/* A receipt that rests on one gateway's word alone (2026-11-09): amber, not the green of a delivery. */
+.lite-unconfirmed {
+    background: rgba(255, 183, 3, 0.12); border: 1px solid var(--blz-gold);
+    border-radius: 0; padding: 10px 13px; margin: 12px 0; font-size: .9rem; word-break: break-all;
+}
+.lite-unconfirmed-note { display: inline-block; margin-top: 6px; word-break: normal; }
 
 /* ── Mnemonic ceremony ── */
 .lite-mnemonic { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin: 12px 0; }

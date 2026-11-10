@@ -16,7 +16,7 @@ public class MiningServiceTests
     [Fact]
     public void Fresh_service_reports_not_running_and_zeroed_status()
     {
-        var svc = new MiningService(Substitute.For<IMiningRpc>());
+        var svc = new MiningService(Substitute.For<IMiningRpc>(), new TestMint(), new TestWalletContext(null));
         var s = svc.GetStatus();
 
         Assert.False(s.IsRunning);
@@ -29,7 +29,7 @@ public class MiningServiceTests
     [Fact]
     public void Thread_caps_are_derived_from_the_processor_count()
     {
-        var svc = new MiningService(Substitute.For<IMiningRpc>());
+        var svc = new MiningService(Substitute.For<IMiningRpc>(), new TestMint(), new TestWalletContext(null));
         Assert.Equal(Math.Max(1, Environment.ProcessorCount - 4), svc.MaxAllowedThreads);
         Assert.Equal(Math.Max(1, Environment.ProcessorCount / 8), svc.DefaultThreadCount);
         Assert.Equal(svc.MaxAllowedThreads, svc.GetStatus().MaxAllowedThreads);
@@ -39,7 +39,7 @@ public class MiningServiceTests
     public async Task StartAsync_throws_on_an_invalid_payout_address_before_spawning_workers()
     {
         var rpc = Substitute.For<IMiningRpc>();
-        var svc = new MiningService(rpc);
+        var svc = new MiningService(rpc, new TestMint(), new TestWalletContext(null));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.StartAsync(new MiningOptions { PayoutAddress = "not-a-valid-address", ThreadCount = 1 }));
@@ -55,7 +55,7 @@ public class MiningServiceTests
     {
         var rpc = Substitute.For<IMiningRpc>();
         rpc.GetBlockTemplateAsync().Returns((BlockTemplate?)null);
-        var svc = new MiningService(rpc);
+        var svc = new MiningService(rpc, new TestMint(), new TestWalletContext(null));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.StartAsync(new MiningOptions { PayoutAddress = ValidAddress, ThreadCount = 1 }));
@@ -68,7 +68,7 @@ public class MiningServiceTests
     {
         var rpc = Substitute.For<IMiningRpc>();
         rpc.GetNewAddressAsync().Returns((string?)null); // daemon gives nothing back
-        var svc = new MiningService(rpc);
+        var svc = new MiningService(rpc, new TestMint(), new TestWalletContext(null));
 
         // Empty PayoutAddress -> asks the daemon -> null -> fails fast, still no workers.
         await Assert.ThrowsAsync<InvalidOperationException>(() =>

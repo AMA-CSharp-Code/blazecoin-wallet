@@ -1,8 +1,10 @@
 @page "/console"
 @using System.Text.Json
 @using BlazecoinWallet.Core.Services
-@inject IBlazecoindRpcService RpcService
+@inject IConsoleRpc ConsoleRpc
 @inject IJSRuntime JS
+@inject IWalletContext WalletContext
+@implements IDisposable
 
 @* Component is named RpcConsole (not Console) to avoid shadowing System.Console
    for other pages in this namespace; the route and label stay "Console". *@
@@ -38,6 +40,9 @@
        inner padding provided by .card-body. *@
     <div class="content-container card">
         <div class="status-header"><span>Console Window</span></div>
+        @* Which wallet a wallet command will run against — until 2026-11-09 the Console showed none
+           (bug-bounty report). Commands go to exactly the wallet named here, or fail. *@
+        <div class="console-wallet">Wallet commands run against: <strong>@WalletLabel</strong></div>
         <div class="card-body">
             <div class="console-output">
                 @if (_history.Count == 0)
@@ -58,7 +63,7 @@
             </div>
 
             <div class="console-input">
-                <span class="prompt">›</span>
+                <span class="prompt">@WalletLabel ›</span>
                 <input @bind="_command" @bind:event="oninput" @onkeydown="OnKeyDown"
                        placeholder="Enter command…" disabled="@_busy" />
                 <button class="btn btn-primary" @onclick="Run" disabled="@_busy">Run</button>
@@ -73,6 +78,28 @@
     private readonly List<Line> _history = new();
     private string _command = "";
     private bool _busy;
+
+    // The wallet this Console shows beside its prompt ("" = none chosen). A command is sent to
+    // exactly this wallet: the service refuses it if the active wallet is no longer this one,
+    // and never re-points the app from here.
+    private string _wallet = "";
+    private string WalletLabel => _wallet.Length == 0 ? "(node default)" : _wallet;
+
+    protected override void OnInitialized()
+    {
+        _wallet = WalletContext.Active ?? "";
+        WalletContext.Changed += OnWalletChanged;
+    }
+
+    // Raised from whichever thread changed the wallet; the label is updated on the UI thread,
+    // together with the render that shows it.
+    private void OnWalletChanged() => _ = InvokeAsync(() =>
+    {
+        _wallet = WalletContext.Active ?? "";
+        StateHasChanged();
+    });
+
+    public void Dispose() => WalletContext.Changed -= OnWalletChanged;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -99,7 +126,8 @@
         var cmd = _command.Trim();
         if (string.IsNullOrEmpty(cmd) || _busy) return;
 
-        _history.Add(new Line(cmd, true, false));
+        var wallet = _wallet;   // the wallet on screen as the user pressed Enter
+        _history.Add(new Line($"[{(wallet.Length == 0 ? "node default" : wallet)}] {cmd}", true, false));
         _command = "";
         _busy = true;
         StateHasChanged();
@@ -109,7 +137,7 @@
             var tokens = Tokenize(cmd);
             var method = tokens[0];
             var args = tokens.Skip(1).Select(ParseToken).ToArray();
-            var result = await RpcService.ExecuteCommandAsync(method, args);
+            var result = await ConsoleRpc.ExecuteConsoleCommandAsync(wallet, method, args);
             _history.Add(new Line(result, false, false));
         }
         catch (RpcException rex)

@@ -80,3 +80,46 @@ public sealed class WalletNotLoadedException : RpcException
         Wallet = wallet ?? string.Empty;
     }
 }
+
+/// <summary>
+/// A Console command was typed beside one wallet's name and the active wallet is another by the
+/// time it was run, so it was not run. The sentence is made here, with the other two refusals,
+/// not in the RPC class (audit 2026-11-09).
+/// </summary>
+public sealed class ConsoleWalletChangedException : RpcException
+{
+    /// <summary>The wallet the Console showed ("" = the node's default wallet).</summary>
+    public string Shown { get; }
+    public string ActiveNow { get; }
+
+    public ConsoleWalletChangedException(string shown, string activeNow)
+        : base(-4, $"The active wallet is now {Describe(activeNow)}, and this console was showing {Describe(shown)}, so nothing was run. " +
+                   "Check the wallet shown beside the prompt and run the command again.")
+    {
+        Shown = shown ?? string.Empty;
+        ActiveNow = activeNow ?? string.Empty;
+    }
+
+    private static string Describe(string? name) => string.IsNullOrEmpty(name) ? "the node's default wallet" : $"\"{name}\"";
+}
+
+/// <summary>
+/// The app re-pointed itself at another wallet and the user has not acknowledged the notice yet,
+/// so a call that would change a wallet (or a Console command) was not run. Until the notice is
+/// dismissed the user may still believe they are on the wallet they chose (bug-bounty report
+/// 2026-11-09). Carries the daemon's general wallet-error code, not -18: the wallet IS loaded.
+/// </summary>
+public sealed class WalletSwitchPendingException : RpcException
+{
+    public WalletSwitch Switch { get; }
+
+    public WalletSwitchPendingException(WalletSwitch pending)
+        : base(-4, (string.IsNullOrEmpty(pending.From)
+                ? $"This window changed to the wallet \"{pending.To}\""
+                : $"The wallet \"{pending.From}\" is no longer loaded on the node, so this window changed to \"{pending.To}\"")
+            + ", and that change has not been confirmed yet, so nothing was done. " +
+            "Press OK on the \"Active Wallet Changed\" notice, check which wallet you want, then try again.")
+    {
+        Switch = pending;
+    }
+}

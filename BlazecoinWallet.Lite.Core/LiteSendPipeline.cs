@@ -112,17 +112,28 @@ internal sealed class LiteSendPipeline
         if (relay.Success || relay.Failure == BroadcastFailureKind.Duplicate)
         {
             // One gateway's word and nobody to back it: that gateway may have kept the
-            // transaction instead of relaying it. Hand it to network nodes directly as well —
-            // harmless when it is already out there, decisive when it is not.
-            if (relay.Uncorroborated && _p2p != null)
+            // transaction instead of relaying it — or claimed "already known" about one that was
+            // never broadcast. Hand it to network nodes directly as well: harmless when it is
+            // already out there, decisive when it is not. And the answer COUNTS (bug-bounty report
+            // 2026-11-09: it was thrown away, so the receipt read "Sent!" on that one gateway's
+            // word even when no node took the transaction): unless a node accepted it from us,
+            // the receipt says the delivery is unconfirmed. Where there is no direct push at all
+            // (the web wallet has no raw sockets) a lone gateway is always unconfirmed.
+            var unconfirmed = false;
+            if (relay.Uncorroborated)
             {
-                try { await _p2p.TryBroadcastAsync(signed.Hex, _p2pNodes, ct: ct); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch { /* best effort — the relay's answer still stands */ }
+                string? acceptedBy = null;
+                if (_p2p != null)
+                {
+                    try { acceptedBy = await _p2p.TryBroadcastAsync(signed.Hex, _p2pNodes, ct: ct); }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch { /* nobody took it — which is exactly what the receipt will say */ }
+                }
+                unconfirmed = acceptedBy == null;
             }
             _sessionSentTxIds.TryAdd(signed.TxId, 0);
             await NoteChangeUsedAsync();
-            return new LiteSendResult(true, signed.TxId, null);
+            return new LiteSendResult(true, signed.TxId, null, Unconfirmed: unconfirmed);
         }
 
         // Total-backend-outage fallback: the gateways were UNREACHABLE (nobody judged the

@@ -18,11 +18,14 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IHeader
 
     private readonly HttpClient _http;
     private readonly ILogger<IndexerDataService> _logger;
+    // Every question put to a SECOND gateway goes through this one client (audit 2026-11-09).
+    private readonly SecondOpinionClient _secondOpinion;
 
     public IndexerDataService(HttpClient http, ILogger<IndexerDataService> logger)
     {
         _http = http;
         _logger = logger;
+        _secondOpinion = new SecondOpinionClient(http, logger);
     }
 
     /// <summary>The Indexer serves the full derived address ledger.</summary>
@@ -54,29 +57,47 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IHeader
     /// </summary>
     public async Task<bool> IsAddressUsedByAnyGatewayAsync(string address, CancellationToken ct = default)
     {
-        var first = await AskUsedAsync(address, exclude: null, ct);
-        if (first.Used) return true;
-        if (first.AnsweredBy == null) return false;
-        return (await AskUsedAsync(address, [first.AnsweredBy], ct)).Used;
-    }
-
-    private async Task<(bool Used, Uri? AnsweredBy)> AskUsedAsync(string address, IReadOnlyCollection<Uri>? exclude, CancellationToken ct)
-    {
+        var path = $"indexer/api/address/{Uri.EscapeDataString(address)}";
+        Uri? answeredBy;
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/address/{Uri.EscapeDataString(address)}");
-            if (exclude != null) request.Options.Set(GatewayRouting.Exclude, exclude);
+            using var request = new HttpRequestMessage(HttpMethod.Get, path);
             using var res = await _http.SendAsync(request, ct);
-            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var answeredBy);
-            if (!res.IsSuccessStatusCode) return (false, answeredBy);   // 404 = never seen; an error = no evidence of use
-            var dto = await res.Content.ReadFromJsonAsync<AddressJson>(Json, ct);
-            return (dto is { TxCount: > 0 }, answeredBy);
+            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out answeredBy);
+            // 404 = never seen; an error = no evidence of use.
+            if (res.IsSuccessStatusCode && await res.Content.ReadFromJsonAsync<AddressJson>(Json, ct) is { TxCount: > 0 }) return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, exclude == null ? "Address usage fetch failed" : "No second gateway answered the address usage question");
-            return (false, null);
+            _logger.LogWarning(ex, "Address usage fetch failed");
+            return false;
+        }
+
+        var second = await AskAnotherGatewayAsync<AddressJson>(path, answeredBy == null ? null : [answeredBy], "the address usage question", ct);
+        return second.Body is { TxCount: > 0 };
+    }
+
+    /// <summary>A GET put to a second gateway and its JSON answer read (<see cref="SecondOpinionClient"/>
+    /// decides who "someone else" is and what happened). <c>Body</c> is set only when another
+    /// server answered with success and the answer could be read; an answer that could not be
+    /// read is no answer (<see cref="SecondGateway.Unavailable"/>).</summary>
+    private async Task<(SecondGateway Status, bool Success, TBody? Body, Uri? AnsweredBy)> AskAnotherGatewayAsync<TBody>(
+        string path, IReadOnlyCollection<Uri>? exclude, string question, CancellationToken ct) where TBody : class
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        using var opinion = await _secondOpinion.SendAsync(request, exclude, question, ct);
+        if (opinion.Status != SecondGateway.Answered) return (opinion.Status, false, null, null);
+        if (!opinion.IsSuccess) return (SecondGateway.Answered, false, null, opinion.AnsweredBy);
+        try
+        {
+            return (SecondGateway.Answered, true, await opinion.Response!.Content.ReadFromJsonAsync<TBody>(Json, ct), opinion.AnsweredBy);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "A second gateway's answer to {Question} could not be read", question);
+            return (SecondGateway.Unavailable, false, null, opinion.AnsweredBy);
         }
     }
 
@@ -104,8 +125,9 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IHeader
     /// <summary>One request's worth of outputs for <c>outputs/spends</c> (the gateway's own cap).</summary>
     public int MaxOutpointsPerCall => 50;
 
-    /// <summary>The most claimed spends whose evidence is fetched in one call — two requests each,
-    /// so a gateway answering "all spent" cannot make the wallet burn its read allowance.</summary>
+    /// <summary>The most claimed spends whose evidence is fetched for one question — two requests
+    /// each, so a gateway answering "all spent" cannot make the wallet burn its read allowance.
+    /// The claims beyond it are still returned, marked <see cref="LiteSpendClaim.EvidencePending"/>.</summary>
     internal const int MaxSpendEvidencePerCall = 10;
 
     /// <summary>
@@ -128,61 +150,45 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IHeader
                 var spent = await AskSpendsAsync(chunk, exclude, ct);
                 if (spent == null) continue;          // nobody else answered for this chunk
                 answered = true;
-                foreach (var s in spent.Take(MaxSpendEvidencePerCall))
-                    claims.Add(new LiteSpendClaim(s.TxId, s.Vout, s.SpentTxId!, s.SpentHeight ?? 0,
-                        await GetFromAnotherGatewayAsync<RawTxJson>($"indexer/api/tx/{Uri.EscapeDataString(s.SpentTxId!)}/raw", exclude, b => b.Hex, ct),
-                        await GetFromAnotherGatewayAsync<ProofJson>($"indexer/api/tx/{Uri.EscapeDataString(s.SpentTxId!)}/proof", exclude, b => b.Proof, ct)));
+                // Every spend named becomes a claim. Past the cap the evidence waits for a later
+                // round and the claim says so — it used to be dropped, and a coin missing from the
+                // answer reads as "no spend named" (audit 2026-11-09). Evidence goes to the outputs
+                // in the order they were ASKED about, whatever order the gateway answered in, and
+                // one answer per output — a gateway repeating itself cannot use up the cap.
+                var fetched = 0;
+                foreach (var s in spent.GroupBy(s => AskedPosition(chunk, s)).OrderBy(g => g.Key).Select(g => g.First()))
+                {
+                    if (fetched++ >= MaxSpendEvidencePerCall)
+                    {
+                        claims.Add(new LiteSpendClaim(s.TxId!, s.Vout, s.SpentTxId!, s.SpentHeight ?? 0, null, null) { EvidencePending = true });
+                        continue;
+                    }
+                    var tx = Uri.EscapeDataString(s.SpentTxId!);
+                    claims.Add(new LiteSpendClaim(s.TxId!, s.Vout, s.SpentTxId!, s.SpentHeight ?? 0,
+                        (await AskAnotherGatewayAsync<RawTxJson>($"indexer/api/tx/{tx}/raw", exclude, "for a spend's transaction", ct)).Body?.Hex,
+                        (await AskAnotherGatewayAsync<ProofJson>($"indexer/api/tx/{tx}/proof", exclude, "for a spend's proof", ct)).Body?.Proof));
+                }
             }
         }
         return answered ? claims : null;
     }
+
+    private static int AskedPosition(LiteOutpoint[] asked, SpendJson answer) =>
+        Array.FindIndex(asked, o => o.Vout == answer.Vout && string.Equals(o.TxId, answer.TxId, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The outputs a second gateway says were spent in a block; null when it gave no usable
     /// answer (unreachable, none configured, or it does not serve the question — an older gateway
     /// or a full Indexer site answers 404).</summary>
     private async Task<List<SpendJson>?> AskSpendsAsync(IReadOnlyList<LiteOutpoint> outpoints, IReadOnlyCollection<Uri> exclude, CancellationToken ct)
     {
-        try
-        {
-            var asked = string.Join(',', outpoints.Select(o => $"{o.TxId}:{o.Vout}"));
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/outputs/spends?o={asked}");
-            request.Options.Set(GatewayRouting.Exclude, exclude);
-            using var res = await _http.SendAsync(request, ct);
-            if (!res.IsSuccessStatusCode) return null;
-            var body = await res.Content.ReadFromJsonAsync<SpendsJson>(Json, ct);
-            if (body?.Items == null) return null;
-            // Only answers to what was asked, and only ones that name a spender.
-            return body.Items
-                .Where(i => i is { TxId: not null, SpentTxId.Length: 64 } &&
-                            outpoints.Any(o => o.Vout == i.Vout && string.Equals(o.TxId, i.TxId, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "No second gateway answered the spent-output question");
-            return null;
-        }
-    }
-
-    private async Task<string?> GetFromAnotherGatewayAsync<TBody>(string path, IReadOnlyCollection<Uri> exclude,
-        Func<TBody, string?> pick, CancellationToken ct)
-    {
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, path);
-            request.Options.Set(GatewayRouting.Exclude, exclude);
-            using var res = await _http.SendAsync(request, ct);
-            if (!res.IsSuccessStatusCode) return null;
-            var body = await res.Content.ReadFromJsonAsync<TBody>(Json, ct);
-            return body == null ? null : pick(body);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Spend evidence fetch from a second gateway failed");
-            return null;
-        }
+        var asked = string.Join(',', outpoints.Select(o => $"{o.TxId}:{o.Vout}"));
+        var answer = await AskAnotherGatewayAsync<SpendsJson>($"indexer/api/outputs/spends?o={asked}", exclude, "the spent-output question", ct);
+        if (answer.Body?.Items == null) return null;
+        // Only answers to what was asked, and only ones that name a spender.
+        return answer.Body.Items
+            .Where(i => i is { TxId: not null, SpentTxId.Length: 64 } &&
+                        outpoints.Any(o => o.Vout == i.Vout && string.Equals(o.TxId, i.TxId, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
     }
 
     public async Task<IReadOnlyList<LiteHistoryEntry>> GetHistoryAsync(string address, int page = 1, int pageSize = 25, CancellationToken ct = default)
@@ -234,58 +240,53 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IHeader
 
     /// <summary>Raw block headers for the wallet's trustless header-chain sync (IHeaderReader).
     /// Never-throw like the other reads — an empty list just stalls the verified tip.</summary>
-    public async Task<IReadOnlyList<string>> GetHeadersAsync(long fromHeight, int count, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> GetHeadersAsync(long fromHeight, int count, CancellationToken ct = default) =>
+        (await GetHeaderBatchAsync(fromHeight, count, null, ct)).Headers;
+
+    /// <summary>The same read, stamped with the gateway that served it — the batch carries its own
+    /// source, so nothing here remembers "the last one" (audit 2026-11-09). With
+    /// <paramref name="notFrom"/> the request goes to another server, or comes back empty.</summary>
+    public async Task<HeaderBatch> GetHeaderBatchAsync(long fromHeight, int count,
+        IReadOnlyCollection<Uri>? notFrom = null, CancellationToken ct = default)
     {
+        var path = $"indexer/api/headers/{fromHeight}?count={count}";
         try
         {
-            // Sent as a request so the batch can be stamped with the gateway that served it: the
-            // second opinion on the run it belongs to must come from another one.
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/headers/{fromHeight}?count={count}");
+            if (notFrom is { Count: > 0 })
+            {
+                var steered = await AskAnotherGatewayAsync<HeadersJson>(path, notFrom, "for the headers that place a block", ct);
+                return steered.Status == SecondGateway.Answered ? new(steered.Body?.Headers ?? [], steered.AnsweredBy) : HeaderBatch.Nothing;
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, path);
             using var res = await _http.SendAsync(request, ct);
             request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var source);
-            _headersSource = source;
-            if (!res.IsSuccessStatusCode) return [];
+            if (!res.IsSuccessStatusCode) return new([], source);
             var body = await res.Content.ReadFromJsonAsync<HeadersJson>(Json, ct);
-            return body?.Headers ?? [];
+            return new(body?.Headers ?? [], source);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Header range fetch failed");
-            return [];
+            return HeaderBatch.Nothing;
         }
     }
 
-    // The gateway that served the most recent header batch (IHeaderCrossCheck excludes it).
-    private Uri? _headersSource;
-
     /// <summary>
-    /// The header at <paramref name="height"/> from a gateway other than the one that served the
-    /// last batch (<see cref="IHeaderCrossCheck"/>; bug-bounty report 2026-11-07). Without a
-    /// failover list there is nobody else to ask — and a client that ignores the exclusion (no
-    /// <see cref="GatewayFailoverHandler"/>) is recognised by the same gateway answering again.
+    /// The header at <paramref name="height"/> from a gateway other than the ones that served the
+    /// headers in question (<see cref="IHeaderCrossCheck"/>; bug-bounty report 2026-11-07). Without
+    /// a failover list nobody is named and there is nobody else to ask — and a client that ignores
+    /// the exclusion (no <see cref="GatewayFailoverHandler"/>) is recognised by the same server
+    /// answering again, under whichever of its names.
     /// </summary>
-    public async Task<HeaderSecondOpinion> HeaderFromAnotherGatewayAsync(long height, CancellationToken ct = default)
+    public async Task<HeaderSecondOpinion> HeaderFromAnotherGatewayAsync(long height, IReadOnlyCollection<Uri> servedBy, CancellationToken ct = default)
     {
-        var source = _headersSource;
-        if (source == null) return new(SecondGateway.None, null);
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"indexer/api/headers/{height}?count=1");
-            request.Options.Set(GatewayRouting.Exclude, [source]);
-            using var res = await _http.SendAsync(request, ct);
-            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var other);
-            if (other == null || other == source) return new(SecondGateway.None, null);
-            if (!res.IsSuccessStatusCode) return new(SecondGateway.Unavailable, null);
-            var body = await res.Content.ReadFromJsonAsync<HeadersJson>(Json, ct);
-            return new(SecondGateway.Answered, body?.Headers?.FirstOrDefault());
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (NoOtherGatewayException) { return new(SecondGateway.None, null); }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "No second gateway answered the header question");
-            return new(SecondGateway.Unavailable, null);
-        }
+        var answer = await AskAnotherGatewayAsync<HeadersJson>($"indexer/api/headers/{height}?count=1", servedBy, "the header question", ct);
+        if (answer.Status != SecondGateway.Answered) return new(answer.Status, null);
+        // It answered, but with an error: that is no word on the header either way.
+        return answer.Success
+            ? new(SecondGateway.Answered, answer.Body?.Headers?.FirstOrDefault())
+            : new(SecondGateway.Unavailable, null);
     }
 
     /// <summary>Server-side Provenance (IAncestryReader): the gateway runs the desktop
@@ -358,130 +359,77 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IHeader
     /// </list>
     /// With a single gateway (a custom setup, or every other gateway down) there is nobody to
     /// ask, and the result says so through <see cref="LiteBroadcastResult.Uncorroborated"/>.
+    /// This method only collects the two answers; the rule and its wording are <see cref="BroadcastVerdict"/>.
     /// </summary>
     public async Task<LiteBroadcastResult> BroadcastAsync(string rawTxHex, CancellationToken ct = default)
     {
         var ownTxId = LiteTxId.OfHex(rawTxHex);
 
-        var first = await PostBroadcastAsync(rawTxHex, exclude: null, ct);
-        if (first.Verdict == RelayVerdict.NoAnswer)
-            return LiteBroadcastResult.Fail(
-                "Could not reach the Blazecoin service — check your connection.",
-                BroadcastFailureKind.Unreachable);
-
-        // Ask someone else. Without a failover list (AnsweredBy unknown) there is no one to ask.
-        var second = first.AnsweredBy == null
+        // The gateway in use first; then, whatever it said, someone else (SecondOpinionClient:
+        // another server, or nobody). What the two answers add up to is BroadcastVerdict's rule.
+        var first = await PostBroadcastAsync(rawTxHex, ct);
+        var second = first.Verdict == RelayVerdict.NoAnswer
             ? RelayAttempt.None
-            : await PostBroadcastAsync(rawTxHex, exclude: [first.AnsweredBy], ct);
+            : await PostBroadcastElsewhereAsync(rawTxHex, first.AnsweredBy, ct);
 
-        foreach (var attempt in new[] { first, second })
-            if (attempt.RelayTxId != null && ownTxId != null &&
-                !string.Equals(attempt.RelayTxId, ownTxId, StringComparison.OrdinalIgnoreCase))
-                _logger.LogWarning("A gateway returned a transaction id that is not the id of the transaction it was sent; ignored.");
+        if (BroadcastVerdict.NamesAnotherTransaction(first, ownTxId) || BroadcastVerdict.NamesAnotherTransaction(second, ownTxId))
+            _logger.LogWarning("A gateway returned a transaction id that is not the id of the transaction it was sent; ignored.");
 
-        var acceptances = Count(first, second, RelayVerdict.Accepted);
-        var duplicates = Count(first, second, RelayVerdict.Duplicate);
-        var rejections = Count(first, second, RelayVerdict.Rejected);
-
-        if (acceptances > 0)
-        {
-            // Backed when the other gateway also took it or already had it.
-            var backed = acceptances + duplicates == 2;
-            var txId = ownTxId ?? first.RelayTxId ?? second.RelayTxId;
-            return string.IsNullOrEmpty(txId)
-                ? LiteBroadcastResult.Fail("The relay accepted the transaction but returned no txid.", BroadcastFailureKind.Rejected, uncorroborated: !backed)
-                : LiteBroadcastResult.Ok(txId, uncorroborated: !backed);
-        }
-
-        if (duplicates > 0)
-        {
-            var reason = (first.Verdict == RelayVerdict.Duplicate ? first : second).Reason
-                ?? "The network already has this transaction.";
-            return LiteBroadcastResult.Fail(reason, BroadcastFailureKind.Duplicate, uncorroborated: duplicates < 2);
-        }
-
-        if (rejections == 2)
-            return LiteBroadcastResult.Fail(first.Reason!, BroadcastFailureKind.Rejected);
-
-        if (rejections == 1)
-        {
-            var reason = (first.Verdict == RelayVerdict.Rejected ? first : second).Reason!;
-            return LiteBroadcastResult.Fail(
-                reason + " — reported by one gateway only; no second gateway could confirm it. " +
-                "If this looks wrong, switch gateway in Settings and try again.",
-                BroadcastFailureKind.Rejected, uncorroborated: true);
-        }
-
-        // Nobody judged anything (outage answers only) — fallback-eligible.
-        return LiteBroadcastResult.Fail(
-            first.Reason ?? second.Reason ?? "The network node is temporarily unreachable — try again shortly.",
-            BroadcastFailureKind.Unreachable);
+        return BroadcastVerdict.Combine(first, second, ownTxId);
     }
 
-    private static int Count(RelayAttempt a, RelayAttempt b, RelayVerdict verdict)
-        => (a.Verdict == verdict ? 1 : 0) + (b.Verdict == verdict ? 1 : 0);
+    private HttpRequestMessage BroadcastRequest(string rawTxHex) =>
+        new(HttpMethod.Post, "api/tx/broadcast") { Content = JsonContent.Create(new { hex = rawTxHex }, options: Json) };
 
-    /// <summary>What ONE gateway said about a broadcast.</summary>
-    private enum RelayVerdict
-    {
-        /// <summary>No gateway could be reached (or there was no other gateway to ask).</summary>
-        NoAnswer,
-        /// <summary>It answered without judging the transaction: 503, 429, any other 5xx.</summary>
-        NotJudged,
-        Accepted,
-        Duplicate,
-        Rejected,
-    }
-
-    private sealed record RelayAttempt(RelayVerdict Verdict, string? Reason, string? RelayTxId, Uri? AnsweredBy)
-    {
-        public static readonly RelayAttempt None = new(RelayVerdict.NoAnswer, null, null, null);
-    }
-
-    private async Task<RelayAttempt> PostBroadcastAsync(string rawTxHex, IReadOnlyCollection<Uri>? exclude, CancellationToken ct)
+    private async Task<RelayAttempt> PostBroadcastAsync(string rawTxHex, CancellationToken ct)
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, "api/tx/broadcast")
-            {
-                Content = JsonContent.Create(new { hex = rawTxHex }, options: Json),
-            };
-            if (exclude != null) request.Options.Set(GatewayRouting.Exclude, exclude);
-
+            using var request = BroadcastRequest(rawTxHex);
             using var res = await _http.SendAsync(request, ct);
             request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var answeredBy);
-
-            if (res.IsSuccessStatusCode)
-            {
-                var ok = await res.Content.ReadFromJsonAsync<BroadcastOkJson>(Json, ct);
-                return new RelayAttempt(RelayVerdict.Accepted, null, ok?.TxId, answeredBy);
-            }
-
-            string? reason = null;
-            try
-            {
-                var err = await res.Content.ReadFromJsonAsync<BroadcastErrorJson>(Json, ct);
-                reason = err?.Error;
-            }
-            catch { /* non-JSON error body — fall through to the status-based message */ }
-
-            // Only 400 (not a transaction) and 422 (the daemon refused it) judge the transaction.
-            var judged = res.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity;
-            if (!judged)
-                return new RelayAttempt(RelayVerdict.NotJudged,
-                    res.StatusCode == HttpStatusCode.ServiceUnavailable ? reason : null, null, answeredBy);
-
-            reason ??= $"The network rejected the transaction ({(int)res.StatusCode}).";
-            return new RelayAttempt(
-                BroadcastReasons.Classify(reason) == BroadcastFailureKind.Duplicate ? RelayVerdict.Duplicate : RelayVerdict.Rejected,
-                reason, null, answeredBy);
+            return await ReadRelayAttemptAsync(res, answeredBy, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, exclude == null ? "Broadcast request failed" : "No second gateway answered the broadcast");
+            _logger.LogWarning(ex, "Broadcast request failed");
             return RelayAttempt.None;
         }
+    }
+
+    /// <summary>The same transaction, given to a gateway other than the one that just answered.</summary>
+    private async Task<RelayAttempt> PostBroadcastElsewhereAsync(string rawTxHex, Uri? answeredBy, CancellationToken ct)
+    {
+        using var request = BroadcastRequest(rawTxHex);
+        using var opinion = await _secondOpinion.SendAsync(request, answeredBy == null ? null : [answeredBy], "the broadcast", ct);
+        if (opinion.Status != SecondGateway.Answered) return RelayAttempt.None;
+        try { return await ReadRelayAttemptAsync(opinion.Response!, opinion.AnsweredBy, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "A second gateway's answer to the broadcast could not be read");
+            return RelayAttempt.None;
+        }
+    }
+
+    /// <summary>Reads one gateway's reply to a broadcast; what it amounts to is <see cref="RelayAttempt.FromReply"/>.</summary>
+    private static async Task<RelayAttempt> ReadRelayAttemptAsync(HttpResponseMessage res, Uri? answeredBy, CancellationToken ct)
+    {
+        if (res.IsSuccessStatusCode)
+        {
+            var ok = await res.Content.ReadFromJsonAsync<BroadcastOkJson>(Json, ct);
+            return RelayAttempt.FromReply(res.StatusCode, ok?.TxId, null, answeredBy);
+        }
+
+        string? reason = null;
+        try
+        {
+            var err = await res.Content.ReadFromJsonAsync<BroadcastErrorJson>(Json, ct);
+            reason = err?.Error;
+        }
+        catch { /* non-JSON error body — fall through to the status-based message */ }
+        return RelayAttempt.FromReply(res.StatusCode, null, reason, answeredBy);
     }
 
     // Wire shapes (camelCase via JsonSerializerDefaults.Web).

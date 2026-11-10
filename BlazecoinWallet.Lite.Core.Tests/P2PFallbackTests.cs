@@ -31,11 +31,13 @@ public class P2PFallbackTests
         public string? AcceptingNode = "seed1:55414";
         public int Calls;
         public string? LastHex;
+        public bool Throw;
         public Task<string?> TryBroadcastAsync(string rawTxHex, IEnumerable<string>? nodes = null,
             TimeSpan? perNodeTimeout = null, CancellationToken ct = default)
         {
             Calls++;
             LastHex = rawTxHex;
+            if (Throw) throw new IOException("socket closed");
             return Task.FromResult(AcceptingNode);
         }
     }
@@ -104,5 +106,109 @@ public class P2PFallbackTests
         Assert.False(result.Success);
         Assert.Equal("down", result.Error);
         Assert.Equal(1, p2p.Calls);
+    }
+
+    // ════════ one gateway's word is not a delivery (bug-bounty report 2026-11-09) ════════
+    // When a single gateway says "accepted" or "already known" and no second gateway could be
+    // asked, the pipeline pushed the transaction to network nodes itself — and then ignored
+    // whether anyone took it. The receipt read "Sent!" on that one gateway's word alone. Now a
+    // send nobody else confirmed says so.
+
+    private static LiteBroadcastResult AloneDuplicate =>
+        LiteBroadcastResult.Fail("txn-already-known", BroadcastFailureKind.Duplicate, uncorroborated: true);
+
+    [Fact]
+    public async Task A_lone_duplicate_claim_that_no_node_backs_is_a_receipt_marked_unconfirmed()
+    {
+        var (svc, data, p2p, dest) = await BuildAsync();
+        data.BroadcastResult = AloneDuplicate;                 // a claim about a transaction that was never broadcast
+        p2p.AcceptingNode = null;                              // and no network node took it from us
+
+        var result = await svc.SendAsync(dest, 1_000_000);
+
+        Assert.True(result.Success);                           // it may be genuine: an earlier attempt whose answer was lost
+        Assert.True(result.Unconfirmed);                       // was: an ordinary success
+        Assert.Equal(1, p2p.Calls);
+        Assert.Equal(64, result.TxId!.Length);
+    }
+
+    [Fact]
+    public async Task A_lone_acceptance_that_no_node_backs_is_marked_unconfirmed_too()
+    {
+        var (svc, data, p2p, dest) = await BuildAsync();
+        data.BroadcastResult = LiteBroadcastResult.Ok(new string('9', 64), uncorroborated: true);
+        p2p.AcceptingNode = null;
+
+        var result = await svc.SendAsync(dest, 1_000_000);
+
+        Assert.True(result.Success);
+        Assert.True(result.Unconfirmed);
+        Assert.Equal(1, p2p.Calls);
+    }
+
+    [Theory]
+    [InlineData(true)]    // the lone gateway said "already known"
+    [InlineData(false)]   // the lone gateway said "accepted"
+    public async Task A_lone_gateway_backed_by_a_network_node_is_a_plain_success(bool duplicate)
+    {
+        var (svc, data, p2p, dest) = await BuildAsync();
+        data.BroadcastResult = duplicate ? AloneDuplicate : LiteBroadcastResult.Ok(new string('9', 64), uncorroborated: true);
+
+        var result = await svc.SendAsync(dest, 1_000_000);    // the fake node accepts
+
+        Assert.True(result.Success);
+        Assert.False(result.Unconfirmed);                      // a network node took it from us directly
+        Assert.Equal(1, p2p.Calls);
+    }
+
+    [Fact]
+    public async Task Two_gateways_agreeing_need_no_second_opinion()
+    {
+        var (svc, data, p2p, dest) = await BuildAsync();
+        data.BroadcastResult = LiteBroadcastResult.Ok(new string('9', 64));
+
+        var result = await svc.SendAsync(dest, 1_000_000);
+
+        Assert.True(result.Success);
+        Assert.False(result.Unconfirmed);
+        Assert.Equal(0, p2p.Calls);
+    }
+
+    [Fact]
+    public async Task A_direct_push_that_throws_leaves_the_receipt_unconfirmed()
+    {
+        var (svc, data, p2p, dest) = await BuildAsync();
+        data.BroadcastResult = AloneDuplicate;
+        p2p.Throw = true;
+
+        var result = await svc.SendAsync(dest, 1_000_000);
+
+        Assert.True(result.Success);
+        Assert.True(result.Unconfirmed);
+    }
+
+    [Fact]
+    public async Task With_no_way_to_reach_network_nodes_a_lone_gateway_is_always_unconfirmed()
+    {
+        // The web wallet: a browser has no raw sockets, so there is no direct push at all.
+        var data = new ScriptedData { BroadcastResult = AloneDuplicate };
+        var svc = new LiteWalletService(new MemoryVault(), data);
+        await svc.RestoreWalletAsync(TestMnemonic);
+
+        var result = await svc.SendAsync(LiteHdWallet.Restore(TestMnemonic).GetReceiveAddress(5), 1_000_000);
+
+        Assert.True(result.Success);
+        Assert.True(result.Unconfirmed);
+    }
+
+    [Fact]
+    public async Task A_send_that_went_out_only_over_p2p_is_not_marked_unconfirmed()
+    {
+        var (svc, _, _, dest) = await BuildAsync();          // gateways unreachable, a node accepts
+
+        var result = await svc.SendAsync(dest, 1_000_000);
+
+        Assert.Equal("p2p", result.Via);
+        Assert.False(result.Unconfirmed);
     }
 }

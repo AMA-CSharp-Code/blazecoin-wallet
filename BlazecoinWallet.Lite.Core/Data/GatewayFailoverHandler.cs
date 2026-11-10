@@ -12,7 +12,8 @@ namespace BlazecoinWallet.Lite.Data;
 /// <para>A caller that needs a SECOND opinion (bug-bounty reports 2026-11-06: one gateway's
 /// word on a broadcast must not be final) reads which gateway answered from
 /// <see cref="GatewayRouting.AnsweredBy"/> and repeats the request with that gateway in
-/// <see cref="GatewayRouting.Exclude"/>. Such a request never moves the sticky preference.</para>
+/// <see cref="GatewayRouting.Exclude"/>. Such a request never moves the sticky preference, and it
+/// is never sent to another name of an excluded gateway's server (<see cref="GatewaySite"/>).</para>
 /// </summary>
 public sealed class GatewayFailoverHandler : DelegatingHandler
 {
@@ -50,7 +51,9 @@ public sealed class GatewayFailoverHandler : DelegatingHandler
         for (var i = 0; i < _gateways.Length; i++)
         {
             var idx = (start + i) % _gateways.Length;
-            if (secondOpinion && excluded!.Contains(_gateways[idx])) continue;
+            // "Someone else" is another SERVER: every name of an excluded gateway's site is passed
+            // over, or the same server would vouch for itself under its other name (audit 2026-11-09).
+            if (secondOpinion && GatewaySite.SameAsAny(_gateways[idx], excluded)) continue;
             using var attempt = new HttpRequestMessage(request.Method, new Uri(_gateways[idx], pathAndQuery));
             foreach (var h in request.Headers)
                 attempt.Headers.TryAddWithoutValidation(h.Key, h.Value);
@@ -108,6 +111,7 @@ public static class GatewayRouting
     /// <summary>Set by the handler on the caller's request: the gateway whose answer came back.</summary>
     public static readonly HttpRequestOptionsKey<Uri> AnsweredBy = new("blz.gateway.answered-by");
 
-    /// <summary>Set by the caller: gateways this request must NOT be sent to (ask someone else).</summary>
+    /// <summary>Set by the caller: gateways this request must NOT be sent to (ask someone else) —
+    /// under any of their server's names (<see cref="GatewaySite"/>).</summary>
     public static readonly HttpRequestOptionsKey<IReadOnlyCollection<Uri>> Exclude = new("blz.gateway.exclude");
 }

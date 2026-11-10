@@ -63,12 +63,13 @@ public class HeaderCorroborationTests
 
         // A day after the harvest, stamped two hours ahead of the clock: dozens of times easier (the
         // report measured 51× at about seventeen hours; the rule doubles every 3.44 hours of age).
-        var aDayOn = DateTimeOffset.Parse("2026-11-07T00:49:17Z").ToUnixTimeSeconds() + HeaderChainValidator.MaxFutureBlockTimeSeconds;
+        // Relative to the checkpoint's own time, so the pin holds for every release's checkpoint (it was a calendar date).
+        var aDayOn = cp.Time + 24 * 3600 + HeaderChainValidator.MaxFutureBlockTimeSeconds;
         var eased = BlazecoinDifficulty.CompactToTarget(BitsAfterHeaderDated(aDayOn));
         Assert.True(eased > checkpointTarget * 50, $"eased only {eased / checkpointTarget}×");
 
         // Three days on, the rule hands out powLimit: ~2^20 scrypt hashes per forged header.
-        var threeDaysOn = DateTimeOffset.Parse("2026-11-09T00:49:17Z").ToUnixTimeSeconds() + HeaderChainValidator.MaxFutureBlockTimeSeconds;
+        var threeDaysOn = cp.Time + 3 * 24 * 3600 + HeaderChainValidator.MaxFutureBlockTimeSeconds;
         Assert.Equal(powLimitBits, BitsAfterHeaderDated(threeDaysOn));
     }
 
@@ -81,6 +82,10 @@ public class HeaderCorroborationTests
         public Func<long, int, IReadOnlyList<string>>? Serve;
         public readonly List<long> Asked = [];
         public readonly List<long> Served = [];
+        /// <summary>Which gateway served the batch starting at a height (null = the feed cannot say).</summary>
+        public Func<long, Uri?> ServedBy = _ => null;
+        /// <summary>Who each second-opinion question named as having served the headers.</summary>
+        public readonly List<Uri[]> AskedAbout = [];
 
         public Task<IReadOnlyList<string>> GetHeadersAsync(long fromHeight, int count, CancellationToken ct = default)
         {
@@ -88,9 +93,14 @@ public class HeaderCorroborationTests
             return Task.FromResult(Serve?.Invoke(fromHeight, count) ?? Range(fromHeight, count));
         }
 
-        public Task<HeaderSecondOpinion> HeaderFromAnotherGatewayAsync(long height, CancellationToken ct = default)
+        public async Task<HeaderBatch> GetHeaderBatchAsync(long fromHeight, int count,
+            IReadOnlyCollection<Uri>? notFrom = null, CancellationToken ct = default) =>
+            new(await GetHeadersAsync(fromHeight, count, ct), ServedBy(fromHeight));
+
+        public Task<HeaderSecondOpinion> HeaderFromAnotherGatewayAsync(long height, IReadOnlyCollection<Uri> servedBy, CancellationToken ct = default)
         {
             Asked.Add(height);
+            AskedAbout.Add([.. servedBy]);
             return Task.FromResult(Second(height));
         }
     }
@@ -98,9 +108,10 @@ public class HeaderCorroborationTests
     private static (HeaderChainSync Sync, InMemoryWalletStateStore Store) SyncOver(TwoGatewayFeed feed)
     {
         var store = new InMemoryWalletStateStore();
-        var sync = new HeaderChainSync(feed, store, BlazecoinNetwork.Instance, Checkpoint)
+        var sync = new HeaderChainSync(feed, store, BlazecoinNetwork.Instance, Checkpoint, crossCheck: feed)   // the second gateway is handed in
         {
             Clock = () => Parse(HeaderChainFixture.Headers[^1]).BlockTime, // the fixture is in the past; the clock rule must not interfere
+            StateKeys = HeaderStateKeys.Keys,                              // a wallet is attached: the tip is stored, under its seal
         };
         return (sync, store);
     }
@@ -117,7 +128,7 @@ public class HeaderCorroborationTests
         Assert.Equal(HeaderCorroboration.Confirmed, sync.LastCorroboration);
         Assert.False(sync.TipHeld);
         Assert.Equal(new[] { HeaderChainFixture.TipHeight }, feed.Asked);         // one question, at the run's top
-        Assert.Contains(HeaderChainFixture.TipHeight.ToString(), await store.GetVerifiedCheckpointAsync()!);
+        Assert.StartsWith($"{HeaderChainFixture.TipHeight}:", HeaderStateKeys.OpenTip(await store.GetVerifiedCheckpointAsync()));
     }
 
     [Fact]
@@ -291,11 +302,13 @@ public class HeaderCorroborationTests
         public bool Reachable = true;
         public long HighestKnown = HeaderChainFixture.TipHeight;
         public readonly List<string> Paths = [];
+        /// <summary>Requests this gateway lets drop although it is up (it chooses what to answer).</summary>
+        public Func<HttpRequestMessage, bool>? Refuse;
 
         public Task<HttpResponseMessage> HandleAsync(HttpRequestMessage request)
         {
             Paths.Add(request.RequestUri!.PathAndQuery);
-            if (!Reachable) throw new HttpRequestException("down");
+            if (!Reachable || Refuse?.Invoke(request) == true) throw new HttpRequestException("down");
             var path = request.RequestUri.AbsolutePath; // /indexer/api/headers/{from}
             var from = long.Parse(path[(path.LastIndexOf('/') + 1)..]);
             var count = int.Parse(System.Web.HttpUtility.ParseQueryString(request.RequestUri.Query)["count"] ?? "1");
@@ -324,12 +337,13 @@ public class HeaderCorroborationTests
         var fleet = new Fleet();
         var indexer = Indexer(fleet, GatewayA, GatewayB);
 
-        var batch = await indexer.GetHeadersAsync(HeaderChainFixture.CheckpointHeight + 1, 10);
-        Assert.Equal(10, batch.Count);
+        var batch = await indexer.GetHeaderBatchAsync(HeaderChainFixture.CheckpointHeight + 1, 10);
+        Assert.Equal(10, batch.Headers.Count);
+        Assert.Equal(GatewayA, batch.Source);                                     // the batch says who served it
         Assert.Single(fleet.A.Paths);
         Assert.Empty(fleet.B.Paths);
 
-        var opinion = await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10);
+        var opinion = await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10, [batch.Source!]);
 
         Assert.Equal(SecondGateway.Answered, opinion.Status);
         Assert.Equal(HeaderAt(HeaderChainFixture.CheckpointHeight + 10), opinion.RawHeader);
@@ -343,9 +357,8 @@ public class HeaderCorroborationTests
         var fleet = new Fleet();
         fleet.B.HighestKnown = HeaderChainFixture.CheckpointHeight + 5;
         var indexer = Indexer(fleet, GatewayA, GatewayB);
-        await indexer.GetHeadersAsync(HeaderChainFixture.CheckpointHeight + 1, 10);
 
-        var opinion = await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10);
+        var opinion = await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10, await ServedBatchAsync(indexer));
 
         Assert.Equal(SecondGateway.Answered, opinion.Status);
         Assert.Null(opinion.RawHeader);
@@ -357,9 +370,9 @@ public class HeaderCorroborationTests
         var fleet = new Fleet();
         fleet.B.Reachable = false;
         var indexer = Indexer(fleet, GatewayA, GatewayB);
-        await indexer.GetHeadersAsync(HeaderChainFixture.CheckpointHeight + 1, 10);
 
-        Assert.Equal(SecondGateway.Unavailable, (await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10)).Status);
+        Assert.Equal(SecondGateway.Unavailable,
+            (await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10, await ServedBatchAsync(indexer))).Status);
     }
 
     [Fact]
@@ -367,10 +380,19 @@ public class HeaderCorroborationTests
     {
         var fleet = new Fleet();
         var indexer = Indexer(fleet, GatewayA);
-        await indexer.GetHeadersAsync(HeaderChainFixture.CheckpointHeight + 1, 10);
 
-        Assert.Equal(SecondGateway.None, (await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10)).Status);
+        Assert.Equal(SecondGateway.None,
+            (await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10, await ServedBatchAsync(indexer))).Status);
         Assert.Single(fleet.A.Paths);                                             // and A was not asked to vouch for itself
+    }
+
+    /// <summary>Fetches a batch and names who served it — what the sync hands to the cross-check
+    /// (empty when the client cannot say: no failover list).</summary>
+    private static async Task<Uri[]> ServedBatchAsync(IndexerDataService indexer)
+    {
+        var batch = await indexer.GetHeaderBatchAsync(HeaderChainFixture.CheckpointHeight + 1, 10);
+        Assert.Equal(10, batch.Headers.Count);
+        return batch.Source == null ? [] : [batch.Source];
     }
 
     /// <summary>A handler that names who answered but ignores the exclusion — every question goes to A.</summary>
@@ -389,9 +411,10 @@ public class HeaderCorroborationTests
     {
         var fleet = new Fleet();
         var indexer = new IndexerDataService(new HttpClient(new DeafHandler(fleet)) { BaseAddress = GatewayA }, NullLogger<IndexerDataService>.Instance);
-        await indexer.GetHeadersAsync(HeaderChainFixture.CheckpointHeight + 1, 10);
+        var servedBy = await ServedBatchAsync(indexer);
+        Assert.Equal([GatewayA], servedBy);
 
-        var opinion = await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10);
+        var opinion = await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10, servedBy);
 
         Assert.Equal(SecondGateway.None, opinion.Status);   // A vouching for A is nobody's second opinion
         Assert.Null(opinion.RawHeader);
@@ -403,9 +426,10 @@ public class HeaderCorroborationTests
         // No AnsweredBy stamp ⇒ the service cannot know who served the batch ⇒ nobody else to ask.
         var fleet = new Fleet();
         var indexer = new IndexerDataService(new HttpClient(fleet) { BaseAddress = GatewayA }, NullLogger<IndexerDataService>.Instance);
-        await indexer.GetHeadersAsync(HeaderChainFixture.CheckpointHeight + 1, 10);
+        var servedBy = await ServedBatchAsync(indexer);
+        Assert.Empty(servedBy);
 
-        Assert.Equal(SecondGateway.None, (await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10)).Status);
+        Assert.Equal(SecondGateway.None, (await indexer.HeaderFromAnotherGatewayAsync(HeaderChainFixture.CheckpointHeight + 10, servedBy)).Status);
     }
 
     [Fact]
@@ -413,7 +437,7 @@ public class HeaderCorroborationTests
     {
         var fleet = new Fleet();
         var indexer = Indexer(fleet, GatewayA, GatewayB);
-        var sync = new HeaderChainSync(indexer, new InMemoryWalletStateStore(), BlazecoinNetwork.Instance, Checkpoint)
+        var sync = new HeaderChainSync(indexer, new InMemoryWalletStateStore(), BlazecoinNetwork.Instance, Checkpoint, crossCheck: indexer)
         {
             Clock = () => Parse(HeaderChainFixture.Headers[^1]).BlockTime,
         };
@@ -429,5 +453,110 @@ public class HeaderCorroborationTests
         await sync.SyncAsync();
         Assert.Equal(HeaderChainFixture.TipHeight, sync.VerifiedTipHeight);
         Assert.Equal(HeaderCorroboration.Confirmed, sync.LastCorroboration);
+    }
+
+    // ── Audit 2026-11-09: who served a run is a fact of the run, not of the last header request ──
+
+    [Fact]
+    public async Task A_header_fetch_another_gateway_answers_mid_run_does_not_change_who_the_run_is_checked_against()
+    {
+        // Gateway A serves the run. While the wallet is verifying it, a proof check fetches a few
+        // headers of its own, and A lets THAT request drop so that B answers it. The run's second
+        // opinion must still come from B — A served the run — and B, some blocks behind here, has
+        // nothing at the run's top: the tip is held.
+        var fleet = new Fleet();
+        var top = HeaderChainFixture.CheckpointHeight + 100;
+        fleet.A.HighestKnown = top;
+        fleet.B.HighestKnown = HeaderChainFixture.CheckpointHeight + 50;
+        fleet.A.Refuse = request => request.RequestUri!.Query.Contains("count=5");
+        var indexer = Indexer(fleet, GatewayA, GatewayB);
+        var sync = new HeaderChainSync(indexer, new InMemoryWalletStateStore(), BlazecoinNetwork.Instance, Checkpoint, crossCheck: indexer);
+        var fetchedMidRun = false;
+        sync.Clock = () =>
+        {
+            // Read once per slice verified: the run's batch is in hand and no second gateway has been asked yet.
+            if (!fetchedMidRun)
+            {
+                fetchedMidRun = true;
+                indexer.GetHeadersAsync(HeaderChainFixture.CheckpointHeight + 1, 5).GetAwaiter().GetResult();
+            }
+            return Parse(HeaderChainFixture.Headers[^1]).BlockTime;
+        };
+
+        await sync.SyncAsync();
+
+        Assert.True(fetchedMidRun);
+        Assert.Contains($"/indexer/api/headers/{top}?count=1", fleet.B.Paths);
+        Assert.DoesNotContain($"/indexer/api/headers/{top}?count=1", fleet.A.Paths);   // was: A was asked to confirm its own run
+        Assert.Equal(HeaderChainFixture.CheckpointHeight, sync.VerifiedTipHeight);     // was +100: and A's word moved the tip
+        Assert.Equal(HeaderCorroboration.Unavailable, sync.LastCorroboration);
+    }
+
+    [Fact]
+    public async Task A_run_is_checked_against_whoever_served_its_top_header()
+    {
+        // The feed failed over between batches: A served the first 250 headers, B the rest. The top
+        // is B's, and the headers beneath it are bound to it by hash — so B is who must not vouch.
+        var feed = new TwoGatewayFeed { ServedBy = from => from == HeaderChainFixture.CheckpointHeight + 1 ? GatewayA : GatewayB };
+        var (sync, _) = SyncOver(feed);
+
+        await sync.SyncAsync();
+
+        Assert.Equal(HeaderChainFixture.TipHeight, sync.VerifiedTipHeight);
+        Assert.Equal([GatewayB], Assert.Single(feed.AskedAbout));
+    }
+
+    [Fact]
+    public async Task A_batch_that_adds_nothing_to_the_run_does_not_change_who_served_its_top()
+    {
+        // B's batch links to the run but its first header has no valid work: nothing of it joins the
+        // run, whose top is still the last header A served.
+        var tampered = (string[])HeaderChainFixture.Headers.Clone();
+        tampered[250] = tampered[250][..152] + "00000000";
+        var feed = new TwoGatewayFeed
+        {
+            ServedBy = from => from == HeaderChainFixture.CheckpointHeight + 1 ? GatewayA : GatewayB,
+            Serve = (from, count) =>
+            {
+                var start = (int)(from - (HeaderChainFixture.CheckpointHeight + 1));
+                return start < 0 || start >= tampered.Length ? [] : tampered.Skip(start).Take(count).ToList();
+            },
+        };
+        var (sync, _) = SyncOver(feed);
+
+        await sync.SyncAsync();
+
+        Assert.Equal(HeaderChainFixture.CheckpointHeight + 250, sync.VerifiedTipHeight);
+        Assert.Equal([GatewayA], Assert.Single(feed.AskedAbout));
+    }
+
+    [Fact]
+    public async Task A_feed_that_cannot_say_who_served_a_run_names_nobody()
+    {
+        var feed = new TwoGatewayFeed();
+        var (sync, _) = SyncOver(feed);
+
+        await sync.SyncAsync();
+
+        Assert.Empty(Assert.Single(feed.AskedAbout));
+    }
+
+    [Fact]
+    public async Task Headers_that_place_a_block_are_not_taken_from_a_gateway_the_caller_ruled_out()
+    {
+        // The feed names gateway A as the server of every batch, whatever it was asked to avoid.
+        var (sync, _) = SyncOver(new TwoGatewayFeed { ServedBy = _ => GatewayA });
+
+        var ruledOut = await sync.LocateAsync(HeaderChainFixture.ProofBlockHash, HeaderChainFixture.ProofBlockHeight, notFrom: [GatewayA]);
+        Assert.Equal(ChainMembership.CannotCheck, ruledOut.Membership);
+        var allowed = await sync.LocateAsync(HeaderChainFixture.ProofBlockHash, HeaderChainFixture.ProofBlockHeight, notFrom: [GatewayB]);
+        Assert.Equal(ChainMembership.OnChain, allowed.Membership);
+
+        // A feed with one source has nobody else to ask; without a restriction it serves as before.
+        var plain = new HeaderChainSync(new PlainFeed(), new InMemoryWalletStateStore(), BlazecoinNetwork.Instance, Checkpoint);
+        Assert.Equal(ChainMembership.CannotCheck,
+            (await plain.LocateAsync(HeaderChainFixture.ProofBlockHash, HeaderChainFixture.ProofBlockHeight, notFrom: [GatewayA])).Membership);
+        Assert.Equal(ChainMembership.OnChain,
+            (await plain.LocateAsync(HeaderChainFixture.ProofBlockHash, HeaderChainFixture.ProofBlockHeight)).Membership);
     }
 }

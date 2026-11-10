@@ -45,7 +45,7 @@ public partial class ReadPathVerificationTests
         var store = new InMemoryWalletStateStore();
         var first = await OpenAsync(gw => gw.Coin(F.Receive0, F.TxId(0), 0, TenBlz), store);
         Assert.Equal(TenBlz, await first.Service.GetSpendableAsync());
-        Assert.Equal($"{F.TxId(0)}:0:{F.Receive0}:{TenBlz}:0:0", await store.GetVerifiedCoinsAsync());   // …:coinbase:height
+        Assert.Equal(Sealed($"{F.TxId(0)}:0:{F.Receive0}:{TenBlz}:0:0"), await store.GetVerifiedCoinsAsync());   // …:coinbase:height, then the seal
 
         // A new session through a gateway that now calls the coin a coinbase and cannot prove anything.
         var second = await OpenAsync(gw =>
@@ -63,7 +63,7 @@ public partial class ReadPathVerificationTests
     public async Task A_coin_proven_to_be_a_coinbase_stays_one_whatever_the_gateway_says()
     {
         var store = new InMemoryWalletStateStore();
-        await store.SetVerifiedCoinsAsync($"{F.TxId(0)}:0:{F.Receive0}:{TenBlz}:1:0");                     // proven earlier: a coinbase
+        await store.SetVerifiedCoinsAsync(Sealed($"{F.TxId(0)}:0:{F.Receive0}:{TenBlz}:1:0"));             // proven earlier: a coinbase
 
         var w = await OpenAsync(gw => gw.Coin(F.Receive0, F.TxId(0), 0, TenBlz, confs: 5, coinbase: false), store);
 
@@ -76,7 +76,7 @@ public partial class ReadPathVerificationTests
     public async Task An_entry_from_before_the_kind_was_recorded_is_proven_again_not_adopted()
     {
         var store = new InMemoryWalletStateStore();
-        await store.SetVerifiedCoinsAsync($"{F.TxId(0)}:0:{F.Receive0}:{TenBlz}");                         // the form 1.3.3 wrote
+        await store.SetVerifiedCoinsAsync(Sealed($"{F.TxId(0)}:0:{F.Receive0}:{TenBlz}"));                 // the form 1.3.3 wrote (sealed here, so it is the FORM that is refused)
 
         var w = await OpenAsync(gw =>
         {
@@ -88,7 +88,7 @@ public partial class ReadPathVerificationTests
         w.Gateway.Withheld.Clear();
         w.Now += TimeSpan.FromMinutes(11);                                      // past any back-off
         Assert.Equal(TenBlz, await w.Service.GetSpendableAsync());              // proven afresh…
-        Assert.Equal($"{F.TxId(0)}:0:{F.Receive0}:{TenBlz}:0:0", await store.GetVerifiedCoinsAsync());     // …and written back in full
+        Assert.Equal(Sealed($"{F.TxId(0)}:0:{F.Receive0}:{TenBlz}:0:0"), await store.GetVerifiedCoinsAsync());     // …and written back in full
     }
 
     [Fact]

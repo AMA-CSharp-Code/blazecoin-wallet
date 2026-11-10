@@ -1,3 +1,4 @@
+using BlazecoinWallet.Lite.Data;
 using BlazecoinWallet.Lite.UI.Pages;
 using Bunit;
 
@@ -48,9 +49,9 @@ public class SendPageTests : LiteUiTestBase
 
     [Theory]
     [InlineData("", "0.05", "destination")]                 // empty address
-    [InlineData("Bxyz", "", "valid amount")]                 // empty amount
-    [InlineData("Bxyz", "-1", "valid amount")]               // negative
-    [InlineData("Bxyz", "9999999999", "supply")]             // above the money supply (M4)
+    [InlineData("Bf3VWe6aNDbXkQcqju3kSGCYBVymTtin29", "", "valid amount")]                 // empty amount
+    [InlineData("Bf3VWe6aNDbXkQcqju3kSGCYBVymTtin29", "-1", "valid amount")]               // negative
+    [InlineData("Bf3VWe6aNDbXkQcqju3kSGCYBVymTtin29", "9999999999", "supply")]             // above the money supply (M4)
     public void Invalid_input_shows_an_error_and_never_reaches_review(string addr, string amount, string expect)
     {
         var relay = new FakeRelay();
@@ -62,6 +63,28 @@ public class SendPageTests : LiteUiTestBase
         cut.FindAll("button").First(b => b.TextContent.Contains("Review")).Click();
 
         Assert.Contains(expect, cut.Markup, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Confirm &amp; Send", cut.Markup);
+        Assert.Equal(0, relay.Calls);
+    }
+
+    // Bug-bounty report 2026-11-09: Review took any non-empty text as a destination. The review screen
+    // then read "To invalidaddress12345", and the only complaint - after Confirm - was about the balance.
+    [Theory]
+    [InlineData("invalidaddress12345")]                              // not an address at all
+    [InlineData("Bf3VWe6aNDbXkQcqju3kSGCYBVymTtin28")]               // one character off: the checksum fails
+    [InlineData("blz1qw508d6qejxtdg4y5r3zarvary0c5xw7k3kjfsy")]      // SegWit: not payable on this chain
+    [InlineData("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy")]               // another chain's address
+    public void A_destination_that_is_not_a_blazecoin_address_never_reaches_review(string addr)
+    {
+        var relay = new FakeRelay();
+        Wire(new LoadedVault(), new FakeReader(), relay);
+        var cut = RenderComponent<Send>();
+
+        cut.Find("input[placeholder='B…']").Change(addr);
+        cut.Find("input[inputmode='decimal']").Input("0.05");
+        cut.FindAll("button").First(b => b.TextContent.Contains("Review")).Click();
+
+        Assert.Contains("not a valid Blazecoin address", cut.Markup);
         Assert.DoesNotContain("Confirm &amp; Send", cut.Markup);
         Assert.Equal(0, relay.Calls);
     }
@@ -120,5 +143,50 @@ public class SendPageTests : LiteUiTestBase
         Assert.Equal(1, relay.Calls);
         Assert.Contains(relay.SentTxId, cut.Markup);
         Assert.DoesNotContain("cafebabe", cut.Markup);
+    }
+
+    // ── A receipt that rests on one gateway's word says so (bug-bounty report 2026-11-09) ──
+
+    [Theory]
+    [InlineData(true)]    // the lone gateway claimed "already known"
+    [InlineData(false)]   // the lone gateway claimed "accepted"
+    public void A_send_only_one_gateway_vouches_for_is_shown_as_not_confirmed(bool duplicate)
+    {
+        var relay = new FakeRelay
+        {
+            Result = duplicate
+                ? LiteBroadcastResult.Fail("txn-already-known", BroadcastFailureKind.Duplicate, uncorroborated: true)
+                : LiteBroadcastResult.Ok("cafebabe", uncorroborated: true),
+        };
+        Wire(new LoadedVault(), new FakeReader(), relay);     // no direct push to network nodes is wired
+        var cut = RenderComponent<Send>();
+
+        cut.Find("input[placeholder='B…']").Change("Bf3VWe6aNDbXkQcqju3kSGCYBVymTtin29");
+        cut.Find("input[inputmode='decimal']").Input("0.05");
+        cut.FindAll("button").First(b => b.TextContent.Contains("Review")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Confirm")).Click();
+
+        Assert.Contains(relay.SentTxId, cut.Markup);
+        Assert.Contains("not confirmed yet", cut.Markup);
+        Assert.Contains("Only one gateway answered", cut.Markup);
+        Assert.DoesNotContain("Sent! The network accepted", cut.Markup);   // was: the ordinary receipt
+        Assert.Empty(cut.FindAll(".lite-success"));
+    }
+
+    [Fact]
+    public void A_send_two_gateways_agree_on_keeps_the_ordinary_receipt()
+    {
+        var relay = new FakeRelay();
+        Wire(new LoadedVault(), new FakeReader(), relay);
+        var cut = RenderComponent<Send>();
+
+        cut.Find("input[placeholder='B…']").Change("Bf3VWe6aNDbXkQcqju3kSGCYBVymTtin29");
+        cut.Find("input[inputmode='decimal']").Input("0.05");
+        cut.FindAll("button").First(b => b.TextContent.Contains("Review")).Click();
+        cut.FindAll("button").First(b => b.TextContent.Contains("Confirm")).Click();
+
+        Assert.Contains("Sent! The network accepted", cut.Markup);
+        Assert.DoesNotContain("not confirmed yet", cut.Markup);
+        Assert.Empty(cut.FindAll(".lite-unconfirmed"));
     }
 }

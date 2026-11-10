@@ -242,6 +242,10 @@ public static class MauiProgram
 		// Tells the user when the app re-pointed itself at another wallet (the selected one was
 		// no longer loaded on the node) — the RPC layer records it, the layout shows it.
 		builder.Services.AddSingleton<IWalletSwitchNotice, WalletSwitchNotice>();
+		// The one place "the wallet on screen" becomes the wallet a write is bound to: refuses while
+		// that notice is unacknowledged. The Send page and auto-payout take their wallet from it
+		// (audit 2026-11-09 — they read the active wallet themselves, with no look at the notice).
+		builder.Services.AddSingleton<IWalletBinding, WalletBinding>();
 		// Named HttpClient for the daemon, built by IHttpClientFactory (SOLID
 		// audit #6) instead of `new HttpClient()` inside the RPC service. Timeout
 		// is infinite per-client — the service caps each call with a per-request
@@ -269,6 +273,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<BlazecoindRpcService>();
 		builder.Services.AddSingleton<IBlazecoindRpcService>(sp => sp.GetRequiredService<BlazecoindRpcService>());
 		builder.Services.AddSingleton<INodeRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
+		builder.Services.AddSingleton<IConsoleRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());   // the Console page only
 		builder.Services.AddSingleton<IChainInfoRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
 		builder.Services.AddSingleton<IMiningRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
 		builder.Services.AddSingleton<IWalletRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
@@ -281,7 +286,11 @@ public static class MauiProgram
 			// The explorer's stored lineage, for wallets whose local walk exhausts its budget.
 			builder.Services.AddSingleton<Core.Services.Provenance.Explorer.IExplorerVintageClient, Core.Services.Provenance.Explorer.ExplorerVintageClient>();
 			builder.Services.AddSingleton<Core.Services.Quantum.IExposureRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
-			builder.Services.AddSingleton<Core.Services.Quantum.ISweepDestinationRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
+			// A flow bound to one wallet names it on every call (audit 2026-11-09): the Quantum sweep's
+			// destination and the vintage send's change no longer follow the active wallet.
+			builder.Services.AddSingleton<IBoundWalletRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
+			builder.Services.AddSingleton<Core.Services.Send.ChangeAddressSource>();
+			builder.Services.AddTransient<Core.Services.Provenance.VintageSender>();
 			builder.Services.AddSingleton<Core.Services.Quantum.IAddressMintRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
 			builder.Services.AddTransient<Core.Services.Receive.IReceiveAddressService, Core.Services.Receive.ReceiveAddressService>();
 			builder.Services.AddSingleton<Core.Services.Send.ISendRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());

@@ -32,6 +32,23 @@ public static class AmountText
     public static bool TryParsePaymentLink(string? text, out decimal value)
         => TryParse(text, allowComma: false, out value);
 
+    /// <summary>
+    /// A WHOLE number typed by hand — a count of coins, an amount in satoshis, a fee in satoshis:
+    /// digits and nothing else. No sign, no decimal mark, no separators, no spaces inside; the same
+    /// on every machine. (The Provenance page read these with <c>long.TryParse</c>, which follows
+    /// the machine's culture and takes a sign — audit 2026-11-09.)
+    /// </summary>
+    public static bool TryParseWhole(string? text, out long value)
+    {
+        value = 0;
+        if (text is null) return false;
+        var s = text.Trim();
+        if (s.Length == 0 || s.Length > MaxLength) return false;
+        foreach (var c in s)
+            if (c is < '0' or > '9') return false;
+        return long.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out value);   // false on overflow
+    }
+
     private static bool TryParse(string? text, bool allowComma, out decimal value)
     {
         value = 0m;

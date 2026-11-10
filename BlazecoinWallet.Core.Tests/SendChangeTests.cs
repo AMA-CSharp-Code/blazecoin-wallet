@@ -92,7 +92,7 @@ public class SendChangeTests
         config["Blazecoind:RpcUrl"].Returns("http://127.0.0.1:55417");
         var ctx = Substitute.For<IWalletContext>();
         ctx.Active.Returns("hot-wallet");
-        return new BlazecoindRpcService(config, ctx, factory);
+        return new BlazecoindRpcService(config, ctx, factory, new WalletSwitchNotice());
     }
 
     private const string SendOk = """{"result":{"complete":true,"txid":"1f1e1d1c1b1a19181716151413121110f0e0d0c0b0a090807060504030201000"},"error":null,"id":1}""";

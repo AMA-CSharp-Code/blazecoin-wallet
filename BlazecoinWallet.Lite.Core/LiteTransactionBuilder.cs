@@ -36,22 +36,15 @@ public sealed record SignedTransaction(string TxId, string Hex, bool ChangeCreat
 /// </summary>
 public static class LiteTransactionBuilder
 {
-    /// <summary>Outputs below this many satoshis are treated as dust (daemon DUST_RELAY_TX_FEE derived floor).</summary>
-    public const long DustSatoshis = 546;
-
-    /// <summary>
-    /// The same floor for a post-quantum (BQ…) output. The node prices an output by what it costs
-    /// to create AND spend, and a P2PQH output is spent by a 3,739-byte signature-and-key: 43 bytes
-    /// of output + a 3,782-byte input = 3,825 bytes, 11,475 satoshis at the node's 3,000 sat/kvB.
-    /// Nodes up to 2.1.1 priced it like a legacy output (573); 2.1.2 applies this figure
-    /// (bug-bounty report 2026-11-06), so a smaller BQ… output — a tiny payment, or tiny change —
-    /// is refused as dust. Building to it is right for both.
-    /// </summary>
-    public const long PqDustSatoshis = 11_475;
+    /// <summary>Outputs below this many satoshis are treated as dust — the legacy floor. The figure,
+    /// and the higher one for a post-quantum (BQ…) output (11,475: a smaller BQ… payment or change
+    /// is refused as dust by node 2.1.2), live in ONE place for both wallets since the audit of
+    /// 2026-11-09: <see cref="BlazecoinWallet.Core.Services.DustPolicy"/>.</summary>
+    public const long DustSatoshis = BlazecoinWallet.Core.Services.DustPolicy.LegacyFloorSatoshis;
 
     /// <summary>The smallest output the network relays to <paramref name="address"/>.</summary>
     public static long DustFloorFor(string address) =>
-        Pq.PqAddress.TryDecode(address) != null ? PqDustSatoshis : DustSatoshis;
+        BlazecoinWallet.Core.Services.DustPolicy.FloorFor(postQuantum: Pq.PqAddress.TryDecode(address) != null);
 
     /// <summary>
     /// Hard ceiling on the fee any single transaction may pay (0.001 BLZ). Blazecoin is a

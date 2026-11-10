@@ -86,7 +86,13 @@ public sealed record LiteOutpoint(string TxId, int Vout, Uri? Source = null);
 /// <summary>A gateway's claim that an output was spent, with the evidence it served: the spending
 /// transaction and its merkle proof. A claim only — <see cref="LiteTxVerifier.VerifySpend"/> decides.</summary>
 public sealed record LiteSpendClaim(string TxId, int Vout, string SpenderTxId, long SpenderHeight,
-    string? SpenderHex, string? SpenderProofHex);
+    string? SpenderHex, string? SpenderProofHex)
+{
+    /// <summary>True when the evidence was NOT asked for this round (the per-call cap on evidence
+    /// fetches): the claim stands unjudged — neither proven nor failed (audit 2026-11-09). False
+    /// with no evidence means it was asked for and the gateway could not show it.</summary>
+    public bool EvidencePending { get; init; }
+}
 
 /// <summary>
 /// A second opinion on whether coins are still unspent (bug-bounty report 2026-11-06, sixth
@@ -105,7 +111,10 @@ public interface ISpendCrossCheck
     /// Asks a gateway other than each coin's <see cref="LiteOutpoint.Source"/> which of the
     /// outputs it holds a mined spend for. Returns the claims (empty = asked, none spent), or
     /// null when nobody else could be asked — a single gateway, none other reachable, or one
-    /// that does not serve the question.
+    /// that does not serve the question. EVERY spend named comes back as a claim: one whose
+    /// evidence was not fetched this round is marked <see cref="LiteSpendClaim.EvidencePending"/>,
+    /// never left out — a coin absent from the answer reads as "no spend named". Evidence is
+    /// fetched in the order the outputs were asked about, so the caller chooses who goes first.
     /// </summary>
     Task<IReadOnlyList<LiteSpendClaim>?> FindSpendsFromAnotherGatewayAsync(
         IReadOnlyList<LiteOutpoint> outpoints, CancellationToken ct = default);

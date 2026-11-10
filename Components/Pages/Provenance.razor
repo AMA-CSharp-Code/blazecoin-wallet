@@ -5,7 +5,7 @@
 @inherits BlazecoinWallet.Maui.Components.DaemonAwareComponent
 @inject IBlazecoindRpcService RpcService
 @inject IAncestryRpc AncestryRpc
-@inject IVintageSendRpc SendRpc
+@inject VintageSender Sender
 @inject IChainInfoRpc ChainInfo
 @using BlazecoinWallet.Core.Services.Provenance.Explorer
 @using BlazecoinWallet.Core.Services.Settings
@@ -77,8 +77,8 @@
                     Every satoshi traces back to the block that minted it. This reads your own
                     coins from your own node — nothing leaves this machine. Sends are free on
                     this chain, but every output must still clear the
-                    @VintageCoinControl.DustThresholdSatoshis.ToString("N0")-satoshi dust limit
-                    (@VintageCoinControl.PqDustThresholdSatoshis.ToString("N0") for an output to a
+                    @DustPolicy.LegacyFloorSatoshis.ToString("N0")-satoshi dust limit
+                    (@DustPolicy.PostQuantumFloorSatoshis.ToString("N0") for an output to a
                     post-quantum BQ… address), so that is the smallest amount that can be sent.
                 </p>
 
@@ -794,8 +794,8 @@
                         arranged so the recipient's output lands precisely on the vintage's
                         satoshis (when a mixed coin has to be cut, a leading change output pushes
                         the send onto the right run). Every output must clear the
-                        @VintageCoinControl.DustThresholdSatoshis.ToString("N0")-satoshi dust
-                        floor — @VintageCoinControl.PqDustThresholdSatoshis.ToString("N0") for an output
+                        @DustPolicy.LegacyFloorSatoshis.ToString("N0")-satoshi dust
+                        floor — @DustPolicy.PostQuantumFloorSatoshis.ToString("N0") for an output
                         to a post-quantum BQ… address — change included.
                     </p>
 
@@ -1302,12 +1302,18 @@
         ClearPlan();
         if (_report is null) return;
 
-        if (!long.TryParse(_sendAmount, out var amount))
+        // One grammar for typed numbers (AmountText): digits only, the same on every machine.
+        if (!AmountText.TryParseWhole(_sendAmount, out var amount))
         {
             _planProblem = _wholeCoins ? "Enter how many whole coins to send." : "Enter the amount in satoshis.";
             return;
         }
-        if (!long.TryParse(_sendFee, out var fee)) fee = 0;
+        if (!AmountText.TryParseWhole(_sendFee, out var fee)) fee = 0;
+
+        // The plan is bound to the wallet on screen now (VintageSender, audit 2026-11-09): its change
+        // is minted there and it is signed there — and nothing is bound while the app has moved to
+        // another wallet that the user has not acknowledged.
+        if (Sender.BeginPlan() is { } notBound) { _planProblem = notBound; return; }
 
         // Explorer-lineage mode: whole outputs by the explorer's proportional split, no change
         // address needed (nothing comes back), no pedigree to verify — the plan says so.
@@ -1325,16 +1331,16 @@
             return;
         }
 
-        var changeAddress = await SendRpc.GetChangeAddressAsync();
-        if (string.IsNullOrWhiteSpace(changeAddress))
+        var change = await Sender.NewChangeAddressAsync();
+        if (change.Address is not { } changeAddress)
         {
-            _planProblem = "Couldn't get a change address from the wallet.";
+            _planProblem = change.Problem;
             return;
         }
         // A second fresh one for the leading change: a vintage that sits mid-output returns
         // other lineage on BOTH sides of it, and the node refuses paying one address twice.
         // Only a slice plan uses it; an unused change address costs nothing.
-        var leadingChangeAddress = await SendRpc.GetChangeAddressAsync();
+        var leadingChangeAddress = (await Sender.NewChangeAddressAsync()).Address;
         if (leadingChangeAddress == changeAddress) leadingChangeAddress = null;   // let the planner explain
 
         // A whole-block send names its own block, so it needs no vintage chosen.
@@ -1391,18 +1397,12 @@
         StateHasChanged();
         try
         {
-            var raw = await SendRpc.CreateRawTransactionAsync(
-                _plan.Inputs.Select(i => (i.TxId, i.Vout)).ToList(),
-                _plan.Outputs.Select(o => (o.Address, o.Satoshis)).ToList());
-            if (raw is null) { _planProblem = "The daemon couldn't build the transaction."; return; }
+            // Built, signed by the plan's wallet and sent in Core (VintageSender) — or refused there
+            // when the active wallet is no longer the one the plan was made on.
+            var sent = await Sender.BroadcastAsync(_plan);
+            if (!sent.Sent) { _planProblem = sent.Problem; return; }
 
-            var signed = await SendRpc.SignRawTransactionAsync(raw);
-            if (signed is null) { _planProblem = "Signing failed or was incomplete (is the wallet unlocked?)."; return; }
-
-            var txid = await SendRpc.SendRawTransactionAsync(signed);
-            if (txid is null) { _planProblem = "The network rejected the transaction."; return; }
-
-            _sendResult = $"Sent — txid {txid}. Re-trace to see the new lineage.";
+            _sendResult = $"Sent — txid {sent.TxId}. Re-trace to see the new lineage.";
             _plan = null;
         }
         catch (Exception ex)

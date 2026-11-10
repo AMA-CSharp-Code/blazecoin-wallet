@@ -14,8 +14,10 @@ public interface IForkStatusService
     ForkBannerState State { get; }
 
     /// <summary>The chain height the banner is judged at and counts days from: the wallet's own
-    /// proof-of-work verified tip where the head has one, else the gateway's claimed height.</summary>
-    long EffectiveTip => Current?.Tip ?? 0;
+    /// proof-of-work verified tip where the head has one, else the gateway's claimed height.
+    /// Every implementation decides this for itself (audit 2026-11-09: the default was the
+    /// gateway's claim — the very figure the member exists to distrust).</summary>
+    long EffectiveTip { get; }
 
     /// <summary>Raised (on a worker thread) whenever <see cref="Current"/> changes.</summary>
     event Action? Changed;

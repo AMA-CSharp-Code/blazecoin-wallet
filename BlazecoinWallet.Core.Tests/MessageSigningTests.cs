@@ -95,7 +95,7 @@ public class MessageSigningTests
         config["Blazecoind:RpcUrl"].Returns("http://127.0.0.1:55415");
         var ctx = Substitute.For<IWalletContext>();
         ctx.Active.Returns(activeWallet);
-        return (new BlazecoindRpcService(config, ctx, factory), handler);
+        return (new BlazecoindRpcService(config, ctx, factory, new WalletSwitchNotice()), handler);
     }
 
     private static (HttpStatusCode, string) Ok(string resultJson)
@@ -200,7 +200,7 @@ public class MessageSigningTests
     public async Task Console_passthrough_rides_the_active_wallet_path()
     {
         var (svc, handler) = Make((_, _) => Ok("\"ok\""), activeWallet: "post-quantum");
-        await svc.ExecuteCommandAsync("signmessage", Addr, Challenge);
+        await svc.ExecuteConsoleCommandAsync("post-quantum", "signmessage", [Addr, Challenge]);
         Assert.Equal("/wallet/post-quantum", Assert.Single(handler.Calls).Path);
     }
 }

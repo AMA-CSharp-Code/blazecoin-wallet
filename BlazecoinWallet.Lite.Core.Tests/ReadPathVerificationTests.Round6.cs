@@ -35,7 +35,11 @@ public partial class ReadPathVerificationTests
         public volatile bool ServesSpends = true;
         /// <summary>True = unreachable.</summary>
         public volatile bool Down;
-        public int SpendCalls, RawCalls, ProofCalls;
+        /// <summary>True = the spends answer lists its items in the reverse of the order asked.</summary>
+        public volatile bool AnswersSpendsBackwards;
+        /// <summary>The raw headers this gateway serves for a height range (null = it serves none: 404).</summary>
+        public volatile Func<long, int, IReadOnlyList<string>>? Headers;
+        public int SpendCalls, RawCalls, ProofCalls, HeaderCalls;
         public string? BroadcastHex;
 
         public void Coin(string address, string txId, int vout, long sats, int confs = 25)
@@ -68,7 +72,16 @@ public partial class ReadPathVerificationTests
                     var spent = Spends.TryGetValue(a, out var s);
                     return $$"""{"txId":"{{bits[0]}}","vout":{{bits[1]}},"known":true,"spentTxId":{{(spent ? $"\"{s.Spender}\"" : "null")}},"spentHeight":{{(spent ? s.Height.ToString() : "null")}}}""";
                 });
+                if (AnswersSpendsBackwards) items = items.Reverse();
                 return Json($$"""{"height":{{S.BlockHeight + 10}},"items":[{{string.Join(",", items)}}]}""");
+            }
+            if (path.Contains("/headers/"))
+            {
+                Interlocked.Increment(ref HeaderCalls);
+                var serve = Headers;
+                if (serve == null) return NotFound();
+                var count = int.Parse(request.RequestUri.Query.TrimStart('?').Split('=', 2)[1]);
+                return Json("{\"headers\":[" + string.Join(",", serve(long.Parse(parts[^1]), count).Select(h => $"\"{h}\"")) + "]}");
             }
             if (path.EndsWith("/utxos"))
                 return Json("[" + string.Join(",", Coins.TryGetValue(parts[^2], out var c) ? c : []) + "]");
@@ -136,11 +149,9 @@ public partial class ReadPathVerificationTests
         var failover = new GatewayFailoverHandler([GatewayA.ToString(), GatewayB.ToString()], fleet);
         var indexer = new IndexerDataService(new HttpClient(failover) { BaseAddress = failover.Primary }, NullLogger<IndexerDataService>.Instance);
         store ??= new InMemoryWalletStateStore();
-        var service = new LiteWalletService(new MemoryVault(), indexer, verifier: new LiteTxVerifier(indexer), stateStore: store);
-        var pair = new Pair(service, indexer, fleet, store);
-        service.Checks!.Pace = TimeSpan.Zero;
-        service.Checks.Clock = () => pair.Now;
-        service.Spends!.Clock = () => pair.Now;
+        Pair? pair = null;
+        var service = GatewayWallet(indexer, store, () => pair!.Now);
+        pair = new Pair(service, indexer, fleet, store);
         await service.RestoreWalletAsync(F.Mnemonic);
         return pair;
     }

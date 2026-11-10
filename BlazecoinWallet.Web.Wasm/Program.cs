@@ -20,6 +20,8 @@ builder.RootComponents.Add<HeadOutlet>("head::after");
 // so the gate and ISeedVault consumers share the instance.
 builder.Services.AddSingleton<BrowserEncryptedSeedVault>();
 builder.Services.AddSingleton<ISeedVault>(sp => sp.GetRequiredService<BrowserEncryptedSeedVault>());
+// The wallet password is asked for again before the recovery phrase is shown (2026-11-09).
+builder.Services.AddSingleton<IWalletPassword>(sp => sp.GetRequiredService<BrowserEncryptedSeedVault>());
 // Real QR scanner (getUserMedia + jsQR): a browser is its natural habitat. Scoped
 // because the IJSRuntime it bridges is scoped.
 builder.Services.AddScoped<IQrScanner, JsQrScanner>();

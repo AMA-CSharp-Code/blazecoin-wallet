@@ -17,12 +17,14 @@ public sealed class PayoutAddressResolver
     public const string Label = "mining payout";
 
     private readonly IMiningRpc _rpc;
-    private readonly IAddressMintRpc? _mint;
+    private readonly IAddressMintRpc _mint;
 
-    public PayoutAddressResolver(IMiningRpc rpc, IAddressMintRpc? mint = null)
+    /// <param name="mint">Required (audit 2026-11-09). It was optional, and without it the payout
+    /// was quietly legacy — the 2.0.8 behaviour — with no note saying so.</param>
+    public PayoutAddressResolver(IMiningRpc rpc, IAddressMintRpc mint)
     {
         _rpc = rpc ?? throw new ArgumentNullException(nameof(rpc));
-        _mint = mint;
+        _mint = mint ?? throw new ArgumentNullException(nameof(mint));
     }
 
     public async Task<PayoutAddressChoice> ResolveAsync(string? configured, CancellationToken ct = default)
@@ -35,16 +37,12 @@ public sealed class PayoutAddressResolver
                 kind == BlazecoinAddressKind.Legacy ? "The configured payout address is legacy (not post-quantum)." : null);
         }
 
-        string? note = null;
-        if (_mint is not null)
-        {
-            PqAddressResult r;
-            try { r = await _mint.GetNewPostQuantumAddressAsync(Label, ct).ConfigureAwait(false); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { r = PqAddressResult.Fail(PqAddressOutcome.Failed, ex.Message); }
-            if (r.IsOk && BitcoinProtocol.KindOf(r.Address) == BlazecoinAddressKind.PostQuantum)
-                return new PayoutAddressChoice(r.Address!, BlazecoinAddressKind.PostQuantum, null);
-            note = "Paying to a legacy address: " + (r.IsOk ? "the node returned a non-BQ address." : r.Explain());
-        }
+        PqAddressResult r;
+        try { r = await _mint.GetNewPostQuantumAddressAsync(Label, ct).ConfigureAwait(false); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { r = PqAddressResult.Fail(PqAddressOutcome.Failed, ex.Message); }
+        if (r.IsOk && BitcoinProtocol.KindOf(r.Address) == BlazecoinAddressKind.PostQuantum)
+            return new PayoutAddressChoice(r.Address!, BlazecoinAddressKind.PostQuantum, null);
+        var note = "Paying to a legacy address: " + (r.IsOk ? "the node returned a non-BQ address." : r.Explain());
 
         var legacy = await _rpc.GetNewAddressAsync().ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(legacy))

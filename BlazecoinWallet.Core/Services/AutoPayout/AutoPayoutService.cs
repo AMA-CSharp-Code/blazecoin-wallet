@@ -10,49 +10,60 @@ public sealed class AutoPayoutService : IAutoPayoutService
 {
     private readonly IWalletRpc _rpc;
     private readonly IKeyValueStore _store;
-    private readonly IWalletContext? _wallets;
-    private readonly Send.ISendRpc? _sender;
-    private readonly Send.SendChangePolicy? _changePolicy;
+    private readonly IWalletBinding _wallets;
+    private readonly Send.ISendRpc _sender;
+    private readonly Send.SendChangePolicy _changePolicy;
 
-    /// <param name="wallets">The active-wallet context. With it the engine remembers WHICH wallet
-    /// it was armed on, stops if the active wallet is no longer that one, and sends from exactly
-    /// that wallet (bug-bounty report 2026-11-06). Without it (older callers, tests) a payout
-    /// goes to whatever wallet the RPC layer addresses.</param>
-    /// <param name="sender">With <paramref name="changePolicy"/>: payouts go out through the send path
-    /// that can choose where change returns, so a wallet with post-quantum keys keeps its change
-    /// behind them. Without the pair (older wiring, tests) a payout is a plain <c>sendtoaddress</c>
-    /// and change follows the node's default — which is legacy (bug-bounty report 2026-11-06,
-    /// fourth round: an auto-payout from a BQ… coin put the change on an ECDSA address).</param>
-    public AutoPayoutService(IWalletRpc rpc, IKeyValueStore store, IWalletContext? wallets = null,
-        Send.ISendRpc? sender = null, Send.SendChangePolicy? changePolicy = null)
+    /// <summary>All five collaborators are REQUIRED (audit 2026-11-09). Three of them used to be
+    /// optional, and leaving one out switched a safeguard off without a word: no
+    /// <paramref name="wallets"/> and a payout went to whatever wallet the RPC layer addressed; no
+    /// <paramref name="sender"/> or <paramref name="changePolicy"/> and it went out as a plain
+    /// <c>sendtoaddress</c> with change on the node's default — legacy.</summary>
+    /// <param name="wallets">How the engine gets the wallet it is armed on: it remembers WHICH
+    /// wallet that was, stops if the active wallet is no longer that one, and sends from exactly
+    /// that wallet (bug-bounty report 2026-11-06) — and it does not arm at all on a wallet the app
+    /// switched to and the user has not acknowledged (audit 2026-11-09).</param>
+    /// <param name="sender">Every payout goes out through the send path that names its wallet and
+    /// can choose where change returns, so a wallet with post-quantum keys keeps its change behind
+    /// them (bug-bounty report 2026-11-06, fourth round: an auto-payout from a BQ… coin put the
+    /// change on an ECDSA address).</param>
+    public AutoPayoutService(IWalletRpc rpc, IKeyValueStore store, IWalletBinding wallets,
+        Send.ISendRpc sender, Send.SendChangePolicy changePolicy)
     {
-        _sender = sender;
-        _changePolicy = changePolicy;
-        _rpc = rpc;
-        _store = store;
-        _wallets = wallets;
+        _rpc = rpc ?? throw new ArgumentNullException(nameof(rpc));
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _wallets = wallets ?? throw new ArgumentNullException(nameof(wallets));
+        _sender = sender ?? throw new ArgumentNullException(nameof(sender));
+        _changePolicy = changePolicy ?? throw new ArgumentNullException(nameof(changePolicy));
     }
 
     /// <summary>The wallet the engine was armed on ("" = the node's default wallet endpoint);
-    /// null when it is not armed or has no wallet context.</summary>
+    /// null when it is not armed.</summary>
     public string? ArmedWallet { get; private set; }
 
-    private string? ActiveWalletNow => _wallets == null ? null : _wallets.Active ?? "";
-
     /// <summary>
-    /// True when the engine was armed on one wallet and the app is now on another. A balance
-    /// read can re-point the app at a different wallet when the selected one is no longer loaded
-    /// on the node; an armed payout must never follow it there — the threshold, the figures and
-    /// the user's decision were all about the wallet it was armed on.
+    /// True when the engine was armed on one wallet and the app is now on another
+    /// (<paramref name="activeNow"/>). A balance read can re-point the app at a different wallet
+    /// when the selected one is no longer loaded on the node; an armed payout must never follow
+    /// it there — the threshold, the figures and the user's decision were all about the wallet
+    /// it was armed on. The comparison is the binding's, the same one the Send page and the
+    /// Console use (audit 2026-11-09).
     /// </summary>
-    private bool WalletChangedSinceArmed => ArmedWallet != null && ActiveWalletNow != ArmedWallet;
+    private bool WalletChangedSinceArmed(out string? activeNow)
+    {
+        activeNow = null;
+        if (ArmedWallet is not string armed) return false;
+        var still = _wallets.IsStillActive(armed, out var now);
+        activeNow = now;
+        return !still;
+    }
 
     private static string WalletLabel(string? wallet) => string.IsNullOrEmpty(wallet) ? "(default)" : $"\"{wallet}\"";
 
-    private async Task StopForWalletChangeAsync(string during)
+    private async Task StopForWalletChangeAsync(string during, string? activeNow)
     {
         var message = $"Auto-payout STOPPED {during}: it was armed on wallet {WalletLabel(ArmedWallet)} and the active wallet " +
-                      $"is now {WalletLabel(ActiveWalletNow)}. Press Start to arm it on the wallet you mean.";
+                      $"is now {WalletLabel(activeNow)}. Press Start to arm it on the wallet you mean.";
         AddLog("⚠ " + message);
         Reason = message;
         Enabled = false;
@@ -81,6 +92,21 @@ public sealed class AutoPayoutService : IAutoPayoutService
     public bool Enabled { get; private set; }
     public decimal Spendable { get; private set; }
     public string Reason { get; private set; } = "";
+    /// <summary>True from a press of Start that was refused until the next Start or Stop.</summary>
+    private bool _startRefused;
+    public bool ShowReason => (Enabled || _startRefused) && !string.IsNullOrEmpty(Reason);
+
+    /// <summary>A press of Start that must not arm the engine: nothing is armed, and the reason is
+    /// shown under the button (<see cref="ShowReason"/>) and kept in the log.</summary>
+    private void RefuseStart(string why)
+    {
+        ArmedWallet = null;
+        Enabled = false;
+        _startRefused = true;
+        Reason = why;
+        AddLog("⚠ Auto-payout NOT started: " + why);
+        Notify();
+    }
     private readonly List<string> _log = new();
     public IReadOnlyList<string> Log => _log;
     public bool PayoutInFlight { get; private set; }
@@ -99,13 +125,22 @@ public sealed class AutoPayoutService : IAutoPayoutService
     // 0 = idle, 1 = running — atomic guard against concurrent ticks.
     private int _running;
 
-    // SegWit is consensus-disabled on this chain (SegwitHeight = INT_MAX), so coins
-    // sent to a bech32 (blz1...) address are unspendable and permanently lost. Block them.
-    private static bool IsUnsafeSegwitAddress(string? addr) => Provenance.VintageCoinControl.IsUnsafeSegwitAddress(addr);
-
     public async Task StartAsync()
     {
-        ArmedWallet = ActiveWalletNow;   // what the user is looking at when they press Start
+        // What the user is looking at when they press Start — unless the app has just moved to
+        // that wallet by itself and the user has not acknowledged it: then nothing is armed, and
+        // the refusal (it names both wallets) is shown under the button and logged (audit 2026-11-09).
+        _startRefused = false;
+        // An amount field holds text that is not an amount: the engine would run on the value the
+        // setting had before, which is not what the page shows. This was only a disabled button
+        // until the audit of 2026-11-09.
+        if (HasUnreadableAmount)
+        {
+            RefuseStart("An amount could not be read, so that setting was left as it was. Correct the marked field, then press Start. " + TypedAmount.InvalidMessage);
+            return;
+        }
+        try { ArmedWallet = _wallets.BindActiveForWrite(); }
+        catch (WalletSwitchPendingException ex) { RefuseStart(ex.Message); return; }
         Enabled = true;
         await SaveSettingsAsync();
         await TickAsync(fire: false);
@@ -115,6 +150,7 @@ public sealed class AutoPayoutService : IAutoPayoutService
     {
         Enabled = false;
         ArmedWallet = null;
+        _startRefused = false;
         Reason = "";
         await SaveSettingsAsync();
     }
@@ -125,18 +161,59 @@ public sealed class AutoPayoutService : IAutoPayoutService
     }
 
     // Custom up/down arrows step the number fields by a sensible per-field increment.
-    public async Task StepAsync(string field, int dir)
+    public async Task StepAsync(AutoPayoutField field, int dir)
     {
+        _unreadable.Remove(field);   // the arrows set a real number
         switch (field)
         {
-            case "threshold": Threshold = Bump(Threshold, dir, 10m);   break;
-            case "reserve":   Reserve   = Bump(Reserve,   dir, 100m);  break;
-            case "batch":     BatchSize = Bump(BatchSize, dir, 10m);   break;
-            case "cap":       DailyCap  = Bump(DailyCap,  dir, 1000m); break;
-            case "cooldown":  CooldownMin = Math.Max(0, CooldownMin + dir); break;
+            case AutoPayoutField.Threshold: Threshold = Bump(Threshold, dir, 10m);   break;
+            case AutoPayoutField.Reserve:   Reserve   = Bump(Reserve,   dir, 100m);  break;
+            case AutoPayoutField.BatchSize: BatchSize = Bump(BatchSize, dir, 10m);   break;
+            case AutoPayoutField.DailyCap:  DailyCap  = Bump(DailyCap,  dir, 1000m); break;
+            case AutoPayoutField.Cooldown:  CooldownMin = Math.Max(0, CooldownMin + dir); break;
         }
         await SaveSettingsAsync();
     }
+
+    // ----- The four amounts as typed -----
+    // Text that is not an amount, by field. The setting itself keeps its previous value.
+    private readonly Dictionary<AutoPayoutField, string> _unreadable = new();
+
+    public bool HasUnreadableAmount => _unreadable.Count > 0;
+    public bool IsUnreadable(AutoPayoutField field) => _unreadable.ContainsKey(field);
+
+    public string AmountText(AutoPayoutField field)
+    {
+        if (_unreadable.TryGetValue(field, out var asTyped)) return asTyped;
+        var shown = new TypedAmount();
+        shown.SetValue(Amount(field));
+        return shown.Text;
+    }
+
+    public void SetAmountText(AutoPayoutField field, string? text)
+    {
+        _ = Amount(field);           // an amount field, or it throws
+        var typed = new TypedAmount();
+        typed.SetText(text);
+        if (typed.IsInvalid) { _unreadable[field] = typed.Text; return; }   // the setting is left as it was
+        _unreadable.Remove(field);
+        switch (field)
+        {
+            case AutoPayoutField.Threshold: Threshold = typed.Value; break;
+            case AutoPayoutField.Reserve:   Reserve   = typed.Value; break;
+            case AutoPayoutField.BatchSize: BatchSize = typed.Value; break;
+            case AutoPayoutField.DailyCap:  DailyCap  = typed.Value; break;
+        }
+    }
+
+    private decimal? Amount(AutoPayoutField field) => field switch
+    {
+        AutoPayoutField.Threshold => Threshold,
+        AutoPayoutField.Reserve => Reserve,
+        AutoPayoutField.BatchSize => BatchSize,
+        AutoPayoutField.DailyCap => DailyCap,
+        _ => throw new ArgumentOutOfRangeException(nameof(field), field, "Not an amount field."),
+    };
 
     private static decimal? Bump(decimal? v, int dir, decimal step)
     {
@@ -231,12 +308,14 @@ public sealed class AutoPayoutService : IAutoPayoutService
             // Checked AFTER the read on purpose: the read itself is what re-points the app at
             // another wallet when the armed one is gone, and this balance would then be that
             // other wallet's.
-            if (WalletChangedSinceArmed) { await StopForWalletChangeAsync("before sending anything"); return; }
+            if (WalletChangedSinceArmed(out var movedTo)) { await StopForWalletChangeAsync("before sending anything", movedTo); return; }
             Spendable = spendable;
 
             if (Threshold is not decimal thr || thr < 0) { Reason = "Set a threshold (0 or more)."; Notify(); return; }
             if (string.IsNullOrWhiteSpace(Address)) { Reason = "Set a destination address."; Notify(); return; }
-            if (IsUnsafeSegwitAddress(Address)) { Reason = "Paused: destination is a blz1/SegWit address (unsafe)."; Notify(); return; }
+            // Only a legacy B… or a post-quantum BQ… address is ever paid (PayableAddress — one rule
+            // for every send; this was a check of one prefix, blz1, until the audit of 2026-11-09).
+            if (PayableAddress.Problem(Address, "destination") is { } notPayable) { Reason = "Paused: " + notPayable; Notify(); return; }
             if (spendable <= thr) { Reason = $"Waiting: spendable {spendable:N4} not above threshold {thr:N4}."; Notify(); return; }
             var sinceLast = (DateTime.UtcNow - _lastPayoutUtc).TotalMinutes;
             if (fire && sinceLast < CooldownMin) { Reason = $"Cooldown: {(CooldownMin - sinceLast):N1} min left."; Notify(); return; }
@@ -293,22 +372,21 @@ public sealed class AutoPayoutService : IAutoPayoutService
                 await SetInflightAsync($"{amt:N4} BLZ to {Address.Trim()} at {DateTime.Now:HH:mm:ss}");
                 int done = 0; decimal sentAmt = 0m;
                 var walletChanged = false;
+                string? changedTo = null;
                 // Where change goes, decided once for the whole payout: post-quantum when this wallet can.
-                Mining.BlazecoinAddressKind? changeKind = null;
-                if (_sender != null && _changePolicy != null)
-                    changeKind = (await _changePolicy.DecideAsync()).Change;
+                var changeKind = (await _changePolicy.DecideAsync()).Change;
                 foreach (var b in batches)
                 {
                     try
                     {
                         // Each batch comes out of the wallet the engine was armed on, by name —
                         // or not at all.
-                        if (WalletChangedSinceArmed) { walletChanged = true; break; }
-                        var txid = _sender != null && changeKind != null
-                            ? await _sender.SendAsync(new Send.SendRequest(Address.Trim(), b, false, changeKind) { Wallet = ArmedWallet })
-                            : ArmedWallet is string armed
-                                ? await _rpc.SendFromWalletAsync(armed, Address.Trim(), b)
-                                : await _rpc.SendToAddressAsync(Address.Trim(), b);
+                        if (WalletChangedSinceArmed(out changedTo)) { walletChanged = true; break; }
+                        if (ArmedWallet is not string armed) { AddLog($"FAILED tx {done + 1}/{batches.Count} ({b:N4} BLZ): the engine is not armed on a wallet — stopping."); break; }
+                        // One path for every payout (audit 2026-11-09): the send that names its
+                        // wallet. A wallet without post-quantum keys gets no change type (asking
+                        // for "pq" there would fail the send) — but still by name.
+                        var txid = await _sender.SendAsync(new Send.SendRequest(Address.Trim(), b, false, changeKind) { Wallet = armed });
                         if (string.IsNullOrEmpty(txid)) { AddLog($"FAILED tx {done + 1}/{batches.Count} ({b:N4} BLZ): no txid returned — stopping."); break; }
                         done++; sentAmt += b;
                         _sentToday += b; _lastPayoutUtc = DateTime.UtcNow;
@@ -327,7 +405,7 @@ public sealed class AutoPayoutService : IAutoPayoutService
                 if (walletChanged)
                 {
                     await SaveStateAsync();
-                    await StopForWalletChangeAsync($"after {done} of {batches.Count} tx");
+                    await StopForWalletChangeAsync($"after {done} of {batches.Count} tx", changedTo);
                     return;
                 }
             }

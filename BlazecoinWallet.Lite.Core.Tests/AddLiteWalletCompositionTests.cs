@@ -77,6 +77,23 @@ public class AddLiteWalletCompositionTests
     }
 
     [Fact]
+    public void The_wallet_service_seals_the_header_chains_stored_state_with_its_own_keys()
+    {
+        // Audit 2026-11-09: the stored tip and anchors are adopted only under the wallet's seal.
+        // Until the wallet service exists nobody is attached (nothing stored is read or written);
+        // once it does, the keys are the wallet's — and there are none while it is locked.
+        using var sp = Build(new LiteWalletOptions { GatewayUrls = ["https://gw.test/"] });
+        var chain = sp.GetRequiredService<HeaderChainSync>();
+        Assert.Null(chain.StateKeys);
+
+        sp.GetRequiredService<LiteWalletService>();
+
+        Assert.NotNull(chain.StateKeys);
+        Assert.Null(chain.StateKeys!(HeaderChainSync.CheckpointSealPurpose));
+        Assert.Null(chain.StateKeys(HeaderChainSync.AnchorsSealPurpose));
+    }
+
+    [Fact]
     public void Personal_node_mode_resolves_the_rpc_source_without_verification()
     {
         using var sp = Build(new LiteWalletOptions

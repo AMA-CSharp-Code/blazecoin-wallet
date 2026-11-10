@@ -34,23 +34,24 @@ public class MiningService : IMiningService
     private readonly PayoutAddressResolver _payout;
     private string? _payoutNote;
 
-    /// <param name="mint">When given, an unconfigured payout address is a fresh BQ… one (legacy only if
-    /// the wallet cannot mint BQ…). Without it — the pre-2.0.9 behaviour — the payout is legacy.</param>
-    /// <param name="wallets">The active-wallet context. With it the remembered payout address is
-    /// tied to the wallet it was made for (<see cref="MinerPayoutMemory"/>): once the active wallet
+    /// <summary>Both wallet collaborators are REQUIRED (audit 2026-11-09). They were optional, and
+    /// leaving one out switched its safeguard off without a word.</summary>
+    /// <param name="mint">An unconfigured payout address is a fresh BQ… one (legacy only if the
+    /// wallet cannot mint BQ…, with a note saying so). Without it the payout was quietly legacy.</param>
+    /// <param name="wallets">The active-wallet context: the remembered payout address is tied to
+    /// the wallet it was made for (<see cref="MinerPayoutMemory"/>) — once the active wallet
     /// changes, a stopped miner forgets the address and the next start makes one from the wallet
-    /// now in front of the user.</param>
-    public MiningService(IMiningRpc rpc, ILogger<MiningService>? logger = null, Quantum.IAddressMintRpc? mint = null,
-        IWalletContext? wallets = null)
+    /// now in front of the user. Without it the address of the previous wallet was kept.</param>
+    public MiningService(IMiningRpc rpc, Quantum.IAddressMintRpc mint, IWalletContext wallets, ILogger<MiningService>? logger = null)
     {
-        _rpc = rpc;
+        _rpc = rpc ?? throw new ArgumentNullException(nameof(rpc));
         _logger = logger;
         _payout = new PayoutAddressResolver(rpc, mint);
-        _wallets = wallets;
-        if (wallets != null) wallets.Changed += OnActiveWalletChanged;
+        _wallets = wallets ?? throw new ArgumentNullException(nameof(wallets));
+        wallets.Changed += OnActiveWalletChanged;
     }
 
-    private readonly IWalletContext? _wallets;
+    private readonly IWalletContext _wallets;
     private readonly MinerPayoutMemory _payoutMemory = new();
 
     /// <summary>A wallet switch while the miner is STOPPED drops the remembered address. A running
@@ -69,7 +70,7 @@ public class MiningService : IMiningService
 
     private bool DropPayoutIfWalletChanged()
     {
-        if (!_payoutMemory.DropIfWalletChanged(_wallets?.Active)) return false;
+        if (!_payoutMemory.DropIfWalletChanged(_wallets.Active)) return false;
         _payoutAddress = null;
         _payoutNote = null;
         return true;
@@ -132,7 +133,7 @@ public class MiningService : IMiningService
         // Resolve payout address: configured as given, else a fresh BQ… (legacy only if the wallet cannot).
         // …unless "configured" is only this miner's own remembered address for a wallet that is no
         // longer the active one: then it is not the caller's choice at all, and a fresh one is made.
-        var requested = _payoutMemory.ForStart(options.PayoutAddress, _wallets?.Active);
+        var requested = _payoutMemory.ForStart(options.PayoutAddress, _wallets.Active);
         var choice = await _payout.ResolveAsync(requested, ct).ConfigureAwait(false);
         var address = choice.Address;
         if (choice.Note is not null) _logger?.LogWarning("Solo-mining payout: {Note} ({Address})", choice.Note, address);
@@ -156,7 +157,7 @@ public class MiningService : IMiningService
         _ctx = ctx;
         _payoutAddress = address;
         _payoutNote = choice.Note;
-        _payoutMemory.Remember(address, _wallets?.Active);
+        _payoutMemory.Remember(address, _wallets.Active);
         _configuredThreads = threads;
         _throttlePercent = throttle;
         _lastError = null;

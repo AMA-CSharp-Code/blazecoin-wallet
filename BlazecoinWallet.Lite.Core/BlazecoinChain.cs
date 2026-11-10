@@ -35,8 +35,9 @@ public static class BlazecoinChain
     /// <summary>Satoshis per BLZ.</summary>
     public const long Coin = 100_000_000;
 
-    /// <summary>MAX_MONEY = 2,065,000,000 BLZ in satoshis.</summary>
-    public const long MaxMoney = 2_065_000_000L * Coin;
+    /// <summary>MAX_MONEY = 2,065,000,000 BLZ in satoshis — the one figure, kept in Core
+    /// (<see cref="BlazecoinWallet.Core.Services.PaymentLink.MaxMoneySatoshis"/>; audit 2026-11-09).</summary>
+    public const long MaxMoney = BlazecoinWallet.Core.Services.PaymentLink.MaxMoneySatoshis;
 
     /// <summary>
     /// The chain is legacy-only: no segwit/bech32 outputs exist and the desktop wallet

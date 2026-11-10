@@ -19,16 +19,9 @@ public interface IAddressMintRpc
     Task<bool?> CanMintPostQuantumAsync(CancellationToken ct = default);
 }
 
-/// <summary>
-/// The wallet calls a quantum sweep needs to pick and check its DESTINATION: the minting calls, plus
-/// whether a typed address belongs to the active wallet. Its own slice so
-/// <see cref="QuantumSweepSession"/> is tested against a fake, like <see cref="IExposureRpc"/>.
-/// </summary>
-public interface ISweepDestinationRpc : IAddressMintRpc
-{
-    /// <summary><c>getaddressinfo</c> → <c>ismine</c>. Null when the daemon could not say.</summary>
-    Task<bool?> IsMineAsync(string address, CancellationToken ct = default);
-}
+// (ISweepDestinationRpc lived here until the audit of 2026-11-09: the sweep's destination calls
+// followed the ACTIVE wallet. A sweep is bound to one wallet now and names it on every call —
+// see IBoundWalletRpc.)
 
 /// <summary>Why a BQ address could, or could not, be minted.</summary>
 public enum PqAddressOutcome

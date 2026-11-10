@@ -52,7 +52,7 @@ public class BountyRound4DesktopTests
         config["Blazecoind:RpcUrl"].Returns("http://127.0.0.1:55417");
         var ctx = Substitute.For<IWalletContext>();
         ctx.Active.Returns("Savings");
-        return new BlazecoindRpcService(config, ctx, factory);
+        return new BlazecoindRpcService(config, ctx, factory, new WalletSwitchNotice());
     }
 
     // ════════════════════════ vintage-send change ════════════════════════
@@ -62,7 +62,7 @@ public class BountyRound4DesktopTests
     {
         var daemon = new Script((HttpStatusCode.OK, Ok(PqWallet)), (HttpStatusCode.OK, Ok($"\"{Bq}\"")));
 
-        var change = await Rpc(daemon).GetChangeAddressAsync();
+        var change = await new ChangeAddressSource(Rpc(daemon)).NewAsync("Savings", "vintage change");
 
         Assert.Equal(Bq, change);                                                   // was a legacy B… address
         Assert.Equal(2, daemon.Bodies.Count);
@@ -75,7 +75,7 @@ public class BountyRound4DesktopTests
     {
         var daemon = new Script((HttpStatusCode.OK, Ok(LegacyOnlyWallet)), (HttpStatusCode.OK, Ok($"\"{LegacyA}\"")));
 
-        var change = await Rpc(daemon).GetChangeAddressAsync();
+        var change = await new ChangeAddressSource(Rpc(daemon)).NewAsync("Savings", "vintage change");
 
         Assert.Equal(LegacyA, change);
         Assert.Contains("\"params\":[\"vintage change\",\"legacy\"]", daemon.Bodies[1]);
@@ -88,7 +88,7 @@ public class BountyRound4DesktopTests
             (HttpStatusCode.OK, Ok(PqWallet)),
             (HttpStatusCode.InternalServerError, """{"result":null,"error":{"code":-4,"message":"Error: This wallet has no post-quantum keys"},"id":1}"""));
 
-        var change = await Rpc(daemon).GetChangeAddressAsync();
+        var change = await new ChangeAddressSource(Rpc(daemon)).NewAsync("Savings", "vintage change");
 
         Assert.Null(change);                                                        // the page says it could not get a change address
         Assert.Equal(2, daemon.Bodies.Count);                                       // and no quiet third call for a legacy one
@@ -114,10 +114,9 @@ public class BountyRound4DesktopTests
     {
         var rpc = Substitute.For<IWalletRpc>();
         rpc.GetBalancesAsync().Returns(Task.FromResult<WalletBalances?>(new WalletBalances { Mine = new BalanceMine { Trusted = 200m } }));
-        rpc.SendFromWalletAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<decimal>()).Returns(Task.FromResult<string?>("legacy-path-txid"));
         var sender = Substitute.For<ISendRpc>();
         sender.SendAsync(Arg.Any<SendRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("send-path-txid"));
-        var service = new AutoPayoutService(rpc, new FakeKeyValueStore(), new Wallets("Savings"), sender, new SendChangePolicy(new FakeMint(canMintPq)))
+        var service = new AutoPayoutService(rpc, new FakeKeyValueStore(), new WalletBinding(new Wallets("Savings"), new WalletSwitchNotice()), sender, new SendChangePolicy(new FakeMint(canMintPq)))
         {
             Threshold = 100m, Address = LegacyB, Live = true, Mode = "above", Batch = "single",
         };
@@ -136,7 +135,6 @@ public class BountyRound4DesktopTests
             Arg.Is<SendRequest>(r => r.Change == BlazecoinAddressKind.PostQuantum && r.ChangeType == "pq"
                                      && r.Wallet == "Savings" && r.Address == LegacyB && !r.SubtractFeeFromAmount),
             Arg.Any<CancellationToken>());
-        await rpc.DidNotReceive().SendFromWalletAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<decimal>());   // was this: sendtoaddress, legacy change
         await rpc.DidNotReceive().SendToAddressAsync(Arg.Any<string>(), Arg.Any<decimal>());
         Assert.Contains("send-path-txid", string.Join("\n", service.Log));
     }
@@ -151,8 +149,13 @@ public class BountyRound4DesktopTests
 
         await service.TickAsync(fire: true);
 
-        await rpc.Received(1).SendFromWalletAsync("Savings", LegacyB, Arg.Any<decimal>());       // asking for "pq" there would fail the send
-        await sender.DidNotReceive().SendAsync(Arg.Any<SendRequest>(), Arg.Any<CancellationToken>());
+        // Through the same one send path since the audit of 2026-11-09 (it was a separate fallback
+        // call, SendFromWalletAsync): the armed wallet by name, and NO change type asked for.
+        await sender.Received(1).SendAsync(
+            Arg.Is<SendRequest>(r => r.Change == null && r.ChangeType == null                 // asking for "pq" there would fail the send
+                                     && r.Wallet == "Savings" && r.Address == LegacyB && !r.SubtractFeeFromAmount),
+            Arg.Any<CancellationToken>());
+        await rpc.DidNotReceive().SendToAddressAsync(Arg.Any<string>(), Arg.Any<decimal>());
     }
 
     // ════════════════════════ the miner's payout address ════════════════════════
@@ -196,7 +199,7 @@ public class BountyRound4DesktopTests
         rpc.GetBlockTemplateAsync().Returns(_ => Template());
         rpc.GetNewAddressAsync(Arg.Any<string>()).Returns(LegacyA, LegacyB);        // Savings' address, then Primary's
         var wallets = new Wallets("Savings");
-        var miner = new MiningService(rpc, wallets: wallets);
+        var miner = new MiningService(rpc, new TestMint(), wallets);
         var options = new MiningOptions { ThreadCount = 1, ThrottlePercent = 90 };
 
         await miner.StartAsync(options);
@@ -220,7 +223,7 @@ public class BountyRound4DesktopTests
         rpc.GetBlockTemplateAsync().Returns(_ => Template());
         rpc.GetNewAddressAsync(Arg.Any<string>()).Returns(LegacyA);
         var wallets = new Wallets("Savings");
-        var miner = new MiningService(rpc, wallets: wallets);
+        var miner = new MiningService(rpc, new TestMint(), wallets);
 
         await miner.StartAsync(new MiningOptions { ThreadCount = 1, ThrottlePercent = 90 });
         wallets.SetActive("Primary");

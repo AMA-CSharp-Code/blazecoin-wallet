@@ -177,7 +177,9 @@ public partial class ReadPathVerificationTests
     {
         var failover = new GatewayFailoverHandler(gateways, fleet);
         var indexer = new IndexerDataService(new HttpClient(failover) { BaseAddress = failover.Primary }, NullLogger<IndexerDataService>.Instance);
-        return (new LiteWalletService(new MemoryVault(), indexer, verifier: new LiteTxVerifier(indexer)), indexer);
+        // The client is handed in as who else to ask, as the composition root does (audit 2026-11-09).
+        return (new LiteWalletService(new MemoryVault(), indexer, verifier: new LiteTxVerifier(indexer),
+            spendCrossCheck: indexer, addressUsage: indexer), indexer);
     }
 
     /// <summary>The report's layout: receive slots 0, 5, 15 and 30 have been used. Gateway A admits

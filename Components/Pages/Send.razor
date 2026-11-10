@@ -9,7 +9,7 @@
 @inject BlazecoinWallet.Core.Services.Send.ISendRpc SendRpc
 @inject BlazecoinWallet.Core.Services.Send.SendChangePolicy ChangePolicy
 @inject IAutoPayoutService Ap
-@inject IWalletContext WalletContext
+@inject IWalletBinding Binding
 @inject IAddressBookStore AddrBook
 @inject ISettingsService Settings
 @inject IJSRuntime JS
@@ -143,7 +143,10 @@
             <div class="form-group">
                 <label for="amount">Amount (BLZ)</label>
                 <div class="amount-wrap">
-                    <input type="number" id="amount" class="form-control" @bind="_amount" step="0.00000001" min="0" placeholder="Blazecoin Amount" />
+                    @* A TEXT field read by one strict grammar (TypedAmount), not a browser number field: on an
+                       English-language Windows, Chromium silently dropped a typed decimal comma, so
+                       "1,5" became 15 (bug-bounty report 2026-11-09). *@
+                    <input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" id="amount" class="form-control @(_typed.IsInvalid ? "is-invalid" : "")" @bind="AmountInput" placeholder="Blazecoin Amount" />
                     @* Custom red up/down arrows — the native spinner can't be recoloured
                        without becoming a solid block. Shown only once a number is typed
                        (CSS :placeholder-shown), and they step _amount on click. *@
@@ -152,6 +155,10 @@
                         <button type="button" class="spin-down" @onclick="StepDown" aria-label="Decrease amount"></button>
                     </div>
                 </div>
+                @if (_typed.IsInvalid)
+                {
+                    <small class="amount-unreadable">@TypedAmount.InvalidMessage</small>
+                }
             </div>
 
             @if (!string.IsNullOrEmpty(_error))
@@ -217,11 +224,15 @@
 
             <div class="ap-controls">
                 <div class="ap-buttons">
-                    <button class="btn ap-start" @onclick="Ap.StartAsync" disabled="@Ap.Enabled">Start</button>
+                    <button class="btn ap-start" @onclick="Ap.StartAsync" disabled="@(Ap.Enabled || Ap.HasUnreadableAmount)">Start</button>
                     <button class="btn ap-stop" @onclick="Ap.StopAsync" disabled="@(!Ap.Enabled)">Stop</button>
                 </div>
                 <span class="ap-state @(Ap.Enabled ? "on" : "")">@(Ap.Enabled ? "● watching" : "○ stopped")</span>
             </div>
+            @if (Ap.HasUnreadableAmount)
+            {
+                <small class="amount-unreadable">An amount below could not be read, so that setting was left as it was and Start is off until it is fixed. @TypedAmount.InvalidMessage</small>
+            }
 
             @* Sending mode: dry-run (default) <-> live, gated by an explicit confirmation.
                Mode can only be changed while stopped. *@
@@ -251,10 +262,10 @@
             <div class="form-group">
                 <label for="apThr">Threshold (spendable BLZ)</label>
                 <div class="ap-num-wrap">
-                    <input type="number" id="apThr" class="form-control" @bind="Ap.Threshold" @bind:after="Ap.SaveSettingsAsync" step="any" min="0" placeholder="e.g. 50000" />
+                    <input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" id="apThr" class="form-control @(Ap.IsUnreadable(AutoPayoutField.Threshold) ? "is-invalid" : "")" @bind="ApThresholdText" @bind:after="Ap.SaveSettingsAsync" placeholder="e.g. 50000" />
                     <div class="spin-buttons">
-                        <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("threshold", 1))" aria-label="Increase"></button>
-                        <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("threshold", -1))" aria-label="Decrease"></button>
+                        <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync(AutoPayoutField.Threshold, 1))" aria-label="Increase"></button>
+                        <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync(AutoPayoutField.Threshold, -1))" aria-label="Decrease"></button>
                     </div>
                 </div>
             </div>
@@ -302,10 +313,10 @@
                 <div class="form-group">
                     <label for="apRes">Reserve to keep behind (BLZ)</label>
                     <div class="ap-num-wrap">
-                        <input type="number" id="apRes" class="form-control" @bind="Ap.Reserve" @bind:after="Ap.SaveSettingsAsync" step="any" min="0" placeholder="e.g. 1000" />
+                        <input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" id="apRes" class="form-control @(Ap.IsUnreadable(AutoPayoutField.Reserve) ? "is-invalid" : "")" @bind="ApReserveText" @bind:after="Ap.SaveSettingsAsync" placeholder="e.g. 1000" />
                         <div class="spin-buttons">
-                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("reserve", 1))" aria-label="Increase"></button>
-                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("reserve", -1))" aria-label="Decrease"></button>
+                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync(AutoPayoutField.Reserve, 1))" aria-label="Increase"></button>
+                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync(AutoPayoutField.Reserve, -1))" aria-label="Decrease"></button>
                         </div>
                     </div>
                 </div>
@@ -323,10 +334,10 @@
                 <div class="form-group">
                     <label for="apBs">Batch size (BLZ per transaction)</label>
                     <div class="ap-num-wrap">
-                        <input type="number" id="apBs" class="form-control" @bind="Ap.BatchSize" @bind:after="Ap.SaveSettingsAsync" step="any" min="1" placeholder="30000" />
+                        <input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" id="apBs" class="form-control @(Ap.IsUnreadable(AutoPayoutField.BatchSize) ? "is-invalid" : "")" @bind="ApBatchSizeText" @bind:after="Ap.SaveSettingsAsync" placeholder="30000" />
                         <div class="spin-buttons">
-                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("batch", 1))" aria-label="Increase"></button>
-                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("batch", -1))" aria-label="Decrease"></button>
+                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync(AutoPayoutField.BatchSize, 1))" aria-label="Increase"></button>
+                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync(AutoPayoutField.BatchSize, -1))" aria-label="Decrease"></button>
                         </div>
                     </div>
                     <small class="ap-hint">Each batch is a separate transaction (+ fee). Keep ≤ ~34,000 BLZ — your UTXOs average ~51 BLZ, so a single tx can't combine enough inputs for more.</small>
@@ -339,18 +350,18 @@
                     <div class="ap-num-wrap">
                         <input type="number" id="apCd" class="form-control" @bind="Ap.CooldownMin" @bind:after="Ap.SaveSettingsAsync" min="0" />
                         <div class="spin-buttons">
-                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("cooldown", 1))" aria-label="Increase"></button>
-                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("cooldown", -1))" aria-label="Decrease"></button>
+                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync(AutoPayoutField.Cooldown, 1))" aria-label="Increase"></button>
+                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync(AutoPayoutField.Cooldown, -1))" aria-label="Decrease"></button>
                         </div>
                     </div>
                 </div>
                 <div>
                     <label for="apCap">Daily cap (BLZ, optional)</label>
                     <div class="ap-num-wrap">
-                        <input type="number" id="apCap" class="form-control" @bind="Ap.DailyCap" @bind:after="Ap.SaveSettingsAsync" step="any" min="0" placeholder="none" />
+                        <input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" id="apCap" class="form-control @(Ap.IsUnreadable(AutoPayoutField.DailyCap) ? "is-invalid" : "")" @bind="ApDailyCapText" @bind:after="Ap.SaveSettingsAsync" placeholder="none" />
                         <div class="spin-buttons">
-                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync("cap", 1))" aria-label="Increase"></button>
-                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync("cap", -1))" aria-label="Decrease"></button>
+                            <button type="button" class="spin-up" @onclick="@(() => Ap.StepAsync(AutoPayoutField.DailyCap, 1))" aria-label="Increase"></button>
+                            <button type="button" class="spin-down" @onclick="@(() => Ap.StepAsync(AutoPayoutField.DailyCap, -1))" aria-label="Decrease"></button>
                         </div>
                     </div>
                 </div>
@@ -360,7 +371,9 @@
                 <span>Status: <strong>@(Ap.Enabled ? "watching" : "off")</strong></span>
                 <span>Spendable: @Ap.Spendable.ToString("N4") BLZ</span>
             </div>
-            @if (Ap.Enabled && !string.IsNullOrEmpty(Ap.Reason))
+            @* Drawn while the engine is on, and when a press of Start was refused (the decision is
+               the service's — Ap.ShowReason; a refused Start used to leave this line blank). *@
+            @if (Ap.ShowReason)
             {
                 <div class="ap-reason">@Ap.Reason</div>
             }
@@ -385,7 +398,12 @@
     private string _label = "";
     /// <summary>Nullable so an empty input shows the "Blazecoin Amount"
     /// placeholder rather than rendering 0.</summary>
-    private decimal? _amount;
+    private decimal? _amount { get => _typed.Value; set => _typed.SetValue(value); }
+    /// <summary>The amount field: its text, and the number that text means (null while it is
+    /// empty or unreadable). Everything that sends reads <see cref="_amount"/>, so text that is
+    /// not an amount can never be reviewed or sent.</summary>
+    private readonly TypedAmount _typed = new();
+    private string AmountInput { get => _typed.Text; set => _typed.SetText(value); }
     private bool _sending;
     private bool _success;
     private string? _error;
@@ -419,14 +437,33 @@
     // never come out of "Primary" (bug-bounty report 2026-11-06).
     private string _sendWallet = "";
 
+    /// <summary>Takes the wallet on screen as this payment's wallet. False — with the reason in
+    /// <c>_error</c> — while the app has moved to another wallet by itself and the user has not
+    /// acknowledged the notice: until 2026-11-09 the page read the active wallet itself, so Review,
+    /// Send Max or a straight send pressed in that moment was bound to a wallet the user had not
+    /// been shown (audit 2026-11-09). The rule is Core's (<see cref="IWalletBinding"/>); this only shows it.</summary>
+    private bool BindSendWallet()
+    {
+        try { _sendWallet = Binding.BindActiveForWrite(); return true; }
+        catch (WalletSwitchPendingException ex) { _error = ex.Message; return false; }
+    }
+
+    // ── Auto-payout amount settings: text fields read by the same strict grammar as the amount
+    // above (they were browser number fields too). What was typed, whether it could be read, and
+    // "no Start while one cannot" are the engine's (AutoPayoutService, audit 2026-11-09); these
+    // four properties only give @bind something to bind to.
+    private string ApThresholdText { get => Ap.AmountText(AutoPayoutField.Threshold); set => Ap.SetAmountText(AutoPayoutField.Threshold, value); }
+    private string ApReserveText { get => Ap.AmountText(AutoPayoutField.Reserve); set => Ap.SetAmountText(AutoPayoutField.Reserve, value); }
+    private string ApBatchSizeText { get => Ap.AmountText(AutoPayoutField.BatchSize); set => Ap.SetAmountText(AutoPayoutField.BatchSize, value); }
+    private string ApDailyCapText { get => Ap.AmountText(AutoPayoutField.DailyCap); set => Ap.SetAmountText(AutoPayoutField.DailyCap, value); }
+
     private static string WalletName(string wallet) => wallet.Length == 0 ? "the default wallet" : $"\"{wallet}\"";
 
     /// <summary>True (with the message to show) when the active wallet is no longer the one
     /// this payment was prepared against.</summary>
     private bool ActiveWalletMoved(out string? message)
     {
-        var now = WalletContext.Active ?? "";
-        if (now == _sendWallet) { message = null; return false; }
+        if (Binding.IsStillActive(_sendWallet, out var now)) { message = null; return false; }
         message = $"The active wallet changed from {WalletName(_sendWallet)} to {WalletName(now)} while this payment was being " +
                   "prepared. Nothing was sent — check which wallet is active, then review the payment again.";
         return true;
@@ -526,52 +563,22 @@
         return InvokeAsync(StateHasChanged);
     }
 
-    /// <summary>Parses a scanned QR. Accepts a bare address or a BIP21-style URI
+    /// <summary>Applies a scanned QR: a bare address or a BIP21-style URI
     /// (<c>blazecoin:&lt;addr&gt;?amount=..&amp;label=..</c>); fills amount/label only
-    /// when present and not already set by the user.</summary>
+    /// when present (and the label only when the user has not set one).</summary>
     private void ApplyScannedPayload(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return;
-        var s = raw.Trim();
-        decimal? amount = null;
-        string? label = null;
+        // Read by the one payment-link reader both wallets share (PaymentLink, audit 2026-11-09).
+        // This page had its own copy, which DROPPED an amount it could not read without a word
+        // and had no upper bound; a bad amount is now reported and the field left to the user.
+        var request = PaymentLink.Parse(raw, PaymentLinkOptions.Desktop);
 
-        var colon = s.IndexOf(':');
-        if (colon > 0)
-        {
-            var scheme = s[..colon];
-            if (scheme.Equals("blazecoin", StringComparison.OrdinalIgnoreCase)
-                || scheme.Equals("blz", StringComparison.OrdinalIgnoreCase)
-                || scheme.Equals("bitcoin", StringComparison.OrdinalIgnoreCase))
-            {
-                var rest = s[(colon + 1)..];
-                var q = rest.IndexOf('?');
-                var query = q >= 0 ? rest[(q + 1)..] : "";
-                s = (q >= 0 ? rest[..q] : rest).Trim();
-
-                foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
-                {
-                    var kv = part.Split('=', 2);
-                    if (kv.Length != 2) continue;
-                    var key = Uri.UnescapeDataString(kv[0]);
-                    var val = Uri.UnescapeDataString(kv[1]);
-                    // Strict BIP21 grammar (digits, at most one dot) — the lenient number parse
-                    // read "amount=1,5" as 15 (bug-bounty report 2026-11-06).
-                    if (key.Equals("amount", StringComparison.OrdinalIgnoreCase)
-                        && AmountText.TryParsePaymentLink(val, out var a) && a > 0)
-                        amount = a;
-                    else if (label is null && (key.Equals("label", StringComparison.OrdinalIgnoreCase)
-                        || key.Equals("message", StringComparison.OrdinalIgnoreCase)))
-                        label = val;
-                }
-            }
-        }
-
-        _recipientAddress = s;
-        if (amount.HasValue) _amount = amount;
-        if (!string.IsNullOrWhiteSpace(label) && string.IsNullOrWhiteSpace(_label)) _label = label;
+        _recipientAddress = request.Destination;
+        if (request.AmountSatoshis is { } sats) _amount = sats / (decimal)PaymentLink.SatoshisPerCoin;
+        if (!string.IsNullOrWhiteSpace(request.Label) && string.IsNullOrWhiteSpace(_label)) _label = request.Label;
         OnRecipientPicked();   // fall back to address-book label if still empty
-        _error = null;
+        _error = request.AmountRejected ? PaymentLink.AmountRejectedMessage : null;
     }
 
     // ===================== Auto-payout view state =====================
@@ -647,23 +654,20 @@
             _label = match.Label;
     }
 
-    // SegWit is consensus-disabled on this chain (SegwitHeight = INT_MAX), so coins
-    // sent to a bech32 (blz1...) address are unspendable / anyone-can-spend and are
-    // permanently lost. Only legacy P2PKH (B...) addresses are safe. Block them.
-    private const string SegwitAddressError =
-        "SegWit (blz1...) addresses aren't supported on this chain - funds sent there would be lost. Use a Blazecoin address that starts with \"BQ\" (post-quantum) or \"B\" (legacy).";
-
-    private static bool IsUnsafeSegwitAddress(string? addr) =>
-        (addr ?? "").Trim().StartsWith("blz1", StringComparison.OrdinalIgnoreCase);
+    // Which addresses can be paid is Core's rule (PayableAddress): a legacy B… or a post-quantum
+    // BQ… address, and nothing else — a blz1… (SegWit) address above all, whose coins nobody could
+    // ever spend. This page had its own copy of the blz1 check until the audit of 2026-11-09.
+    private string? RecipientProblem() => PayableAddress.Problem(_recipientAddress, "recipient");
 
     private async Task Review()
     {
         _error = null;
         _sendMax = false;   // normal send (not a max/empty-the-wallet send)
-        _sendWallet = WalletContext.Active ?? "";   // what the user is looking at as they press Review
+        if (!BindSendWallet()) return;   // what the user is looking at as they press Review (or Send, with no review step)
         if (string.IsNullOrWhiteSpace(_recipientAddress)) { _error = "Please enter a recipient address"; return; }
+        if (_typed.IsInvalid) { _error = TypedAmount.InvalidMessage; return; }
         if (!_amount.HasValue || _amount.Value <= 0) { _error = "Please enter a valid amount"; return; }
-        if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
+        if (RecipientProblem() is { } notPayable) { _error = notPayable; return; }
 
         // Catch a malformed / mistyped address up front with a clear message instead
         // of a cryptic RPC error after the user clicks Send. Best-effort: a null
@@ -698,9 +702,9 @@
     private async Task SendMax()
     {
         _error = null;
-        _sendWallet = WalletContext.Active ?? "";   // the wallet whose balance is about to be emptied
+        if (!BindSendWallet()) return;   // the wallet whose balance is about to be emptied
         if (string.IsNullOrWhiteSpace(_recipientAddress)) { _error = "Please enter a recipient address"; return; }
-        if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
+        if (RecipientProblem() is { } notPayable) { _error = notPayable; return; }
         if (Ap.PayoutInFlight) { _error = "Auto-payout is broadcasting right now — try again in a moment."; return; }
         if (await RpcService.ValidateAddressAsync(_recipientAddress.Trim()) == false)
         {
@@ -724,8 +728,8 @@
     private async Task DoSend()
     {
         _error = null;
-        // Final safety net before the irreversible send (see IsUnsafeSegwitAddress).
-        if (IsUnsafeSegwitAddress(_recipientAddress)) { _error = SegwitAddressError; return; }
+        // Final safety net before the irreversible send (see RecipientProblem).
+        if (RecipientProblem() is { } notPayable) { _error = notPayable; return; }
         // Mutual exclusion with the Auto Payout engine — don't contend for the same UTXOs.
         if (Ap.PayoutInFlight) { _error = "Auto-payout is broadcasting right now — try again in a moment."; return; }
         // The payment was reviewed against one wallet; if the app is on another now, stop here

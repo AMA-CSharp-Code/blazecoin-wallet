@@ -83,4 +83,56 @@ public class AmountTextTests
             Assert.Equal(asDecimalPoint, value);
         }
     }
+
+    // ── whole numbers (audit 2026-11-09): the Provenance page's coin counts and satoshi amounts
+    //    were read with long.TryParse - culture-dependent, and it takes a sign.
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("546", 546)]
+    [InlineData("  413 ", 413)]
+    [InlineData("007", 7)]
+    [InlineData("9223372036854775807", long.MaxValue)]
+    public void A_whole_number_is_digits_and_nothing_else(string text, long expected)
+    {
+        Assert.True(AmountText.TryParseWhole(text, out var value));
+        Assert.Equal(expected, value);
+    }
+
+    [Theory]
+    [InlineData("-5")]                  // long.TryParse took the sign
+    [InlineData("+5")]
+    [InlineData("1.5")]
+    [InlineData("1,5")]
+    [InlineData("1,000")]
+    [InlineData("1 000")]
+    [InlineData("1e3")]
+    [InlineData("0x10")]
+    [InlineData("٣")]                   // a digit in another script is not one of ours
+    [InlineData("9223372036854775808")] // one past the largest
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void Anything_else_is_not_a_whole_number(string? text)
+    {
+        Assert.False(AmountText.TryParseWhole(text, out var value));
+        Assert.Equal(0, value);
+    }
+
+    [Fact]
+    public void A_whole_number_reads_the_same_under_every_culture()
+    {
+        var before = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            foreach (var name in new[] { "en-US", "de-DE", "id-ID", "ar-SA", "sv-SE" })
+            {
+                System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo(name);
+                Assert.True(AmountText.TryParseWhole("12345", out var value));
+                Assert.Equal(12345, value);
+                Assert.False(AmountText.TryParseWhole("-12345", out _));
+            }
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = before; }
+    }
 }

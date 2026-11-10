@@ -48,8 +48,8 @@ public interface IAncestryRpc
 /// </summary>
 public interface IVintageSendRpc
 {
-    /// <summary>A fresh address of this wallet for change.</summary>
-    Task<string?> GetChangeAddressAsync(CancellationToken ct = default);
+    // (A change address is no longer asked for here: which KIND it is belongs to the change rule,
+    // and it is minted in the wallet the plan is bound to — Send.ChangeAddressSource, audit 2026-11-09.)
 
     /// <summary>`createrawtransaction` — inputs and outputs kept in the EXACT order given.</summary>
     Task<string?> CreateRawTransactionAsync(
@@ -57,8 +57,10 @@ public interface IVintageSendRpc
         IReadOnlyList<(string Address, long Satoshis)> outputs,
         CancellationToken ct = default);
 
-    /// <summary>`signrawtransactionwithwallet` — the signed hex, or null if incomplete.</summary>
-    Task<string?> SignRawTransactionAsync(string rawHex, CancellationToken ct = default);
+    /// <summary>`signrawtransactionwithwallet` in EXACTLY <paramref name="wallet"/> — the wallet the
+    /// plan was bound to ("" = the node's default wallet endpoint) — the signed hex, or null if
+    /// incomplete. Never the active wallet: a plan made on one wallet is not signed by another.</summary>
+    Task<string?> SignRawTransactionAsync(string wallet, string rawHex, CancellationToken ct = default);
 
     /// <summary>`sendrawtransaction` — the txid once accepted by the network.</summary>
     Task<string?> SendRawTransactionAsync(string signedHex, CancellationToken ct = default);

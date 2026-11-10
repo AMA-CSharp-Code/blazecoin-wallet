@@ -19,6 +19,8 @@ public class SpentCoinGuardTests
     {
         public int MaxOutpointsPerCall { get; set; } = 50;
         public readonly List<int> Asked = [];
+        /// <summary>The outputs of each question, in the order they were asked about.</summary>
+        public readonly List<int[]> AskedVouts = [];
         public Func<IReadOnlyList<LiteOutpoint>, IReadOnlyList<LiteSpendClaim>?> Answer = _ => [];
         /// <summary>When set, every answer waits for it — a slow gateway.</summary>
         public TaskCompletionSource? Hold;
@@ -26,7 +28,7 @@ public class SpentCoinGuardTests
         public async Task<IReadOnlyList<LiteSpendClaim>?> FindSpendsFromAnotherGatewayAsync(
             IReadOnlyList<LiteOutpoint> outpoints, CancellationToken ct = default)
         {
-            lock (Asked) Asked.Add(outpoints.Count);
+            lock (Asked) { Asked.Add(outpoints.Count); AskedVouts.Add(outpoints.Select(o => o.Vout).ToArray()); }
             if (Hold != null) await Hold.Task.WaitAsync(ct);
             return Answer(outpoints);
         }
@@ -177,6 +179,102 @@ public class SpentCoinGuardTests
         Assert.Equal([2, 1, 1], rig.Second.Asked);
         Assert.Equal(SpendStanding.Spent, rig.Guard.StandingOf(F.TxId(0), 0));
         Assert.Equal(SpendStanding.Clear, rig.Guard.StandingOf(F.TxId(1), 0));
+    }
+
+    // ── audit 2026-11-09: a claim whose evidence was not fetched this round is not a verdict ──
+
+    /// <summary>A spend named for <paramref name="coin"/> whose evidence the cap left for a later round.</summary>
+    private static LiteSpendClaim Waiting(LiteOutpoint coin) =>
+        new(coin.TxId, coin.Vout, S.TxId(0), S.BlockHeight, null, null) { EvidencePending = true };
+
+    /// <summary>A spend named for <paramref name="coin"/> with evidence that was fetched and does
+    /// not hold: a real mined transaction, but one that spends a different output.</summary>
+    private static LiteSpendClaim Failing(LiteOutpoint coin) => Proof() with { TxId = coin.TxId, Vout = coin.Vout };
+
+    [Fact]
+    public async Task A_claim_whose_evidence_was_not_fetched_is_neither_clear_nor_a_strike()
+    {
+        var rig = new Rig();
+        rig.Second.Answer = asked => asked.Select(Waiting).ToList();
+
+        for (var round = 0; round < rig.Guard.MaxUnprovenClaims + 3; round++)
+        {
+            await rig.EnsureAsync(Coin());
+            await rig.Guard.WhenIdleAsync();
+            Assert.Equal(SpendStanding.Unknown, rig.Guard.StandingOf(F.TxId(0), 0));   // was Clear from the fourth round on
+            rig.Now += TimeSpan.FromSeconds(61);
+        }
+
+        rig.Second.Answer = _ => [Proof()];                               // its turn comes and the evidence is fetched
+        await rig.EnsureAsync(Coin());
+        Assert.Equal(SpendStanding.Spent, rig.Guard.StandingOf(F.TxId(0), 0));
+    }
+
+    [Fact]
+    public async Task Waiting_for_evidence_uses_up_none_of_the_tries_a_failing_claim_gets()
+    {
+        var rig = new Rig();
+        var coin = Coin(0, 5);
+        rig.Second.Answer = asked => asked.Select(Waiting).ToList();
+        for (var round = 0; round < 3; round++)
+        {
+            await rig.EnsureAsync(coin);
+            rig.Now += TimeSpan.FromSeconds(61);
+        }
+
+        // Evidence that was fetched and failed still counts, and still sets the claim aside in
+        // the end — a second gateway cannot hold a coin back for good — but only from here.
+        rig.Second.Answer = asked => asked.Select(Failing).ToList();
+        for (var strike = 1; strike < rig.Guard.MaxUnprovenClaims; strike++)
+        {
+            await rig.EnsureAsync(coin);
+            Assert.Equal(SpendStanding.Unknown, rig.Guard.StandingOf(coin.TxId, coin.Vout));
+            rig.Now += TimeSpan.FromSeconds(61);
+        }
+        await rig.EnsureAsync(coin);
+        Assert.Equal(SpendStanding.Clear, rig.Guard.StandingOf(coin.TxId, coin.Vout));
+    }
+
+    [Fact]
+    public async Task A_judged_coin_keeps_its_standing_while_a_new_claim_waits_for_evidence_and_is_asked_about_again_soon()
+    {
+        var rig = new Rig();
+        var clear = Coin(0, 5);
+        rig.Second.Answer = asked => asked.Where(c => c.Vout == 0).Select(_ => Proof()).ToList();
+        await rig.EnsureAsync(Coin(), clear);
+        Assert.Equal(SpendStanding.Spent, rig.Guard.StandingOf(F.TxId(0), 0));
+        Assert.Equal(SpendStanding.Clear, rig.Guard.StandingOf(clear.TxId, clear.Vout));
+
+        rig.Second.Answer = asked => asked.Select(Waiting).ToList();      // both named, neither's evidence fetched
+        rig.Now += TimeSpan.FromMinutes(11);
+        await rig.EnsureAsync(Coin(), clear);
+        await rig.Guard.WhenIdleAsync();
+        Assert.Equal(SpendStanding.Spent, rig.Guard.StandingOf(F.TxId(0), 0));
+        Assert.Equal(SpendStanding.Clear, rig.Guard.StandingOf(clear.TxId, clear.Vout));
+
+        var calls = rig.Second.Calls;
+        rig.Now += TimeSpan.FromSeconds(61);                              // a minute on, not ten
+        await rig.EnsureAsync(Coin(), clear);
+        await rig.Guard.WhenIdleAsync();
+        Assert.Equal(calls + 1, rig.Second.Calls);
+    }
+
+    [Fact]
+    public async Task Coins_whose_evidence_has_not_been_looked_at_are_asked_about_before_those_whose_has()
+    {
+        var rig = new Rig();
+        var coins = Enumerable.Range(1, 3).Select(v => Coin(0, v)).ToArray();
+        // One question fetches evidence for the first output asked about; the rest wait.
+        rig.Second.Answer = asked => asked.Select((c, i) => i == 0 ? Failing(c) : Waiting(c)).ToList();
+
+        await rig.EnsureAsync(coins);
+        rig.Now += TimeSpan.FromSeconds(61);
+        await rig.EnsureAsync(coins);
+        rig.Now += TimeSpan.FromSeconds(61);
+        await rig.EnsureAsync(coins);
+
+        // Was [1,2,3] every time: the same coin took the evidence each round and the others never got a turn.
+        Assert.Equal([[1, 2, 3], [2, 3, 1], [3, 1, 2]], rig.Second.AskedVouts);
     }
 
     [Fact]

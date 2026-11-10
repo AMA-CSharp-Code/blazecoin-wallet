@@ -6,14 +6,31 @@ namespace BlazecoinWallet.Core.Services;
 // ~24 wallet/security methods they never call. IBlazecoindRpcService remains as a
 // composite for the UI pages that genuinely span several of these areas.
 
+/// <summary>The Console page's one call. Its own interface (audit 2026-11-09): it sat on
+/// <see cref="INodeRpc"/>, so the daemon manager and the sync poller depended on a wallet-scoped
+/// method only the Console uses.</summary>
+public interface IConsoleRpc
+{
+    /// <summary>A Console command, run against exactly <paramref name="wallet"/> — the wallet the
+    /// Console showed beside its prompt ("" = none chosen). Never re-points the app. Refused with
+    /// <see cref="WalletSwitchPendingException"/> while a wallet switch is unacknowledged and with
+    /// <see cref="ConsoleWalletChangedException"/> when that wallet is no longer the active one.</summary>
+    Task<string> ExecuteConsoleCommandAsync(string wallet, string method, object[] parameters);
+}
+
 /// <summary>Node-level calls not tied to chain, wallet or mining: a liveness
-/// probe and the raw RPC passthrough used by the console.</summary>
+/// probe and node housekeeping.</summary>
 public interface INodeRpc
 {
     /// <summary>Returns a human-readable error string if the daemon is
     /// unreachable, or null when it's responding.</summary>
     Task<string?> CheckConnectionAsync();
-    Task<string> ExecuteCommandAsync(string method, params object[] parameters);
+    // (ExecuteCommandAsync — a raw passthrough on the ACTIVE wallet's path — was here until the
+    // audit of 2026-11-09. The Console had stopped using it and nothing else did.)
+
+    /// <summary>A node-level command (<c>stop</c>, <c>getnetworkinfo</c>) on the node's own
+    /// endpoint; no wallet state can hold it up.</summary>
+    Task<string> ExecuteNodeCommandAsync(string method, params object[] parameters);
 
     /// <summary>Offline address-validity check (the daemon's `validateaddress` —
     /// no wallet needed). True/false = valid/invalid encoding+checksum for this
@@ -58,11 +75,11 @@ public interface IWalletRpc
     Task<List<AddressBook.AddressBookEntry>> ListLabelledAddressesAsync();
     Task<string?> SendToAddressAsync(string address, decimal amount, bool subtractFeeFromAmount = false);
 
-    /// <summary>A send that must come out of EXACTLY <paramref name="wallet"/> — the one it was
-    /// reviewed or armed on ("" = the node's default wallet endpoint). If that wallet is not
-    /// loaded the call fails (<see cref="WalletNotLoadedException"/>); it is never executed from
-    /// a different wallet (bug-bounty report 2026-11-06).</summary>
-    Task<string?> SendFromWalletAsync(string wallet, string address, decimal amount, bool subtractFeeFromAmount = false);
+    // (SendFromWalletAsync — a send from exactly one named wallet — was here for Auto Payout's
+    // fallback path. Every payout now goes through Send.ISendRpc.SendAsync with the wallet named
+    // on the request, so nothing needs it on this interface — audit 2026-11-09.)
+    /// <summary>Best-effort fee dry run on the ACTIVE wallet; null when unknown. Throws
+    /// <see cref="WalletSwitchPendingException"/> while a wallet switch is unacknowledged (audit 2026-11-09).</summary>
     Task<decimal?> EstimateSendFeeAsync(string address, decimal amount, bool subtractFeeFromAmount = false);
     Task<List<string>> ListWalletsAsync();
     Task<List<string>> ListWalletDirAsync();

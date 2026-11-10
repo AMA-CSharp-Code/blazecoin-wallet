@@ -101,4 +101,22 @@ public sealed class LiteHdWallet
 
     /// <summary>The BQ (mainnet) / TQ (regtest) address at PQ slot <paramref name="index"/>.</summary>
     public string GetPqAddress(int index) => GetPqKey(index).Address(_network);
+
+    /// <summary>
+    /// A 32-byte key for authenticating state this wallet keeps OUTSIDE the vault (for example
+    /// the remembered set of proven coins, <see cref="RememberedCoinsSeal"/>): HMAC-SHA512 keyed
+    /// "Blazecoin lite state/&lt;purpose&gt;" over the root private key, first 32 bytes. It comes
+    /// from the seed (and passphrase), so it survives a restore and nothing that can only write
+    /// app storage can compute it. One purpose per use; it is never a spending key.
+    /// </summary>
+    public byte[] DeriveStateKey(string purpose)
+    {
+        var secret = _root.PrivateKey.ToBytes();
+        try
+        {
+            return System.Security.Cryptography.HMACSHA512.HashData(
+                System.Text.Encoding.UTF8.GetBytes("Blazecoin lite state/" + purpose), secret)[..32];
+        }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(secret); }
+    }
 }

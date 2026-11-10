@@ -1,3 +1,4 @@
+using BlazecoinWallet.Core.Services;
 using BlazecoinWallet.Core.Services.Provenance;
 
 namespace BlazecoinWallet.Core.Tests;
@@ -114,7 +115,7 @@ public class VintageCoinControlTests
 
         // Sending "May 2026" must spend the May coin, not the June one.
         var plan = VintageCoinControl.PlanSend(report, may.Heights, may.FirstHeight,
-            100_000, "Brecipient", "Bchange", 0).Plan!;
+            100_000, TestAddr.Recipient, TestAddr.Change, 0).Plan!;
         Assert.Equal("cb4000001", Assert.Single(plan.Inputs).TxId);
         Assert.Equal(100_000, VintageCoinControl.VerifyVintageDelivered(plan, report));
     }
@@ -137,7 +138,7 @@ public class VintageCoinControlTests
 
         // 150 sats needs BOTH coins — neither block alone covers it.
         var plan = VintageCoinControl.PlanSend(report, year.Heights, year.FirstHeight,
-            150, "Brecipient", "Bchange", 0, dustThresholdSatoshis: 0).Plan!;
+            150, TestAddr.Recipient, TestAddr.Change, 0, dustThresholdSatoshis: 0).Plan!;
 
         Assert.Equal(2, plan.Inputs.Count);
         Assert.Equal(150, VintageCoinControl.VerifyVintageDelivered(plan, report));  // both blocks count
@@ -188,14 +189,14 @@ public class VintageCoinControlTests
         foreach (var tooSmall in new long[] { 1, 10, 100, 545 })
         {
             var refused = VintageCoinControl.PlanSend(report, heights, Pure413, tooSmall,
-                "Brecipient", "Bchange", 0);
+                TestAddr.Recipient, TestAddr.Change, 0);
             Assert.Null(refused.Plan);
             Assert.Contains("dust limit", refused.Problem);
         }
 
         // 546 is the floor and goes through.
         var ok = VintageCoinControl.PlanSend(report, heights, Pure413,
-            VintageCoinControl.DustThresholdSatoshis, "Brecipient", "Bchange", 0).Plan!;
+            VintageCoinControl.DustThresholdSatoshis, TestAddr.Recipient, TestAddr.Change, 0).Plan!;
         Assert.Equal(546, ok.SendAmount);
         Assert.Equal(546, VintageCoinControl.VerifyVintageDelivered(ok, report));
     }
@@ -208,7 +209,7 @@ public class VintageCoinControlTests
         var report = Report(Utxo("pure", 1_000, (1_000, Pure413)));
 
         var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413,
-            600, "Brecipient", "Bchange", 0);
+            600, TestAddr.Recipient, TestAddr.Change, 0);
 
         Assert.Null(result.Plan);
         Assert.Contains("change coming back to you", result.Problem);
@@ -221,28 +222,54 @@ public class VintageCoinControlTests
         // Bug-bounty report 2026-11-06 (seventh round): node 2.1.2 prices a BQ… output by the 3,782-byte
         // input that spends it — 11,475 satoshis, not 546 — and change goes to BQ… addresses since 2.0.18.
         const string bq = "BQGeaQmsowAjL1ZG8q1AfVH4NgBvtJKJSsjnnKEf62BMjekdU82n";   // PQ_SIGNATURES.md §5 example
-        Assert.Equal(546, VintageCoinControl.DustThresholdFor("Brecipient"));
-        Assert.Equal(11_475, VintageCoinControl.DustThresholdFor(bq));
-        Assert.Equal(0, VintageCoinControl.DustThresholdFor(bq, legacyThreshold: 0));   // switched off stays off
+        // (The floor is DustPolicy's since the audit of 2026-11-09 - one place for both wallets.)
+        Assert.Equal(546, DustPolicy.FloorFor(TestAddr.Recipient));
+        Assert.Equal(11_475, DustPolicy.FloorFor(bq));
+        Assert.Equal(0, DustPolicy.FloorFor(bq, legacyFloor: 0));   // switched off stays off
 
         var report = Report(Utxo("pure", 100_000, (100_000, Pure413)));
         var heights = new HashSet<long> { Pure413 };
 
         // Change of 11,474 satoshis to a BQ… address: refused, with the change and the right figure named.
-        var refused = VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_474, "Brecipient", bq, 0);
+        var refused = VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_474, TestAddr.Recipient, bq, 0);
         Assert.Null(refused.Plan);
         Assert.Contains("change coming back to you", refused.Problem);
         Assert.Contains("11,475", refused.Problem);
         Assert.Contains("post-quantum", refused.Problem);
         // One satoshi more clears it; and the same small change to a legacy address always did.
-        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_475, "Brecipient", bq, 0).Plan);
-        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_474, "Brecipient", "Bchange", 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_475, TestAddr.Recipient, bq, 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 100_000 - 11_474, TestAddr.Recipient, TestAddr.Change, 0).Plan);
 
         // The amount itself, when the recipient is a BQ… address.
-        var small = VintageCoinControl.PlanSend(report, heights, Pure413, 11_474, bq, "Bchange", 0);
+        var small = VintageCoinControl.PlanSend(report, heights, Pure413, 11_474, bq, TestAddr.Change, 0);
         Assert.Null(small.Plan);
         Assert.Contains("amount being sent", small.Problem);
-        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 11_475, bq, "Bchange", 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 11_475, bq, TestAddr.Change, 0).Plan);
+    }
+
+    [Fact]
+    public void an_address_that_is_not_a_B_or_BQ_address_is_refused_by_every_vintage_planner()
+    {
+        // Audit 2026-11-09: the planners refused one prefix (blz1) and took anything else that was
+        // not blank - a mistyped address, a Bitcoin address, a script-hash address - into a plan.
+        var report = Report(Utxo("pure", 41_300_000_000, (41_300_000_000, Pure413)));
+        var heights = new HashSet<long> { Pure413 };
+
+        foreach (var bad in TestAddr.NotPayable)
+        {
+            foreach (var refused in new[]
+            {
+                VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, bad, TestAddr.Change, 0),
+                VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, TestAddr.Recipient, bad, 0),
+                VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, TestAddr.Recipient, TestAddr.Change, 0, leadingChangeAddress: bad),
+                VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, bad, 0),
+                VintageCoinControl.PlanWholeBlock(report, Pure413, bad, 0),
+            })
+            {
+                Assert.Null(refused.Plan);                                              // was BUILT, for all but blz1
+                Assert.Contains("not a valid Blazecoin address", refused.Problem);
+            }
+        }
     }
 
     [Fact]
@@ -257,27 +284,28 @@ public class VintageCoinControlTests
 
         foreach (var refused in new[]
         {
-            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, bech32, "Bchange", 0),
-            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "Brecipient", bech32, 0),
-            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "Brecipient", "Bchange", 0, leadingChangeAddress: bech32),
+            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, bech32, TestAddr.Change, 0),
+            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, TestAddr.Recipient, bech32, 0),
+            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, TestAddr.Recipient, TestAddr.Change, 0, leadingChangeAddress: bech32),
             VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, bech32, 0),
             VintageCoinControl.PlanWholeBlock(report, Pure413, bech32, 0),
-            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "  BLZ1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4 ", "Bchange", 0),   // case and spaces change nothing
+            VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "  BLZ1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4 ", TestAddr.Change, 0),   // case and spaces change nothing
         })
         {
             Assert.Null(refused.Plan);                                                  // was BUILT, in every case
             Assert.Contains("SegWit", refused.Problem);
             Assert.Contains("would be lost", refused.Problem);
         }
-        Assert.True(VintageCoinControl.IsUnsafeSegwitAddress(bech32));
-        Assert.False(VintageCoinControl.IsUnsafeSegwitAddress("Brecipient"));
-        Assert.False(VintageCoinControl.IsUnsafeSegwitAddress("BQGeaQmsowAjL1ZG8q1AfVH4NgBvtJKJSsjnnKEf62BMjekdU82n"));
-        Assert.Equal("A recipient address is required.", VintageCoinControl.AddressProblem(" ", "recipient"));
+        // (The rule is PayableAddress's since the audit of 2026-11-09 - one place for every send.)
+        Assert.False(PayableAddress.CanBePaid(bech32));
+        Assert.True(PayableAddress.CanBePaid(TestAddr.Recipient));
+        Assert.True(PayableAddress.CanBePaid("BQGeaQmsowAjL1ZG8q1AfVH4NgBvtJKJSsjnnKEf62BMjekdU82n"));
+        Assert.Equal("A recipient address is required.", PayableAddress.Problem(" ", "recipient"));
 
         // The same sends to a legacy recipient still plan.
-        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, "Brecipient", "Bchange", 0).Plan);
-        Assert.NotNull(VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, "Brecipient", 0).Plan);
-        Assert.NotNull(VintageCoinControl.PlanWholeBlock(report, Pure413, "Brecipient", 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanSend(report, heights, Pure413, 1_000_000, TestAddr.Recipient, TestAddr.Change, 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, TestAddr.Recipient, 0).Plan);
+        Assert.NotNull(VintageCoinControl.PlanWholeBlock(report, Pure413, TestAddr.Recipient, 0).Plan);
     }
 
     // ── whole coins (the collector's send) ──
@@ -291,7 +319,7 @@ public class VintageCoinControlTests
             Utxo("cb413b", 82_600_000_000, (82_600_000_000, Pure413)));
 
         var plan = VintageCoinControl.PlanWholeCoins(report, new HashSet<long> { Pure413 }, Pure413,
-            1, "Bcollector", 0).Plan!;
+            1, TestAddr.Collector, 0).Plan!;
 
         Assert.Single(plan.Inputs);
         Assert.Equal("cb413", plan.Inputs[0].TxId);              // smallest coin chosen
@@ -315,11 +343,11 @@ public class VintageCoinControlTests
             Utxo("coinbase", 5_162_500_000, (5_162_500_000, Pure413)));
         var heights = new HashSet<long> { Pure413 };
 
-        var defaulted = VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, "B", 0).Plan!;
+        var defaulted = VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, TestAddr.Recipient, 0).Plan!;
         Assert.Equal("dust", defaulted.Inputs[0].TxId);
 
         // Naming the size sends the coin the collector actually meant.
-        var chosen = VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, "B", 0,
+        var chosen = VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, TestAddr.Recipient, 0,
             coinValueSatoshis: 5_162_500_000).Plan!;
         Assert.Equal("coinbase", Assert.Single(chosen.Inputs).TxId);
         Assert.Equal(5_162_500_000, Assert.Single(chosen.Outputs).Satoshis);
@@ -331,7 +359,7 @@ public class VintageCoinControlTests
 
         // A size the vintage doesn't hold is refused, not silently substituted.
         Assert.Contains("no whole output of exactly",
-            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, "B", 0, 999).Problem);
+            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, TestAddr.Recipient, 0, 999).Problem);
     }
 
     [Fact]
@@ -340,7 +368,7 @@ public class VintageCoinControlTests
         var report = Report(Utxo("cb", 41_300_000_000, (41_300_000_000, Pure413)));
 
         var plan = VintageCoinControl.PlanWholeCoins(report, new HashSet<long> { Pure413 }, Pure413,
-            1, "Bcollector", 1_000).Plan!;
+            1, TestAddr.Collector, 1_000).Plan!;
 
         Assert.Equal(41_299_999_000, Assert.Single(plan.Outputs).Satoshis);   // short by the fee
         Assert.True(plan.Balances);
@@ -356,15 +384,15 @@ public class VintageCoinControlTests
 
         var heights = new HashSet<long> { Pure413 };
         Assert.Contains("fewer than the 3",
-            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 3, "B", 0).Problem);
+            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 3, TestAddr.Recipient, 0).Problem);
         Assert.Contains("at least one output",
-            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 0, "B", 0).Problem);
+            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 0, TestAddr.Recipient, 0).Problem);
         Assert.Contains("consume the whole output",
-            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, "B", 9_999).Problem);
+            VintageCoinControl.PlanWholeCoins(report, heights, Pure413, 1, TestAddr.Recipient, 9_999).Problem);
 
         // A vintage held only inside blended coins has no whole coin to send.
         Assert.Contains("no whole (pure) outputs",
-            VintageCoinControl.PlanWholeCoins(report, new HashSet<long> { Other }, Other, 1, "B", 0).Problem);
+            VintageCoinControl.PlanWholeCoins(report, new HashSet<long> { Other }, Other, 1, TestAddr.Recipient, 0).Problem);
     }
 
     [Fact]
@@ -378,7 +406,7 @@ public class VintageCoinControlTests
             Utxo("cb413-2", 41_300_000, (41_300_000, Pure413)),
             Utxo("elsewhere", 5_000_000_000, (5_000_000_000, Other)));
 
-        var plan = VintageCoinControl.PlanWholeBlock(report, Pure413, "Bcollector", 0).Plan!;
+        var plan = VintageCoinControl.PlanWholeBlock(report, Pure413, TestAddr.Collector, 0).Plan!;
 
         Assert.Equal(3, plan.Inputs.Count);                       // all three outputs
         var only = Assert.Single(plan.Outputs);                   // one output, no change
@@ -412,7 +440,7 @@ public class VintageCoinControlTests
         Assert.Equal(Pure413, Assert.Single(only413).Height);
 
         // And the listed figure is what a whole-block send actually delivers.
-        var plan = VintageCoinControl.PlanWholeBlock(report, Pure413, "Bcollector", 0).Plan!;
+        var plan = VintageCoinControl.PlanWholeBlock(report, Pure413, TestAddr.Collector, 0).Plan!;
         Assert.Equal(41_258_700_000, Assert.Single(plan.Outputs).Satoshis);
     }
 
@@ -421,7 +449,7 @@ public class VintageCoinControlTests
     {
         var report = Report(Utxo("pure", 500, (500, Pure413)));
 
-        var result = VintageCoinControl.PlanWholeBlock(report, 999_999, "Bcollector", 0);
+        var result = VintageCoinControl.PlanWholeBlock(report, 999_999, TestAddr.Collector, 0);
 
         Assert.Null(result.Plan);
         Assert.Contains("no whole outputs minted by block 999,999", result.Problem);
@@ -456,7 +484,7 @@ public class VintageCoinControlTests
 
         // And because it is year-pure, the whole coin can be sent as that vintage.
         var plan = VintageCoinControl.PlanSend(report, year.Heights, year.FirstHeight, 1000,
-            "Brecipient", "Bchange", 0, pureOnly: true).Plan!;
+            TestAddr.Recipient, TestAddr.Change, 0, pureOnly: true).Plan!;
         Assert.Equal(1000, VintageCoinControl.VerifyVintageDelivered(plan, report));
     }
 
@@ -472,13 +500,13 @@ public class VintageCoinControlTests
 
         // Pure-only must REFUSE rather than quietly slicing the blended coin.
         var refused = VintageCoinControl.PlanSend(report, heights, Pure413, 350,
-            "Brecipient", "Bchange", 0, pureOnly: true, dustThresholdSatoshis: 0);
+            TestAddr.Recipient, TestAddr.Change, 0, pureOnly: true, dustThresholdSatoshis: 0);
         Assert.Null(refused.Plan);
         Assert.Contains("Pure coins of that vintage total 300", refused.Problem);
 
         // The same request WITHOUT the restriction slices the blended coin instead.
         var sliced = VintageCoinControl.PlanSend(report, heights, Pure413, 350,
-            "Brecipient", "Bchange", 0, dustThresholdSatoshis: 0).Plan!;
+            TestAddr.Recipient, TestAddr.Change, 0, dustThresholdSatoshis: 0).Plan!;
         Assert.Equal("blended", Assert.Single(sliced.Inputs).TxId);
         Assert.Equal(350, VintageCoinControl.VerifyVintageDelivered(sliced, report));
     }
@@ -490,13 +518,13 @@ public class VintageCoinControlTests
     {
         var report = Report(Utxo("pure", 1000, (1000, Pure413)));
 
-        var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 600, "Brecipient", "Bchange", 10, dustThresholdSatoshis: 0);
+        var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 600, TestAddr.Recipient, TestAddr.Change, 10, dustThresholdSatoshis: 0);
 
         var plan = result.Plan!;
         Assert.Null(result.Problem);
         Assert.True(plan.Balances);                         // 1000 in = 990 out + 10 fee
         Assert.Collection(plan.Outputs,
-            o => { Assert.Equal(OutputRole.Vintage, o.Role); Assert.Equal(600, o.Satoshis); Assert.Equal("Brecipient", o.Address); },
+            o => { Assert.Equal(OutputRole.Vintage, o.Role); Assert.Equal(600, o.Satoshis); Assert.Equal(TestAddr.Recipient, o.Address); },
             o => { Assert.Equal(OutputRole.Change, o.Role); Assert.Equal(390, o.Satoshis); });
         Assert.Equal(600, VintageCoinControl.VerifyVintageDelivered(plan, report));
     }
@@ -512,10 +540,10 @@ public class VintageCoinControlTests
         var heights = new HashSet<long> { Pure413 };
 
         Assert.Contains("dust limit",
-            VintageCoinControl.PlanSend(report, heights, Pure413, 10, "Bfriend", "Bchange", 0).Problem);
+            VintageCoinControl.PlanSend(report, heights, Pure413, 10, TestAddr.Friend, TestAddr.Change, 0).Problem);
 
         var plan = VintageCoinControl.PlanSend(report, heights, Pure413,
-            VintageCoinControl.DustThresholdSatoshis, "Bfriend", "Bchange", 0).Plan!;
+            VintageCoinControl.DustThresholdSatoshis, TestAddr.Friend, TestAddr.Change, 0).Plan!;
 
         Assert.Equal(546, plan.SendAmount);
         Assert.Equal(546, VintageCoinControl.VerifyVintageDelivered(plan, report));
@@ -531,16 +559,16 @@ public class VintageCoinControlTests
         // 1000-sat output: [0,600) other lineage, [600,1000) the vintage.
         var report = Report(Utxo("blended", 1000, (600, Other), (400, Pure413)));
 
-        var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 300, "Brecipient", "Bchange", 10,
-            dustThresholdSatoshis: 0, leadingChangeAddress: "Blead");
+        var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 300, TestAddr.Recipient, TestAddr.Change, 10,
+            dustThresholdSatoshis: 0, leadingChangeAddress: TestAddr.Lead);
 
         // Change on both sides of the run goes to TWO addresses — the node refuses a
         // transaction that pays one address twice (found live 2026-09-30).
         var plan = result.Plan!;
         Assert.Collection(plan.Outputs,
-            o => { Assert.Equal(OutputRole.LeadingChange, o.Role); Assert.Equal(600, o.Satoshis); Assert.Equal("Blead", o.Address); },
-            o => { Assert.Equal(OutputRole.Vintage, o.Role); Assert.Equal(300, o.Satoshis); Assert.Equal("Brecipient", o.Address); },
-            o => { Assert.Equal(OutputRole.Change, o.Role); Assert.Equal(90, o.Satoshis); Assert.Equal("Bchange", o.Address); });
+            o => { Assert.Equal(OutputRole.LeadingChange, o.Role); Assert.Equal(600, o.Satoshis); Assert.Equal(TestAddr.Lead, o.Address); },
+            o => { Assert.Equal(OutputRole.Vintage, o.Role); Assert.Equal(300, o.Satoshis); Assert.Equal(TestAddr.Recipient, o.Address); },
+            o => { Assert.Equal(OutputRole.Change, o.Role); Assert.Equal(90, o.Satoshis); Assert.Equal(TestAddr.Change, o.Address); });
         Assert.True(plan.Balances);
 
         // The proof: the recipient's slot really lands on the vintage run.
@@ -556,12 +584,12 @@ public class VintageCoinControlTests
         // planner now says so itself, with the fix in the message.
         var report = Report(Utxo("blended", 1000, (600, Other), (400, Pure413)));
 
-        var noSecond = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 300, "Brecipient", "Bchange", 10, dustThresholdSatoshis: 0);
+        var noSecond = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 300, TestAddr.Recipient, TestAddr.Change, 10, dustThresholdSatoshis: 0);
         Assert.Null(noSecond.Plan);
         Assert.Contains("second change address", noSecond.Problem);
 
-        var sameSecond = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 300, "Brecipient", "Bchange", 10,
-            dustThresholdSatoshis: 0, leadingChangeAddress: "Bchange");
+        var sameSecond = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 300, TestAddr.Recipient, TestAddr.Change, 10,
+            dustThresholdSatoshis: 0, leadingChangeAddress: TestAddr.Change);
         Assert.Null(sameSecond.Plan);
         Assert.Contains("second change address", sameSecond.Problem);
     }
@@ -572,10 +600,10 @@ public class VintageCoinControlTests
         // Vintage at the END, whole run sent, zero fee: leading change only — one address is fine.
         var report = Report(Utxo("blended", 1000, (600, Other), (400, Pure413)));
 
-        var plan = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 400, "Brecipient", "Bchange", 0, dustThresholdSatoshis: 0).Plan!;
+        var plan = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 400, TestAddr.Recipient, TestAddr.Change, 0, dustThresholdSatoshis: 0).Plan!;
 
         Assert.Collection(plan.Outputs,
-            o => { Assert.Equal(OutputRole.LeadingChange, o.Role); Assert.Equal("Bchange", o.Address); },
+            o => { Assert.Equal(OutputRole.LeadingChange, o.Role); Assert.Equal(TestAddr.Change, o.Address); },
             o => Assert.Equal(OutputRole.Vintage, o.Role));
         Assert.Equal(400, VintageCoinControl.VerifyVintageDelivered(plan, report));
     }
@@ -585,10 +613,10 @@ public class VintageCoinControlTests
     {
         var report = Report(Utxo("pure", 1000, (1000, Pure413)));
 
-        var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 400, "Bsame", "Bsame", 0, dustThresholdSatoshis: 0);
+        var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 400, TestAddr.Same, TestAddr.Same, 0, dustThresholdSatoshis: 0);
 
         Assert.Null(result.Plan);
-        Assert.Contains("pay Bsame twice", result.Problem);
+        Assert.Contains($"pay {TestAddr.Same} twice", result.Problem);
     }
 
     [Fact]
@@ -598,7 +626,7 @@ public class VintageCoinControlTests
         // vintage — the planner must refuse rather than quietly send fewer vintage sats.
         var report = Report(Utxo("blended", 1000, (600, Other), (400, Pure413)));
 
-        var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 400, "Brecipient", "Bchange", 10, dustThresholdSatoshis: 0);
+        var result = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 400, TestAddr.Recipient, TestAddr.Change, 10, dustThresholdSatoshis: 0);
 
         Assert.Null(result.Plan);
         Assert.Contains("fee would eat into the vintage", result.Problem);
@@ -609,7 +637,7 @@ public class VintageCoinControlTests
     {
         var report = Report(Utxo("blended", 1000, (400, Pure413), (600, Other)));
 
-        var plan = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 400, "Brecipient", "Bchange", 10, dustThresholdSatoshis: 0).Plan!;
+        var plan = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 400, TestAddr.Recipient, TestAddr.Change, 10, dustThresholdSatoshis: 0).Plan!;
 
         Assert.Collection(plan.Outputs,
             o => { Assert.Equal(OutputRole.Vintage, o.Role); Assert.Equal(400, o.Satoshis); },
@@ -624,10 +652,10 @@ public class VintageCoinControlTests
     {
         var report = Report(Utxo("pure", 500, (500, Pure413)));
 
-        Assert.Contains("Only 500", VintageCoinControl.PlanSend(report, Pure413, 900, "B", "B", 0).Problem);
-        Assert.Contains("holds none", VintageCoinControl.PlanSend(report, 999_999, 10, "B", "B", 0).Problem);
-        Assert.Contains("positive", VintageCoinControl.PlanSend(report, Pure413, 0, "B", "B", 0).Problem);
-        Assert.Contains("recipient", VintageCoinControl.PlanSend(report, Pure413, 10, " ", "B", 0).Problem);
+        Assert.Contains("Only 500", VintageCoinControl.PlanSend(report, Pure413, 900, TestAddr.Recipient, TestAddr.Recipient, 0).Problem);
+        Assert.Contains("holds none", VintageCoinControl.PlanSend(report, 999_999, 10, TestAddr.Recipient, TestAddr.Recipient, 0).Problem);
+        Assert.Contains("positive", VintageCoinControl.PlanSend(report, Pure413, 0, TestAddr.Recipient, TestAddr.Recipient, 0).Problem);
+        Assert.Contains("recipient", VintageCoinControl.PlanSend(report, Pure413, 10, " ", TestAddr.Recipient, 0).Problem);
     }
 
     [Fact]
@@ -639,7 +667,7 @@ public class VintageCoinControlTests
             Utxo("a", 1000, (200, Pure413), (800, Other)),
             Utxo("b", 1000, (200, Pure413), (800, Other)));
 
-        var result = VintageCoinControl.PlanSend(report, Pure413, 400, "B", "Bchange", 0);
+        var result = VintageCoinControl.PlanSend(report, Pure413, 400, TestAddr.Recipient, TestAddr.Change, 0);
 
         Assert.Null(result.Plan);
         Assert.Contains("runs smaller than the amount", result.Problem);
@@ -655,7 +683,7 @@ public class VintageCoinControlTests
             Utxo("p2", 300, (300, Pure413)),
             Utxo("p3", 300, (300, Pure413)));
 
-        var plan = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 800, "Brecipient", "Bchange", 0, dustThresholdSatoshis: 0).Plan!;
+        var plan = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 800, TestAddr.Recipient, TestAddr.Change, 0, dustThresholdSatoshis: 0).Plan!;
 
         Assert.Equal(3, plan.Inputs.Count);
         Assert.Contains(plan.Warnings, w => w.Contains("merge into one lineage stream"));
@@ -667,7 +695,7 @@ public class VintageCoinControlTests
     {
         var report = Report(Utxo("pure", 1000, (1000, Pure413)));
 
-        var plan = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 500, "Brecipient", "Bchange", 25, dustThresholdSatoshis: 0).Plan!;
+        var plan = VintageCoinControl.PlanSend(report, new HashSet<long> { Pure413 }, Pure413, 500, TestAddr.Recipient, TestAddr.Change, 25, dustThresholdSatoshis: 0).Plan!;
 
         Assert.Contains(plan.Warnings, w => w.Contains("fee is taken from the tail"));
         Assert.Contains(plan.Warnings, w => w.Contains("return as change"));
@@ -679,7 +707,7 @@ public class VintageCoinControlTests
         var report = Report(Utxo("known", 500, (500, Pure413)));
         var bogus = new VintageSendPlan(Pure413, new HashSet<long> { Pure413 },
             new[] { new PlannedInput("unknown-txid", 0, 500) },
-            new[] { new PlannedOutput("B", 500, OutputRole.Vintage) }, 0, Array.Empty<string>());
+            new[] { new PlannedOutput(TestAddr.Recipient, 500, OutputRole.Vintage) }, 0, Array.Empty<string>());
 
         Assert.Equal(0, VintageCoinControl.VerifyVintageDelivered(bogus, report));
     }

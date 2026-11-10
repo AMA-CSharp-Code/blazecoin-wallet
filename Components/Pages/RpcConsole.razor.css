@@ -291,3 +291,17 @@
 
 @keyframes netScanline { 0% { background-position: 0 0; } 100% { background-position: 0 4px; } }
 @keyframes netSweep    { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Which wallet a wallet command runs against (2026-11-09) — a plain strip under the header bar. */
+.console-wallet {
+    background-color: #000;
+    border-bottom: 2px solid white;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 0.35rem 1.5rem;
+    text-align: left;
+    font-size: 0.9rem;
+}
+
+.console-wallet strong {
+    color: #fff;
+}

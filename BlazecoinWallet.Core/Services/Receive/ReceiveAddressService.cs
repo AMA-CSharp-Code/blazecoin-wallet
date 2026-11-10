@@ -47,7 +47,7 @@ public sealed class ReceiveAddressService : IReceiveAddressService
         bool? can;
         try { can = await _mint.CanMintPostQuantumAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { can = null; }
-        return can == false ? BlazecoinAddressKind.Legacy : BlazecoinAddressKind.PostQuantum;
+        return Send.PostQuantumPreference.ForReceive(can);   // the one rule; why it differs from change is written there
     }
 
     public async Task<ReceiveAddressResult> NewAsync(string label, BlazecoinAddressKind kind, CancellationToken ct = default)

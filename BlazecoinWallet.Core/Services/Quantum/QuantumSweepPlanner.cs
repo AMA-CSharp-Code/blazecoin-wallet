@@ -55,7 +55,7 @@ public static class QuantumSweepPlanner
     public const long DefaultFeeRateSatPerKb = 100_000;
     /// <summary>A whole-block-sized sweep is pointless; batches keep each tx comfortably relayable.</summary>
     public const int DefaultMaxInputsPerTx = 400;
-    public const long DustThresholdSatoshis = VintageCoinControl.DustThresholdSatoshis;
+    public const long DustThresholdSatoshis = DustPolicy.LegacyFloorSatoshis;
 
     // Legacy P2PKH sizing: 148 bytes per input (compressed key), 34 per output, 10 overhead.
     private const int BytesPerInput = 148, BytesPerOutput = 34, BytesOverhead = 10;
@@ -90,8 +90,10 @@ public static class QuantumSweepPlanner
         long dustThresholdSatoshis = DustThresholdSatoshis)
     {
         if (string.IsNullOrWhiteSpace(destination)) return SweepPlanResult.Fail("No destination address.");
+        // The one "can this address be paid" rule (PayableAddress): a B… or a BQ… address, nothing else.
+        if (PayableAddress.Problem(destination, "destination") is { } notPayable) return SweepPlanResult.Fail(notPayable);
         var kind = KindOf(destination);
-        if (kind is null) return SweepPlanResult.Fail("The destination is not a valid Blazecoin address (a legacy B… or a post-quantum BQ… address).");
+        if (kind is null) return SweepPlanResult.Fail("The destination cannot be paid.");   // not reached: a payable address has a kind
         if (feeRateSatPerKb < 0) return SweepPlanResult.Fail("The fee rate cannot be negative.");
         if (maxInputsPerTx < 1) return SweepPlanResult.Fail("At least one input per transaction is needed.");
         // The size model prices legacy inputs; a PQ input is ~3,782 vbytes and is already safe.
@@ -117,7 +119,7 @@ public static class QuantumSweepPlanner
             var total = inputs.Sum(i => i.Satoshis);
             var output = total - fee;
             // The sweep's one output, against the limit for the destination's kind (BQ… is 11,475).
-            var floor = VintageCoinControl.DustThresholdFor(destination.Trim(), dustThresholdSatoshis);
+            var floor = DustPolicy.FloorFor(destination.Trim(), dustThresholdSatoshis);
             if (output < floor)
             {
                 warnings.Add($"A batch of {inputs.Count} output(s) worth {total:N0} sats would leave {output:N0} sats after the fee — below the {floor} dust floor, left behind.");

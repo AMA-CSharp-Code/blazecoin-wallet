@@ -20,7 +20,7 @@ namespace BlazecoinWallet.Web.Wasm;
 /// session-only). ISeedVault callers (LiteWalletService) only ever see the in-memory
 /// side — by the time any page runs, the gate has resolved the state.
 /// </summary>
-public sealed class BrowserEncryptedSeedVault(IJSRuntime js) : ISeedVault
+public sealed class BrowserEncryptedSeedVault(IJSRuntime js) : ISeedVault, IWalletPassword
 {
     /// <summary>The localStorage key vault-crypto.js writes the blob under — exposed so the
     /// locker can probe "is there a re-lockable vault?" synchronously via BrowserKv.</summary>
@@ -80,6 +80,13 @@ public sealed class BrowserEncryptedSeedVault(IJSRuntime js) : ISeedVault
         StateChanged?.Invoke();
         return true;
     }
+
+    // IWalletPassword: the check behind "show my recovery phrase" (bug-bounty report 2026-11-09).
+    // A decrypt of the stored blob that is thrown away: right password or not, nothing changes.
+    Task<bool> IWalletPassword.IsSetAsync() => HasEncryptedBlobAsync();
+
+    async Task<bool> IWalletPassword.CheckAsync(string password) =>
+        await (await ModuleAsync()).InvokeAsync<string?>("unlock", password) is not null;
 
     /// <summary>Encrypts the in-memory seed under the password and persists it.</summary>
     public async Task ProtectWithPasswordAsync(string password)

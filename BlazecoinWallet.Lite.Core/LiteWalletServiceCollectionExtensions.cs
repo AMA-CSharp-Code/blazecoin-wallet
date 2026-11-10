@@ -96,9 +96,21 @@ public static class LiteWalletServiceCollectionExtensions
                         options.InnerHandlerFactory?.Invoke() ?? new HttpClientHandler()));
                 return new HttpClient(failover) { BaseAddress = failover.Primary, Timeout = Timeout.InfiniteTimeSpan };
             });
-            services.AddSingleton<ILiteWalletData>(sp => new IndexerDataService(
+            services.AddSingleton(sp => new IndexerDataService(
                 sp.GetRequiredService<HttpClient>(),
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<IndexerDataService>()));
+            services.AddSingleton<ILiteWalletData>(sp => sp.GetRequiredService<IndexerDataService>());
+            // What the gateway client can do BESIDES read and relay, each registered under its own
+            // name and handed to the consumer that needs it (audit 2026-11-09). They used to be
+            // found by testing what the reader "is", so anything wrapped around the reader — a
+            // cache, a log — silently switched a protection off. Personal-node mode registers none:
+            // the user's own node is authoritative and there is nobody else to ask.
+            services.AddSingleton<ISpendCrossCheck>(sp => sp.GetRequiredService<IndexerDataService>());
+            services.AddSingleton<IAddressUsageCrossCheck>(sp => sp.GetRequiredService<IndexerDataService>());
+            services.AddSingleton<IHeaderCrossCheck>(sp => sp.GetRequiredService<IndexerDataService>());
+            // The header feed: absent for a head that opted out (see DisableHeaderChainSync).
+            if (!options.DisableHeaderChainSync)
+                services.AddSingleton<IHeaderReader>(sp => sp.GetRequiredService<IndexerDataService>());
         }
 
         // ISP aliases — consumers depend on the slice they need, one instance serves both.
@@ -124,6 +136,10 @@ public static class LiteWalletServiceCollectionExtensions
         services.TryAddSingleton<IWatchList, InMemoryWatchList>();
         services.TryAddSingleton<IPinLock, InMemoryPinLock>();
         services.TryAddSingleton<IBiometricAuth, NullBiometricAuth>();
+        services.AddSecretRevealGate();
+        // Screen-capture protection for pages that show a phrase or a key (2026-11-09). Default =
+        // nothing to switch; a head whose platform can protect a window registers its own BEFORE this.
+        services.TryAddSingleton<IScreenCaptureGuard, NullScreenCaptureGuard>();
         services.AddSingleton<AppLockSession>();
         // Locking (2026-08-23): the shared 🔒 button + idle policy call these. Default = the PIN
         // gate only; a head whose vault can be re-locked (web) registers its own BEFORE this.
@@ -134,15 +150,16 @@ public static class LiteWalletServiceCollectionExtensions
         services.TryAddSingleton<IWalletStateStore, InMemoryWalletStateStore>();
 
         // Trustless header-chain sync (M3 residual): only the gateway feed serves headers
-        // (IndexerDataService is an IHeaderReader; the personal node isn't and doesn't need to
-        // be — its own chainstate is authoritative). When present, it caps maturity to the
+        // (registered above as IHeaderReader; the personal node has none and doesn't need one —
+        // its own chainstate is authoritative). When present, it caps maturity to the
         // PoW-verified tip so a gateway can't fake confirmations. A head can opt out via
-        // DisableHeaderChainSync (the WASM head must — see the option's doc); a null feed
+        // DisableHeaderChainSync (the WASM dev server does — see the option's doc); a null feed
         // makes Available false, which every consumer already handles as "fall back to the
-        // gateway's counts".
+        // gateway's counts". The second gateway its runs are put to is handed in beside it.
         services.AddSingleton(sp => new HeaderChainSync(
-            options.DisableHeaderChainSync ? null : sp.GetRequiredService<IChainReader>() as IHeaderReader,
-            sp.GetRequiredService<IWalletStateStore>()));
+            sp.GetService<IHeaderReader>(),
+            sp.GetRequiredService<IWalletStateStore>(),
+            crossCheck: sp.GetService<IHeaderCrossCheck>()));
 
         // Trustless input verifier (C1/M3) ONLY for a semi-trusted source — gateway mode.
         // Personal-node values come from the user's own chainstate, so there's nobody to
@@ -158,7 +175,9 @@ public static class LiteWalletServiceCollectionExtensions
                     headerChain: sp.GetRequiredService<HeaderChainSync>())
                 : null,
             sp.GetRequiredService<IWalletStateStore>(),
-            sp.GetRequiredService<HeaderChainSync>())
+            sp.GetRequiredService<HeaderChainSync>(),
+            spendCrossCheck: sp.GetService<ISpendCrossCheck>(),
+            addressUsage: sp.GetService<IAddressUsageCrossCheck>())
         {
             // Once per session, look one gap past the saved address counts for coins a restore
             // was told did not exist (bug-bounty report 2026-11-06, third round).
@@ -185,6 +204,20 @@ public static class LiteWalletServiceCollectionExtensions
         // Transient comet recolour on the Home balance card (green = received, orange = sent).
         services.TryAddSingleton<CometPulse>();
 
+        return services;
+    }
+
+    /// <summary>The second look before a recovery phrase is shown (2026-11-09): the wallet
+    /// password where the head registered an <see cref="IWalletPassword"/>, else the PIN. The
+    /// gate hands out the phrase itself, under the one guessing limit the PIN gate shares
+    /// (<see cref="AttemptLimiter"/>, audit 2026-11-09).</summary>
+    public static IServiceCollection AddSecretRevealGate(this IServiceCollection services)
+    {
+        services.TryAddSingleton<AttemptLimiter>();
+        services.TryAddSingleton<ISecretRevealGate>(sp =>
+            new SecretRevealGate(sp.GetRequiredService<IPinLock>(), sp.GetService<IWalletPassword>(),
+                () => sp.GetRequiredService<LiteWalletService>().RevealMnemonicAsync(),
+                sp.GetRequiredService<AttemptLimiter>(), sp.GetService<IWalletLocker>()));
         return services;
     }
 }

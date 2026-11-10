@@ -11,7 +11,11 @@ namespace BlazecoinWallet.Core.Services.Quantum;
 /// <item>a destination that is not this wallet's is flagged before anything is signed;</item>
 /// <item>broadcasting needs the "irreversible" acknowledgement, plus a backup acknowledgement for a
 ///   BQ… destination (a backup made before the wallet's post-quantum keys existed cannot recover the coins);</item>
-/// <item>a plan is broadcast at most once — it is cleared before the first send.</item>
+/// <item>a plan is broadcast at most once — it is cleared before the first send;</item>
+/// <item>the sweep is BOUND to one wallet (audit 2026-11-09): the wallet on screen when its first
+///   address is asked for. The destination is minted there, "is it mine" is asked there, every
+///   batch is signed there — and every step refuses once that wallet is no longer the active one.
+///   Until then each of those calls followed whichever wallet was active at that moment.</item>
 /// </list>
 /// </summary>
 public sealed class QuantumSweepSession
@@ -19,16 +23,40 @@ public sealed class QuantumSweepSession
     public const string PostQuantumLabel = "post-quantum sweep";
     public const string LegacyLabel = "quantum-sweep";
 
-    private readonly ISweepDestinationRpc _destinations;
+    private readonly IBoundWalletRpc _destinations;
     private readonly ISweepBroadcaster _broadcaster;
     private readonly IPostQuantumWalletCreator _walletCreator;
+    private readonly IWalletBinding _binding;
     private PqAddressResult? _pqAttempt;
 
-    public QuantumSweepSession(ISweepDestinationRpc destinations, ISweepBroadcaster broadcaster, IPostQuantumWalletCreator walletCreator)
+    public QuantumSweepSession(IBoundWalletRpc destinations, ISweepBroadcaster broadcaster, IPostQuantumWalletCreator walletCreator, IWalletBinding binding)
     {
         _destinations = destinations ?? throw new ArgumentNullException(nameof(destinations));
         _broadcaster = broadcaster ?? throw new ArgumentNullException(nameof(broadcaster));
         _walletCreator = walletCreator ?? throw new ArgumentNullException(nameof(walletCreator));
+        _binding = binding ?? throw new ArgumentNullException(nameof(binding));
+    }
+
+    /// <summary>The wallet this sweep is bound to ("" = the node's default wallet endpoint); null
+    /// until its first step that needs one.</summary>
+    public string? Wallet { get; private set; }
+
+    /// <summary>
+    /// Binds the sweep to the wallet on screen the first time a step needs a wallet — refused, like
+    /// any write, while the app has moved to another wallet and the user has not acknowledged it —
+    /// and from then on checks that it is still the active one. False, with <see cref="Problem"/>
+    /// saying why in the Send page's words, when the step must not run.
+    /// </summary>
+    private bool BoundToTheActiveWallet()
+    {
+        if (Wallet is null)
+        {
+            try { Wallet = _binding.BindActiveForWrite(); return true; }
+            catch (WalletSwitchPendingException ex) { Problem = ex.Message; return false; }
+        }
+        if (_binding.IsStillActive(Wallet, out var activeNow)) return true;
+        Problem = WalletBinding.MovedMessage(Wallet, activeNow);
+        return false;
     }
 
     /// <summary>Sending or creating a wallet: every other action waits.</summary>
@@ -101,23 +129,25 @@ public sealed class QuantumSweepSession
         ClearPlan();
         Destination = "";
         _pqAttempt = null;
+        Wallet = null;          // a new selection is a new sweep: it binds afresh
         if (selection is not null) await NewPostQuantumDestinationAsync(ct);
     }
 
     public void Close()
     {
         if (Busy) return;
-        Selection = null; Destination = ""; _pqAttempt = null; LastBroadcast = null; CreatedWallet = null;
+        Selection = null; Destination = ""; _pqAttempt = null; LastBroadcast = null; CreatedWallet = null; Wallet = null;
         ClearPlan();
     }
 
-    /// <summary>Mints a fresh BQ… address in the active wallet as the destination.</summary>
+    /// <summary>Mints a fresh BQ… address in the sweep's wallet as the destination.</summary>
     public async Task NewPostQuantumDestinationAsync(CancellationToken ct = default)
     {
         if (Busy) return;
         ClearPlan();
+        if (!BoundToTheActiveWallet()) { Destination = ""; return; }
         PqAddressResult r;
-        try { r = await _destinations.GetNewPostQuantumAddressAsync(PostQuantumLabel, ct); }
+        try { r = await _destinations.MintPostQuantumAddressAsync(Wallet!, PostQuantumLabel, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { r = PqAddressResult.Fail(PqAddressOutcome.Failed, ex.Message); }
         _pqAttempt = r;
         Destination = r.IsOk ? r.Address! : "";
@@ -135,7 +165,8 @@ public sealed class QuantumSweepSession
                 : "A legacy destination is only offered when this wallet cannot make a BQ… address.";
             return;
         }
-        try { Destination = await _destinations.GetNewLegacyAddressAsync(LegacyLabel, ct) ?? ""; }
+        if (!BoundToTheActiveWallet()) return;
+        try { Destination = await _destinations.MintLegacyAddressAsync(Wallet!, LegacyLabel, ct) ?? ""; }
         catch (Exception ex) when (ex is not OperationCanceledException) { Problem = $"Couldn't get a fresh address: {ex.Message}"; }
     }
 
@@ -153,6 +184,7 @@ public sealed class QuantumSweepSession
         ClearPlan();
         LastBroadcast = null;
         if (Selection is null) { Problem = "Nothing selected."; return; }
+        if (!BoundToTheActiveWallet()) return;
         if (DestinationKind == SweepDestinationKind.Legacy && !Selection.ContainsExposed)
         {
             Problem = "These coins are unexposed: moving them to another legacy address gains nothing. Use a BQ… address.";
@@ -173,7 +205,7 @@ public sealed class QuantumSweepSession
             Plan = result.Plan;
             return;
         }
-        DestinationIsMine = await _destinations.IsMineAsync(Destination, ct);
+        DestinationIsMine = await _destinations.OwnsAddressAsync(Wallet!, Destination, ct);
         if (DestinationIsMine == false)
             warnings.Insert(0, "This destination is NOT an address of this wallet. Make sure you hold its keys and have a backup of the wallet that owns it.");
         else if (DestinationIsMine is null)
@@ -199,10 +231,13 @@ public sealed class QuantumSweepSession
         }
         var plan = Plan!;
         ClearPlan();            // a plan goes out at most once, whatever happens next
+        // Planned on one wallet, and the app is on another now: nothing is signed, nothing is sent.
+        // (The broadcaster asks again before every batch.)
+        if (!BoundToTheActiveWallet()) return null;
         IsSending = true;
         try
         {
-            LastBroadcast = await _broadcaster.BroadcastAsync(plan, ct);
+            LastBroadcast = await _broadcaster.BroadcastAsync(plan, Wallet!, ct);
             return LastBroadcast;
         }
         finally { IsSending = false; }

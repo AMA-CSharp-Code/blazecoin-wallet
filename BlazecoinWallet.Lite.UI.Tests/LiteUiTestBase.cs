@@ -15,9 +15,11 @@ public abstract class LiteUiTestBase : TestContext
     protected sealed class LoadedVault : ISeedVault
     {
         public string? Words = TestMnemonic;
+        /// <summary>How often the phrase has been read out of the vault.</summary>
+        public int Loads;
         public Task<bool> HasWalletAsync() => Task.FromResult(Words != null);
         public Task SaveMnemonicAsync(string m) { Words = m; return Task.CompletedTask; }
-        public Task<string?> LoadMnemonicAsync() => Task.FromResult(Words);
+        public Task<string?> LoadMnemonicAsync() { Loads++; return Task.FromResult(Words); }
         public Task ClearAsync() { Words = null; return Task.CompletedTask; }
     }
 
@@ -90,6 +92,11 @@ public abstract class LiteUiTestBase : TestContext
         Services.AddSingleton<IWatchList, InMemoryWatchList>();
         Services.AddSingleton<IPinLock, InMemoryPinLock>();
         Services.AddSingleton<IBiometricAuth, NullBiometricAuth>();
+        // A test that watches screen-capture protection registers its own guard before calling Wire.
+        if (!Services.Any(d => d.ServiceType == typeof(IScreenCaptureGuard)))
+            Services.AddSingleton<IScreenCaptureGuard, NullScreenCaptureGuard>();
+        // A test of the phrase's second look registers its own gate (or wallet password) before Wire.
+        Services.AddSecretRevealGate();
         Services.AddSingleton<AppLockSession>();
         Services.AddSingleton<IWalletLocker, PinGateWalletLocker>();
         Services.AddSingleton<IAutoLockSettings, InMemoryAutoLockSettings>();

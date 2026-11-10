@@ -761,3 +761,17 @@
     color: rgba(255, 255, 255, 0.6);
     text-align: center;
 }
+
+/* An amount that could not be read (2026-11-09: the amount fields are text, read by one strict
+   grammar). Opaque so it reads over the animated page background. */
+.amount-unreadable {
+    display: block;
+    margin-top: 0.4rem;
+    padding: 0.35rem 0.6rem;
+    background: #000;
+    border: 1px solid #d10000;
+    color: #ffb3b3;
+    font-size: 0.8rem;
+    line-height: 1.35;
+    text-align: left;
+}

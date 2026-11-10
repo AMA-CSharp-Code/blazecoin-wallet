@@ -18,6 +18,18 @@ namespace BlazecoinWallet.Lite.Data;
 public sealed record UtxoVerification(bool Verified, long RealSatoshis, bool IncludedInBlock, string? Error,
     bool IsCoinbase = false, long? VerifiedHeight = null);
 
+/// <summary>What the evidence for a claimed spend showed (<see cref="LiteTxVerifier.JudgeSpendAsync"/>).</summary>
+public enum SpendProof
+{
+    /// <summary>The spending transaction is real, names the output, and is mined on the chain.</summary>
+    Proven,
+    /// <summary>The evidence was checked and does not hold (or was asked for and not served).</summary>
+    Failed,
+    /// <summary>The evidence looked right but its block could not be placed: the headers were not
+    /// to be had. Nothing was learned about the claim.</summary>
+    CannotCheck,
+}
+
 /// <summary>
 /// TRUSTLESS input verification — the C1/M3 fix. A txid is the double-SHA256 of the whole
 /// serialized transaction, so it CRYPTOGRAPHICALLY COMMITS to every output value. Therefore,
@@ -127,22 +139,27 @@ public sealed class LiteTxVerifier
         var proofHex = await _reader.GetTxOutProofAsync(txId, ct);
         if (string.IsNullOrWhiteSpace(proofHex))
             return ("No merkle inclusion proof was available for the funding transaction.", null);
-        return await InclusionFromProofAsync(proofHex, txId, claimedBlockHeight, ct);
+        var (error, height, _) = await InclusionFromProofAsync(proofHex, txId, claimedBlockHeight, ct);
+        return (error, height);
     }
 
-    /// <summary>The same test for a proof already in hand (whoever served it).</summary>
-    private async Task<(string? Error, long? Height)> InclusionFromProofAsync(string proofHex, string txId, long claimedBlockHeight, CancellationToken ct)
+    /// <summary>The same test for a proof already in hand (whoever served it). The membership is
+    /// the header chain's verdict on the proof's block (null when the proof itself failed, or no
+    /// header feed is wired); <paramref name="notFrom"/> keeps the headers that place the block
+    /// away from those gateways (<see cref="HeaderChainSync.LocateAsync"/>).</summary>
+    private async Task<(string? Error, long? Height, ChainMembership? Membership)> InclusionFromProofAsync(
+        string proofHex, string txId, long claimedBlockHeight, CancellationToken ct, IReadOnlyCollection<Uri>? notFrom = null)
     {
         var (proofOk, blockHash) = CheckProof(proofHex, txId);
         if (!proofOk || blockHash == null)
-            return ("The merkle inclusion proof did not verify — the transaction may not be mined.", null);
+            return ("The merkle inclusion proof did not verify — the transaction may not be mined.", null, null);
         if (_headerChain is { Available: true })
         {
-            var where = await _headerChain.LocateAsync(blockHash, claimedBlockHeight, ct);
-            if (where.Membership != ChainMembership.OnChain) return (ChainError(where.Membership), null);
-            return (null, where.Height);
+            var where = await _headerChain.LocateAsync(blockHash, claimedBlockHeight, ct, notFrom);
+            if (where.Membership != ChainMembership.OnChain) return (ChainError(where.Membership), null, where.Membership);
+            return (null, where.Height, where.Membership);
         }
-        return (null, null);
+        return (null, null, null);
     }
 
     /// <summary>
@@ -154,28 +171,43 @@ public sealed class LiteTxVerifier
     /// exact output among its inputs, and must be mined — the same inclusion test a coin's own
     /// transaction passes, against the header chain wherever one is wired. The evidence comes
     /// with the claim (<see cref="LiteSpendClaim"/>), served by a gateway other than the one that
-    /// listed the coin; nothing here asks the reader, so the lister cannot withhold it.
+    /// listed the coin, so the lister cannot withhold it.
     /// <para>The spender's signature is not evaluated: with a header chain the block's work is
     /// what makes the transaction real, and a head without one already treats every proof as a
     /// sanity check (see the class summary).</para>
     /// </summary>
-    public async Task<bool> VerifySpendAsync(LiteSpendClaim claim, CancellationToken ct = default)
+    public async Task<bool> VerifySpendAsync(LiteSpendClaim claim, CancellationToken ct = default) =>
+        await JudgeSpendAsync(claim, null, ct) == SpendProof.Proven;
+
+    /// <summary>
+    /// <see cref="VerifySpendAsync"/> with the two things a caller checking a gateway's listing
+    /// needs (audit 2026-11-09). <paramref name="notFrom"/> — the gateway that LISTED the coin:
+    /// the headers that place the spender's block are fetched like the evidence was, from another
+    /// server, because the lister could otherwise leave the spend unproven by serving none of
+    /// them. And the answer tells a proof that was checked and FAILED from one that could not be
+    /// checked for want of headers (<see cref="SpendProof.CannotCheck"/>), which says nothing
+    /// about the claim either way. A claim that names no height can never be checked: it fails.
+    /// </summary>
+    public async Task<SpendProof> JudgeSpendAsync(LiteSpendClaim claim, IReadOnlyCollection<Uri>? notFrom, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(claim.SpenderHex) || string.IsNullOrWhiteSpace(claim.SpenderProofHex))
-            return false;
+            return SpendProof.Failed;
 
         Transaction spender;
         try { spender = Transaction.Parse(claim.SpenderHex, _network); }
-        catch { return false; }
+        catch { return SpendProof.Failed; }
 
         if (!string.Equals(spender.GetHash().ToString(), claim.SpenderTxId, StringComparison.OrdinalIgnoreCase))
-            return false;
+            return SpendProof.Failed;
         if (claim.Vout < 0 || !spender.Inputs.Any(i => i.PrevOut.N == (uint)claim.Vout &&
                 string.Equals(i.PrevOut.Hash.ToString(), claim.TxId, StringComparison.OrdinalIgnoreCase)))
-            return false;
+            return SpendProof.Failed;
 
-        var inclusion = await InclusionFromProofAsync(claim.SpenderProofHex, claim.SpenderTxId, claim.SpenderHeight, ct);
-        return inclusion.Error == null;
+        var inclusion = await InclusionFromProofAsync(claim.SpenderProofHex, claim.SpenderTxId, claim.SpenderHeight, ct, notFrom);
+        if (inclusion.Error == null) return SpendProof.Proven;
+        return inclusion.Membership == ChainMembership.CannotCheck && claim.SpenderHeight > 0
+            ? SpendProof.CannotCheck
+            : SpendProof.Failed;
     }
 
     /// <summary>

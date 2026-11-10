@@ -1,0 +1,45 @@
+@inject IExplorerSettings Explorer
+
+@* The receipt for a broadcast — Send, Sweep and the Home "Move to post-quantum" card all show
+   one (audit 2026-11-09: it was written out three times). Green when the network took the
+   transaction; amber, with the one note every page carries, when the only word for it is one
+   gateway's (bug-bounty report 2026-11-09). The lead sentence is the page's; the txid link and
+   the note are shared. *@
+<div class="@(Unconfirmed ? "lite-unconfirmed" : "lite-success")">
+    @if (Unconfirmed) { @UnconfirmedLead } else { @ConfirmedLead }
+    @if (TxId != null)
+    {
+        var txUrl = LiteExplorer.TxUrl(Explorer.BaseUrl, TxId);
+        <br />
+        @if (txUrl != null)
+        {
+            <a href="@txUrl" target="_blank" rel="noopener" class="lite-link"><strong>@TxId</strong></a>
+        }
+        else
+        {
+            <strong>@TxId</strong>
+        }
+    }
+    @if (Unconfirmed)
+    {
+        <br /><span class="lite-unconfirmed-note">@LiteSendResult.UnconfirmedNote</span>
+    }
+    @ChildContent
+</div>
+
+@code {
+    /// <summary>True when the receipt rests on one gateway's word alone.</summary>
+    [Parameter, EditorRequired] public bool Unconfirmed { get; set; }
+
+    /// <summary>The sentence when the network took the transaction.</summary>
+    [Parameter, EditorRequired] public RenderFragment? ConfirmedLead { get; set; }
+
+    /// <summary>The sentence when it is not confirmed yet (it should say so).</summary>
+    [Parameter, EditorRequired] public RenderFragment? UnconfirmedLead { get; set; }
+
+    /// <summary>The transaction id, linked to the block explorer where one is configured; null = none to show.</summary>
+    [Parameter] public string? TxId { get; set; }
+
+    /// <summary>Anything the page adds after the receipt proper.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

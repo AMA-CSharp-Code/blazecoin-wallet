@@ -152,14 +152,14 @@ public class HeaderAnchorsTests
         // A table older than the wallet's chain: the sync verifies 4,150,000 and learns it.
         var anchors = HeaderAnchors.Mainnet.UpTo(4_149_000);
         var store = new InMemoryWalletStateStore();
-        var first = new HeaderChainSync(new CountingFeed(), store, BlazecoinNetwork.Instance, Checkpoint, anchors);
+        var first = new HeaderChainSync(new CountingFeed(), store, BlazecoinNetwork.Instance, Checkpoint, anchors) { StateKeys = HeaderStateKeys.Keys };
         await first.SyncAsync();
-        Assert.Contains($"{AnchorAbove}:{AnchorAboveHash}", await store.GetHeaderAnchorsAsync());
+        Assert.Contains($"{AnchorAbove}:{AnchorAboveHash}", HeaderStateKeys.OpenAnchors(await store.GetHeaderAnchorsAsync()));
 
         // Restart: a fresh instance over the same store has only the persisted tip in memory, yet
         // links the block to the learned anchor — not all the way to the tip.
         var feed = new CountingFeed();
-        var restarted = new HeaderChainSync(feed, store, BlazecoinNetwork.Instance, Checkpoint, anchors);
+        var restarted = new HeaderChainSync(feed, store, BlazecoinNetwork.Instance, Checkpoint, anchors) { StateKeys = HeaderStateKeys.Keys };
 
         var where = await restarted.LocateAsync(HeaderChainFixture.ProofBlockHash, HeaderChainFixture.ProofBlockHeight);
 
@@ -174,16 +174,16 @@ public class HeaderAnchorsTests
         // no learned anchors yet. The first check links to the tip and learns 4,150,000 on the way.
         var anchors = HeaderAnchors.Mainnet.UpTo(4_149_000);
         var synced = new InMemoryWalletStateStore();
-        await new HeaderChainSync(new CountingFeed(), synced, BlazecoinNetwork.Instance, Checkpoint, anchors).SyncAsync();
+        await new HeaderChainSync(new CountingFeed(), synced, BlazecoinNetwork.Instance, Checkpoint, anchors) { StateKeys = HeaderStateKeys.Keys }.SyncAsync();
         var upgraded = new InMemoryWalletStateStore();
         await upgraded.SetVerifiedCheckpointAsync((await synced.GetVerifiedCheckpointAsync())!);
 
-        var sync = new HeaderChainSync(new CountingFeed(), upgraded, BlazecoinNetwork.Instance, Checkpoint, anchors);
+        var sync = new HeaderChainSync(new CountingFeed(), upgraded, BlazecoinNetwork.Instance, Checkpoint, anchors) { StateKeys = HeaderStateKeys.Keys };
         var where = await sync.LocateAsync(HeaderChainFixture.ProofBlockHash, HeaderChainFixture.ProofBlockHeight);
 
         Assert.Equal(ChainMembership.OnChain, where.Membership);
         await Task.Yield(); // the anchor write is fire-and-forget (synchronous for the in-memory store)
-        Assert.Contains($"{AnchorAbove}:{AnchorAboveHash}", await upgraded.GetHeaderAnchorsAsync());
+        Assert.Contains($"{AnchorAbove}:{AnchorAboveHash}", HeaderStateKeys.OpenAnchors(await upgraded.GetHeaderAnchorsAsync()));
     }
 
     // ── Reorg recovery ──────────────────────────────────────────────────────────────────
@@ -199,16 +199,16 @@ public class HeaderAnchorsTests
         // (a persisted record with a hash the feed no longer serves at that height). Without
         // recovery the first header would never link and the chain would stall there for ever.
         var store = new InMemoryWalletStateStore();
-        await store.SetVerifiedCheckpointAsync($"{OrphanHeight}:{new string('7', 64)}:{HeaderChainFixture.CheckpointBits}");
+        await store.SetVerifiedCheckpointAsync(HeaderStateKeys.SealedTip($"{OrphanHeight}:{new string('7', 64)}:{HeaderChainFixture.CheckpointBits}"));
         var feed = new CountingFeed();
-        var sync = new HeaderChainSync(feed, store, BlazecoinNetwork.Instance, Checkpoint);
+        var sync = new HeaderChainSync(feed, store, BlazecoinNetwork.Instance, Checkpoint) { StateKeys = HeaderStateKeys.Keys };
 
         await sync.SyncAsync();
 
         Assert.Equal(HeaderChainFixture.TipHeight, sync.VerifiedTipHeight);
         Assert.Equal(RealHashAt(OrphanHeight), sync.VerifiedHashAt(OrphanHeight));
         Assert.Null(sync.VerifiedHeightOf(new string('7', 64)));
-        Assert.StartsWith($"{HeaderChainFixture.TipHeight}:", await store.GetVerifiedCheckpointAsync());
+        Assert.StartsWith($"{HeaderChainFixture.TipHeight}:", HeaderStateKeys.OpenTip(await store.GetVerifiedCheckpointAsync()));
         // Rewound to the shipped anchor at 4,150,000, then forward — never further back.
         Assert.Equal(AnchorAbove, feed.LowestServed);
     }
@@ -218,11 +218,11 @@ public class HeaderAnchorsTests
     {
         var real = HeaderChainFixture.Headers[OrphanHeight - (HeaderChainFixture.CheckpointHeight + 1)];
         var store = new InMemoryWalletStateStore();
-        await store.SetVerifiedCheckpointAsync($"{OrphanHeight}:{RealHashAt(OrphanHeight)}:{ParseBits(real)}");
+        await store.SetVerifiedCheckpointAsync(HeaderStateKeys.SealedTip($"{OrphanHeight}:{RealHashAt(OrphanHeight)}:{ParseBits(real)}"));
         // The feed's header at the next height is a real header from elsewhere in the run: valid
         // on its own, but it does not build on our tip.
         var feed = new CountingFeed { Override = { [OrphanHeight + 1] = HeaderChainFixture.Headers[300] } };
-        var sync = new HeaderChainSync(feed, store, BlazecoinNetwork.Instance, Checkpoint);
+        var sync = new HeaderChainSync(feed, store, BlazecoinNetwork.Instance, Checkpoint) { StateKeys = HeaderStateKeys.Keys };
 
         await sync.SyncAsync();
 
@@ -234,8 +234,8 @@ public class HeaderAnchorsTests
     public async Task Locate_heals_a_stale_entry_instead_of_calling_the_real_block_a_lie()
     {
         var store = new InMemoryWalletStateStore();
-        await store.SetVerifiedCheckpointAsync($"{OrphanHeight}:{new string('7', 64)}:{HeaderChainFixture.CheckpointBits}");
-        var sync = new HeaderChainSync(new CountingFeed(), store, BlazecoinNetwork.Instance, Checkpoint);
+        await store.SetVerifiedCheckpointAsync(HeaderStateKeys.SealedTip($"{OrphanHeight}:{new string('7', 64)}:{HeaderChainFixture.CheckpointBits}"));
+        var sync = new HeaderChainSync(new CountingFeed(), store, BlazecoinNetwork.Instance, Checkpoint) { StateKeys = HeaderStateKeys.Keys };
 
         // No sync has run: the wallet's own entry at this height is the stale orphan.
         var where = await sync.LocateAsync(RealHashAt(OrphanHeight), OrphanHeight);

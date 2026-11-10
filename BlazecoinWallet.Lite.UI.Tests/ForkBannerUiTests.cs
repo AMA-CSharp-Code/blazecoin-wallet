@@ -21,6 +21,7 @@ public class ForkBannerUiTests : LiteUiTestBase
     {
         public ForkStatus? Current { get; set; }
         public ForkBannerState State { get; set; }
+        public long EffectiveTip => Current?.Tip ?? 0;   // this stub has no verified tip: the gateway's figure, by its own choice
         public event Action? Changed;
         public int Starts;
         public void Start() => Starts++;

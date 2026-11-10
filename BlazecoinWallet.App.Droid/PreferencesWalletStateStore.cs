@@ -18,7 +18,7 @@ public sealed class PreferencesWalletStateStore : IWalletStateStore
     private const string VerifiedCoinsKey = "verified_coins";
 
     public Task<int> GetRevealedAddressCountAsync()
-        => Task.FromResult(Preferences.Default.Get(RevealedKey, 0));
+        => Task.FromResult(Preferences.Default.Get(RevealedKey, WalletStateDefaults.AddressCount));
 
     public Task SetRevealedAddressCountAsync(int count)
     {
@@ -27,7 +27,7 @@ public sealed class PreferencesWalletStateStore : IWalletStateStore
     }
 
     public Task<int> GetChangeAddressCountAsync()
-        => Task.FromResult(Preferences.Default.Get(ChangeKey, 0));
+        => Task.FromResult(Preferences.Default.Get(ChangeKey, WalletStateDefaults.AddressCount));
 
     public Task SetChangeAddressCountAsync(int count)
     {
@@ -54,7 +54,7 @@ public sealed class PreferencesWalletStateStore : IWalletStateStore
     }
 
     public Task<bool> GetBackupVerifiedAsync()
-        => Task.FromResult(Preferences.Default.Get(BackupVerifiedKey, false));   // no record = not verified (bug-bounty report 2026-11-06)
+        => Task.FromResult(Preferences.Default.Get(BackupVerifiedKey, WalletStateDefaults.BackupVerified));   // no record = not verified: the one place (audit 2026-11-09)
 
     public Task SetBackupVerifiedAsync(bool verified)
     {
@@ -63,7 +63,7 @@ public sealed class PreferencesWalletStateStore : IWalletStateStore
     }
 
     public Task<int> GetPqAddressCountAsync()
-        => Task.FromResult(Preferences.Default.Get(PqKey, 0));
+        => Task.FromResult(Preferences.Default.Get(PqKey, WalletStateDefaults.AddressCount));
 
     public Task SetPqAddressCountAsync(int count)
     {

@@ -238,13 +238,18 @@ public class ReceiveAddressTests
     }
 
     [Fact]
-    public async Task Without_a_minter_the_payout_is_legacy_as_before()
+    public void The_resolver_and_the_miner_cannot_be_built_without_a_minter_or_a_wallet_context()
     {
+        // "Without a minter the payout is legacy, as before" was the test here until the audit of
+        // 2026-11-09: the minter was optional, and leaving it out made every payout quietly legacy,
+        // with no note. It is required now - the miner's wallet context too.
         var rpc = Substitute.For<IMiningRpc>();
-        rpc.GetNewAddressAsync(Arg.Any<string>()).Returns(Legacy);
-        var c = await new PayoutAddressResolver(rpc).ResolveAsync(null);
-        Assert.Equal(Legacy, c.Address);
-        Assert.Null(c.Note);
+        Assert.Throws<ArgumentNullException>(() => new PayoutAddressResolver(rpc, null!));
+        Assert.Throws<ArgumentNullException>(() => new MiningService(rpc, null!, new TestWalletContext(null)));
+        Assert.Throws<ArgumentNullException>(() => new MiningService(rpc, new FakeMint(), null!));
+        Assert.DoesNotContain(typeof(PayoutAddressResolver).GetConstructors().Single().GetParameters(), p => p.IsOptional);
+        Assert.DoesNotContain(typeof(MiningService).GetConstructors().Single().GetParameters(),
+            p => p.IsOptional && p.ParameterType != typeof(Microsoft.Extensions.Logging.ILogger<MiningService>));
     }
 
     [Fact]
@@ -272,7 +277,7 @@ public class ReceiveAddressTests
     [Fact]
     public async Task A_configured_payout_that_is_not_an_address_is_refused()
     {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => new PayoutAddressResolver(Substitute.For<IMiningRpc>()).ResolveAsync("not-an-address"));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => new PayoutAddressResolver(Substitute.For<IMiningRpc>(), new FakeMint()).ResolveAsync("not-an-address"));
         Assert.Contains("Invalid payout address", ex.Message);
     }
 
@@ -283,7 +288,7 @@ public class ReceiveAddressTests
     {
         var rpc = Substitute.For<IMiningRpc>();
         rpc.GetNewAddressAsync(Arg.Any<string>()).Returns(reply);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => new PayoutAddressResolver(rpc).ResolveAsync(null));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => new PayoutAddressResolver(rpc, new TestMint()).ResolveAsync(null));
         Assert.Contains(expected, ex.Message);
     }
 
@@ -293,7 +298,7 @@ public class ReceiveAddressTests
         // A null template is the fail-fast path AFTER the payout script was built, with no worker started.
         var rpc = Substitute.For<IMiningRpc>();
         rpc.GetBlockTemplateAsync().Returns((BlockTemplate?)null);
-        var svc = new MiningService(rpc, mint: new FakeMint());
+        var svc = new MiningService(rpc, new FakeMint(), new TestWalletContext(null));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.StartAsync(new MiningOptions { ThreadCount = 1 }));
 
@@ -307,7 +312,7 @@ public class ReceiveAddressTests
     {
         var rpc = Substitute.For<IMiningRpc>();
         rpc.GetBlockTemplateAsync().Returns((BlockTemplate?)null);
-        var svc = new MiningService(rpc);
+        var svc = new MiningService(rpc, new TestMint(), new TestWalletContext(null));
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.StartAsync(new MiningOptions { PayoutAddress = FirstPqCoinbaseAddress, ThreadCount = 1 }));
         Assert.Contains("getblocktemplate", ex.Message);    // past address validation: BQ accepted
@@ -324,7 +329,7 @@ public class ReceiveAddressTests
         config["Blazecoind:RpcUrl"].Returns("http://127.0.0.1:55415");
         var ctx = Substitute.For<IWalletContext>();
         ctx.Active.Returns("Primary");
-        return new BlazecoindRpcService(config, ctx, factory);
+        return new BlazecoindRpcService(config, ctx, factory, new WalletSwitchNotice());
     }
 
     private sealed class Stub : HttpMessageHandler

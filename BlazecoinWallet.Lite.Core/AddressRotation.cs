@@ -41,12 +41,19 @@ internal sealed class AddressRotation
     /// round — the comment here used to claim "never less"). Two things answer that: restore
     /// asks a second gateway before it believes "unused" (<see cref="Data.IAddressUsageCrossCheck"/>),
     /// and <see cref="ExtendFromChainAsync"/> lets any later honest session find what a restore missed.</param>
-    public AddressRotation(Data.IChainReader reader, IWalletStateStore state, Data.LiteTxVerifier? verifier = null)
+    /// <param name="usageCrossCheck">That second gateway, handed in (audit 2026-11-09: it used to be
+    /// found by testing what the reader happened to be, so a wrapped reader lost it silently).
+    /// Null where there is nobody else to ask — a personal node.</param>
+    public AddressRotation(Data.IChainReader reader, IWalletStateStore state, Data.LiteTxVerifier? verifier = null,
+        Data.IAddressUsageCrossCheck? usageCrossCheck = null)
     {
         _reader = reader;
         _state = state;
         _verifier = verifier;
+        _usageCrossCheck = usageCrossCheck;
     }
+
+    private readonly Data.IAddressUsageCrossCheck? _usageCrossCheck;
 
     /// <summary>How many receive addresses are revealed (always ≥ 1 once initialized).</summary>
     public int RevealedCount => Math.Max(1, _revealedCount);
@@ -290,8 +297,8 @@ internal sealed class AddressRotation
     /// than one gateway is asked to: the address is used if ANY of them says so.</summary>
     private async Task<bool> IsAddressUsedAsync(string address, CancellationToken ct)
     {
-        if (_reader is Data.IAddressUsageCrossCheck crossCheck)
-            return await crossCheck.IsAddressUsedByAnyGatewayAsync(address, ct);
+        if (_usageCrossCheck != null)
+            return await _usageCrossCheck.IsAddressUsedByAnyGatewayAsync(address, ct);
         var summary = await _reader.GetAddressAsync(address, ct);
         return summary is { TxCount: > 0 };
     }

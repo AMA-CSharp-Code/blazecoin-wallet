@@ -79,6 +79,8 @@ public class WalletPinningTests
                 "send" => Reply(HttpStatusCode.OK, Ok($$"""{"complete":true,"txid":"{{TxId}}"}""")),
                 "getnewaddress" => Reply(HttpStatusCode.OK, Ok("\"Bnewaddress\"")),
                 "getwalletinfo" => Reply(HttpStatusCode.OK, Ok("{\"walletname\":\"" + wallet + "\"}")),
+                "createrawtransaction" => Reply(HttpStatusCode.OK, Ok("\"0200000000\"")),
+                "fundrawtransaction" => Reply(HttpStatusCode.OK, Ok("{\"hex\":\"0200000000\",\"fee\":0.00025,\"changepos\":1}")),
                 _ => Reply(HttpStatusCode.OK, Ok("null")),
             };
         }
@@ -93,7 +95,7 @@ public class WalletPinningTests
         factory.CreateClient(Arg.Any<string>()).Returns(_ => new HttpClient(daemon));
         var config = Substitute.For<IConfiguration>();
         config["Blazecoind:RpcUrl"].Returns(RpcUrl);
-        return new BlazecoindRpcService(config, ctx, factory, logger: null, switchNotice: notice);
+        return new BlazecoindRpcService(config, ctx, factory, notice ?? new WalletSwitchNotice());
     }
 
     private static StubDaemon Daemon(params string[] loaded)
@@ -158,8 +160,9 @@ public class WalletPinningTests
         var daemon = Daemon("Primary");
         var svc = Rpc(daemon, ctx);
 
-        // The Console page's passthrough reaches every wallet RPC through the same helper.
-        await Assert.ThrowsAsync<WalletNotLoadedException>(() => svc.ExecuteCommandAsync(method));
+        // Through the Console's call - the raw passthrough on the active wallet's path that this
+        // used to go through was deleted in the audit of 2026-11-09 (nothing in the app called it).
+        await Assert.ThrowsAsync<WalletNotLoadedException>(() => svc.ExecuteConsoleCommandAsync("Savings", method, []));
 
         Assert.Single(daemon.Calls);
         Assert.Equal(0, ctx.SetActiveCalls);
@@ -363,10 +366,10 @@ public class WalletPinningTests
         public Task RemoveAsync(string key) { _data.Remove(key); return Task.CompletedTask; }
     }
 
-    private static AutoPayoutService Payout(BlazecoindRpcService rpc, IWalletContext ctx) =>
-        new(rpc, new Store(), ctx)
+    private static AutoPayoutService Payout(BlazecoindRpcService rpc, IWalletContext ctx, IWalletSwitchNotice? notice = null) =>
+        new(rpc, new Store(), new WalletBinding(ctx, notice ?? new WalletSwitchNotice()), rpc, new SendChangePolicy(rpc))
         {
-            Threshold = 100m, Address = "BPayoutDestination", Live = true, Mode = "above", Batch = "single",
+            Threshold = 100m, Address = TestAddr.Payout, Live = true, Mode = "above", Batch = "single",
         };
 
     [Fact]
@@ -507,5 +510,376 @@ public class WalletPinningTests
         await payout.TickAsync(fire: true);
 
         Assert.Equal("Primary", Assert.Single(daemon.Of("sendtoaddress")).Wallet);
+    }
+
+    // ════════ a switch the user has not acknowledged stops every write (bug-bounty report 2026-11-09) ════════
+    // Only the Send page named its wallet. Everything else that changes a wallet — the Console,
+    // a new address, a label, a passphrase, signing — followed the app's active wallet, so in the
+    // moment after a read re-pointed the app, the next write ran against a wallet the user had
+    // not been shown yet. Now nothing but a read runs until the notice has been acknowledged.
+
+    private static async Task<(BlazecoindRpcService Svc, StubDaemon Daemon, FakeWalletContext Ctx, WalletSwitchNotice Notice)> HealedAsync()
+    {
+        var ctx = new FakeWalletContext("Savings");
+        var daemon = Daemon("Primary");                        // "Savings" was unloaded mid-session
+        var notice = new WalletSwitchNotice();
+        var svc = Rpc(daemon, ctx, notice);
+        await svc.GetBalancesAsync();                          // an ordinary read re-points the app
+        Assert.Equal("Primary", ctx.Active);
+        Assert.NotNull(notice.Current);
+        daemon.Calls.Clear();
+        return (svc, daemon, ctx, notice);
+    }
+
+    [Theory]
+    [InlineData("sendtoaddress")]
+    [InlineData("send")]
+    [InlineData("getnewaddress")]
+    [InlineData("setlabel")]
+    [InlineData("encryptwallet")]
+    [InlineData("walletpassphrase")]
+    [InlineData("walletpassphrasechange")]
+    [InlineData("signrawtransactionwithwallet")]
+    [InlineData("fundrawtransaction")]
+    [InlineData("importdescriptors")]
+    // (walletlock was on this list until the audit of 2026-11-09: locking is always safe, and is
+    // now let through - Locking_the_wallet_is_never_held_up_by_the_notice.)
+    public async Task A_write_does_not_run_until_the_wallet_switch_is_acknowledged(string method)
+    {
+        var (svc, daemon, _, notice) = await HealedAsync();
+
+        var ex = await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.ExecuteConsoleCommandAsync("Primary", method, []));
+
+        Assert.Empty(daemon.Calls);                            // was: the call ran against "Primary"
+        Assert.Contains("Savings", ex.Message);
+        Assert.Contains("Primary", ex.Message);
+        Assert.Contains("nothing was done", ex.Message);
+
+        notice.Dismiss();                                      // the user pressed OK on the notice
+        await svc.ExecuteConsoleCommandAsync("Primary", method, []);
+        Assert.Equal((method, "Primary"), (daemon.Calls.Single().Method, daemon.Calls.Single().Wallet));
+    }
+
+    [Fact]
+    public async Task The_typed_writes_wait_for_the_acknowledgement_too()
+    {
+        var (svc, daemon, _, _) = await HealedAsync();
+
+        await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.SendToAddressAsync("BDest", 1m));
+        await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.SendAsync(new SendRequest("BDest", 1m, false, null)));
+        await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.SetLabelAsync("BAddr", "rent"));
+        await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.EncryptWalletAsync("pass phrase"));
+        await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.UnlockWalletAsync("pass phrase", 60));
+
+        Assert.Empty(daemon.Calls);
+    }
+
+    [Fact]
+    public async Task Reads_carry_on_while_the_switch_is_unacknowledged()
+    {
+        var (svc, daemon, _, _) = await HealedAsync();
+
+        var balances = await svc.GetBalancesAsync();
+
+        Assert.Equal(200m, balances!.Mine!.Trusted);
+        Assert.Equal("Primary", daemon.Calls.Single().Wallet);
+    }
+
+    [Fact]
+    public async Task A_send_that_names_its_wallet_is_not_held_up_by_the_notice()
+    {
+        // The Send page reviews and sends against a named wallet and has its own check that the
+        // active wallet has not moved. The notice must not block a payment reviewed on "Primary".
+        var (svc, daemon, _, _) = await HealedAsync();
+
+        var txid = await svc.SendFromWalletAsync("Primary", "BDest", 2.5m);
+
+        Assert.Equal(TxId, txid);
+        Assert.Equal("Primary", daemon.Calls.Single().Wallet);
+    }
+
+    [Fact]
+    public async Task The_notice_is_up_before_the_app_points_at_the_other_wallet()
+    {
+        // Closes the gap: a write starting between "context moved" and "notice raised" would
+        // have seen the new wallet and no notice.
+        var ctx = new FakeWalletContext("Savings");
+        var notice = new WalletSwitchNotice();
+        WalletSwitch? seenWhenContextMoved = null;
+        ctx.Changed += () => seenWhenContextMoved = notice.Current;
+        var svc = Rpc(Daemon("Primary"), ctx, notice);
+
+        await svc.GetBalancesAsync();
+
+        Assert.NotNull(seenWhenContextMoved);
+        Assert.Equal("Primary", seenWhenContextMoved!.To);
+    }
+
+    // ════════════════════════ the Console names its wallet ════════════════════════
+
+    [Fact]
+    public async Task A_console_command_runs_against_the_wallet_the_console_showed()
+    {
+        var ctx = new FakeWalletContext("Savings");
+        var daemon = Daemon("Primary", "Savings");
+        var svc = Rpc(daemon, ctx, new WalletSwitchNotice());
+
+        await svc.ExecuteConsoleCommandAsync("Savings", "sendtoaddress", ["BDest", 1.0m]);
+
+        Assert.Equal(("sendtoaddress", "Savings"), (daemon.Calls.Single().Method, daemon.Calls.Single().Wallet));
+    }
+
+    [Fact]
+    public async Task A_console_command_for_an_unloaded_wallet_fails_and_goes_nowhere_else()
+    {
+        // The report's scenario: the user is on "Savings", it is unloaded, and a Console read
+        // used to re-point the app at "Primary" — the next sendtoaddress then paid from there.
+        var ctx = new FakeWalletContext("Savings");
+        var daemon = Daemon("Primary");
+        var notice = new WalletSwitchNotice();
+        var svc = Rpc(daemon, ctx, notice);
+
+        var read = await Assert.ThrowsAsync<WalletNotLoadedException>(() => svc.ExecuteConsoleCommandAsync("Savings", "getbalance", []));
+        var send = await Assert.ThrowsAsync<WalletNotLoadedException>(() => svc.ExecuteConsoleCommandAsync("Savings", "sendtoaddress", ["BDest", 1.0m]));
+
+        Assert.Equal("Savings", read.Wallet);
+        Assert.Equal("Savings", send.Wallet);
+        Assert.All(daemon.Calls, c => Assert.Equal("Savings", c.Wallet));   // nothing reached "Primary"
+        Assert.Equal("Savings", ctx.Active);                                // and the Console moved nothing
+        Assert.Equal(0, ctx.SetActiveCalls);
+        Assert.Null(notice.Current);
+    }
+
+    [Fact]
+    public async Task A_console_command_waits_for_the_wallet_switch_to_be_acknowledged()
+    {
+        var (svc, daemon, _, notice) = await HealedAsync();
+
+        // Even one addressed to the wallet now active: the Console's label may have changed
+        // under the user's hands a moment before they pressed Enter.
+        await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.ExecuteConsoleCommandAsync("Primary", "sendtoaddress", ["BDest", 1.0m]));
+        await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.ExecuteConsoleCommandAsync("Primary", "getblockchaininfo", []));
+        Assert.Empty(daemon.Calls);
+
+        notice.Dismiss();
+        await svc.ExecuteConsoleCommandAsync("Primary", "sendtoaddress", ["BDest", 1.0m]);
+        Assert.Equal("Primary", daemon.Calls.Single().Wallet);
+    }
+
+    [Fact]
+    public async Task A_console_command_is_refused_when_the_console_showed_a_wallet_that_is_no_longer_active()
+    {
+        var ctx = new FakeWalletContext("Primary");            // the user chose another wallet elsewhere
+        var daemon = Daemon("Primary", "Savings");
+        var svc = Rpc(daemon, ctx, new WalletSwitchNotice());
+
+        var ex = await Assert.ThrowsAsync<ConsoleWalletChangedException>(() => svc.ExecuteConsoleCommandAsync("Savings", "sendtoaddress", ["BDest", 1.0m]));
+
+        Assert.Contains("nothing was run", ex.Message);
+        Assert.Equal(("Savings", "Primary", -4), (ex.Shown, ex.ActiveNow, ex.Code));
+        Assert.Empty(daemon.Calls);
+    }
+
+    [Fact]
+    public async Task A_console_with_no_wallet_chosen_uses_the_node_endpoint()
+    {
+        var ctx = new FakeWalletContext(null);
+        var daemon = Daemon("Primary");
+        var svc = Rpc(daemon, ctx, new WalletSwitchNotice());
+
+        await svc.ExecuteConsoleCommandAsync("", "getblockchaininfo", []);
+
+        Assert.Equal("", daemon.Calls.Single().Wallet);
+    }
+
+    // ════════════════════════ node housekeeping is not a wallet call ════════════════════════
+
+    [Fact]
+    public async Task Stopping_the_node_is_never_held_up_by_a_wallet_notice()
+    {
+        // The app stops its own daemon on exit; that must work whatever the wallet state.
+        var (svc, daemon, _, _) = await HealedAsync();
+
+        await svc.ExecuteNodeCommandAsync("stop");
+
+        Assert.Equal(("stop", ""), (daemon.Calls.Single().Method, daemon.Calls.Single().Wallet));
+    }
+
+    // ════════ the hold covers every way a write gets its wallet (audit 2026-11-09) ════════
+    // The 2026-11-09 fix held back the calls that FOLLOW the active wallet. The Send page and
+    // auto-payout Start take the active wallet as a pin instead, and a pin was taken with no look
+    // at the notice — so in the moment after a read re-pointed the app, Review, Send Max, a
+    // straight send or Start bound themselves to a wallet the user had not acknowledged yet.
+
+    [Fact]
+    public async Task Auto_payout_does_not_arm_on_a_wallet_the_user_has_not_acknowledged()
+    {
+        var (svc, daemon, ctx, notice) = await HealedAsync();
+        var payout = Payout(svc, ctx, notice);
+
+        await payout.StartAsync();                             // was: armed on "Primary", the wallet the app moved to
+
+        Assert.False(payout.Enabled);
+        Assert.Null(payout.ArmedWallet);
+        Assert.Contains("Savings", payout.Reason);
+        Assert.Contains("Primary", payout.Reason);
+        Assert.Contains("nothing was done", payout.Reason);
+        // The page draws the reason line only while the engine is on; what it always draws is the
+        // log - which is where the "STOPPED" message of a wallet change is read too.
+        Assert.True(payout.ShowReason);                        // was: drawn only while the engine is on, so never for a refused Start
+        var said = Assert.Single(payout.Log);
+        Assert.Contains("NOT started", said);
+        Assert.Contains("Savings", said);
+        Assert.Contains("Primary", said);
+        Assert.Empty(daemon.Calls);                            // not even the status read
+
+        notice.Dismiss();                                      // the user pressed OK on the notice
+        await payout.StartAsync();
+        Assert.True(payout.Enabled);
+        Assert.Equal("Primary", payout.ArmedWallet);
+        Assert.DoesNotContain("nothing was done", payout.Reason);   // the refusal does not outlive the Start that worked
+
+        await payout.StopAsync();
+        Assert.False(payout.ShowReason);                       // stopped by hand: nothing to explain
+    }
+
+    // ════════ the fee shown at review belongs to the wallet the send will leave (audit 2026-11-09) ════════
+
+    [Theory]
+    [InlineData(null)]                                                                    // the sendtoaddress shape
+    [InlineData(BlazecoinWallet.Core.Services.Mining.BlazecoinAddressKind.PostQuantum)]  // the `send` shape, with a change type
+    public async Task A_fee_estimate_runs_against_the_wallet_the_request_names(BlazecoinWallet.Core.Services.Mining.BlazecoinAddressKind? change)
+    {
+        // Reviewed on "Savings"; the app is on "Primary" by the time the estimate runs.
+        var ctx = new FakeWalletContext("Primary");
+        var daemon = Daemon("Primary", "Savings");
+        var svc = Rpc(daemon, ctx);
+
+        var fee = await svc.EstimateFeeAsync(new SendRequest("BDest", 1m, false, change) { Wallet = "Savings" });
+
+        Assert.Equal(0.00025m, fee);
+        Assert.Equal("Savings", Assert.Single(daemon.Of("fundrawtransaction")).Wallet);   // was: "Primary", the active one
+        Assert.DoesNotContain(daemon.Calls, c => c.Wallet == "Primary");
+    }
+
+    [Fact]
+    public async Task A_fee_estimate_for_a_named_wallet_that_is_gone_is_unknown_and_touches_no_other()
+    {
+        var ctx = new FakeWalletContext("Primary");
+        var daemon = Daemon("Primary");
+        var svc = Rpc(daemon, ctx);
+
+        var fee = await svc.EstimateFeeAsync(new SendRequest("BDest", 1m, false, null) { Wallet = "Savings" });
+
+        Assert.Null(fee);                                      // best effort, as before
+        Assert.DoesNotContain(daemon.Calls, c => c.Wallet == "Primary");
+        Assert.Equal(0, ctx.SetActiveCalls);
+    }
+
+    [Fact]
+    public async Task An_unpinned_fee_estimate_still_uses_the_active_wallet()
+    {
+        var daemon = Daemon("Primary");
+        var svc = Rpc(daemon, new FakeWalletContext("Primary"));
+
+        Assert.Equal(0.00025m, await svc.EstimateFeeAsync(new SendRequest("BDest", 1m, false, null)));
+        Assert.Equal(0.00025m, await svc.EstimateSendFeeAsync("BDest", 1m));
+
+        Assert.All(daemon.Of("fundrawtransaction"), c => Assert.Equal("Primary", c.Wallet));
+    }
+
+    // ════════ what the hold stops, and what it must not (audit 2026-11-09) ════════
+
+    [Fact]
+    public async Task Locking_the_wallet_is_never_held_up_by_the_notice()
+    {
+        // Locking cannot lose anything on any wallet; refusing it left a wallet unlocked.
+        var (svc, daemon, _, _) = await HealedAsync();
+
+        await svc.LockWalletAsync();                           // was: WalletSwitchPendingException
+
+        Assert.Equal(("walletlock", "Primary"), (daemon.Calls.Single().Method, daemon.Calls.Single().Wallet));
+    }
+
+    [Fact]
+    public async Task Locking_is_still_never_repeated_against_another_wallet()
+    {
+        // Allowed while a switch is unacknowledged is one question; "may be re-sent to a different
+        // wallet after -18" is another, and for walletlock the answer to that one stays no.
+        var ctx = new FakeWalletContext("Savings");
+        var daemon = Daemon("Primary");
+        var svc = Rpc(daemon, ctx);
+
+        await Assert.ThrowsAsync<WalletNotLoadedException>(() => svc.LockWalletAsync());
+
+        Assert.Equal(("walletlock", "Savings"), (daemon.Calls.Single().Method, daemon.Calls.Single().Wallet));
+        Assert.Equal(0, ctx.SetActiveCalls);
+    }
+
+    [Fact]
+    public void What_may_run_while_a_switch_is_unacknowledged_is_a_list_of_its_own()
+    {
+        // Pinned, like the healable reads: letting a call through the hold is a decision someone
+        // has to make on purpose - and it no longer changes what may be repeated on another wallet.
+        Assert.Equal(
+            new[] { "getaddressesbylabel", "getaddressinfo", "getbalance", "getbalances", "gettransaction",
+                    "getwalletinfo", "listdescriptors", "listlabels", "listtransactions", "listunspent", "walletlock" },
+            BlazecoindRpcService.AllowedWhileSwitchUnacknowledged.OrderBy(m => m, StringComparer.Ordinal).ToArray());
+        Assert.DoesNotContain("walletlock", BlazecoindRpcService.HealableWalletReads);
+        // A heal is what raises the notice; the read that healed, and the page's other reads, must go on.
+        Assert.Subset(
+            new HashSet<string>(BlazecoindRpcService.AllowedWhileSwitchUnacknowledged),
+            new HashSet<string>(BlazecoindRpcService.HealableWalletReads));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(BlazecoinWallet.Core.Services.Mining.BlazecoinAddressKind.PostQuantum)]
+    public async Task A_fee_estimate_that_follows_the_active_wallet_says_why_it_was_held(BlazecoinWallet.Core.Services.Mining.BlazecoinAddressKind? change)
+    {
+        // The dry run is still held (it would price another wallet's coins) - but the refusal
+        // used to be swallowed with every other failure, so the review showed no fee and no reason.
+        var (svc, daemon, _, _) = await HealedAsync();
+
+        var ex = await Assert.ThrowsAsync<WalletSwitchPendingException>(
+            () => svc.EstimateFeeAsync(new SendRequest("BDest", 1m, false, change)));
+
+        Assert.Contains("nothing was done", ex.Message);
+        Assert.Empty(daemon.Of("fundrawtransaction"));
+    }
+
+    [Fact]
+    public async Task The_plain_fee_estimate_says_why_it_was_held_too()
+    {
+        var (svc, daemon, _, _) = await HealedAsync();
+
+        await Assert.ThrowsAsync<WalletSwitchPendingException>(() => svc.EstimateSendFeeAsync("BDest", 1m));
+
+        Assert.Empty(daemon.Of("fundrawtransaction"));
+    }
+
+    [Fact]
+    public async Task A_fee_estimate_that_fails_for_any_other_reason_is_still_just_unknown()
+    {
+        var ctx = new FakeWalletContext("Savings");
+        var daemon = Daemon("Primary");                        // -18 on the dry run: not a read, so no heal
+        var svc = Rpc(daemon, ctx);
+
+        Assert.Null(await svc.EstimateFeeAsync(new SendRequest("BDest", 1m, false, null)));
+        Assert.Null(await svc.EstimateSendFeeAsync("BDest", 1m));
+        Assert.Equal(0, ctx.SetActiveCalls);
+    }
+
+    // ════════ the notice is not optional (audit 2026-11-09) ════════
+
+    [Fact]
+    public void The_rpc_service_cannot_be_built_without_a_switch_notice()
+    {
+        // It used to default to null, and a null notice switched the hold off without a word.
+        var notice = typeof(BlazecoindRpcService).GetConstructors().Single().GetParameters()
+            .Single(p => p.ParameterType == typeof(IWalletSwitchNotice));
+
+        Assert.False(notice.IsOptional);
+        Assert.False(notice.HasDefaultValue);
     }
 }

@@ -80,13 +80,16 @@ else
             {
                 @if (mv.Success)
                 {
-                    <div class="lite-success">
-                        Moved @mv.MovedCoins coin@(mv.MovedCoins == 1 ? "" : "s") (@AmountText(mv.MovedSatoshis) @_sym) to your post-quantum address.
-                        @if (mv.RemainingLegacyCoins > 0)
-                        {
-                            <br /><span>@mv.RemainingLegacyCoins more legacy coin@(mv.RemainingLegacyCoins == 1 ? "" : "s") left — move them once this one confirms.</span>
-                        }
-                    </div>
+                    <SendReceipt Unconfirmed="mv.Unconfirmed">
+                        <UnconfirmedLead>Sent @mv.MovedCoins coin@(mv.MovedCoins == 1 ? "" : "s") (@AmountText(mv.MovedSatoshis) @_sym) towards your post-quantum address, but <strong>not confirmed yet</strong>.</UnconfirmedLead>
+                        <ConfirmedLead>Moved @mv.MovedCoins coin@(mv.MovedCoins == 1 ? "" : "s") (@AmountText(mv.MovedSatoshis) @_sym) to your post-quantum address.</ConfirmedLead>
+                        <ChildContent>
+                            @if (mv.RemainingLegacyCoins > 0)
+                            {
+                                <br /><span>@mv.RemainingLegacyCoins more legacy coin@(mv.RemainingLegacyCoins == 1 ? "" : "s") left — move them once this one confirms.</span>
+                            }
+                        </ChildContent>
+                    </SendReceipt>
                 }
                 else
                 {

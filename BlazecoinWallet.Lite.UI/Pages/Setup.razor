@@ -3,6 +3,9 @@
 @inject LiteWalletService Wallet
 @inject NavigationManager Nav
 
+@* A phrase or a private key is shown or typed here: keep the window out of screen capture. *@
+<SecretScreen />
+
 @* First-run ceremony: create (mnemonic shown ONCE, confirmed with a word quiz) or restore.
    An optional passphrase ("25th word") adds a factor beyond the paper seed. The mnemonic
    (+ passphrase, if set) IS the wallet — there is no other backup on a phone. *@

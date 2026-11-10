@@ -52,21 +52,30 @@ public class DaemonBusyException : HttpRequestException
     { }
 }
 
-public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryRpc, Provenance.IVintageSendRpc, Quantum.IExposureRpc, Quantum.ISweepDestinationRpc, Quantum.IPostQuantumWalletRpc, Send.ISendRpc, IMessageSigningRpc
+public class BlazecoindRpcService : IBlazecoindRpcService, IConsoleRpc, Provenance.IAncestryRpc, Provenance.IVintageSendRpc, Quantum.IExposureRpc, Quantum.IAddressMintRpc, IBoundWalletRpc, Quantum.IPostQuantumWalletRpc, Send.ISendRpc, IMessageSigningRpc
 {
     private readonly HttpClient _httpClient;
     private readonly string _rpcUrl;
     private readonly IWalletContext _walletContext;
     private readonly ILogger<BlazecoindRpcService>? _logger;
-    private readonly IWalletSwitchNotice? _switchNotice;
+    private readonly IWalletSwitchNotice _switchNotice;
+    private readonly WalletBinding _binding;
     private int _requestId;
 
-    public BlazecoindRpcService(IConfiguration configuration, IWalletContext walletContext, IHttpClientFactory httpClientFactory, ILogger<BlazecoindRpcService>? logger = null, IWalletSwitchNotice? switchNotice = null)
+    /// <param name="switchNotice">Required (audit 2026-11-09): it used to default to null, and a
+    /// service built without one ran every write against whatever wallet a read had just moved
+    /// the app to, with no error - the hold was simply off. A tool that never shows a notice
+    /// passes one that nothing dismisses, or its own.</param>
+    public BlazecoindRpcService(IConfiguration configuration, IWalletContext walletContext, IHttpClientFactory httpClientFactory, IWalletSwitchNotice switchNotice, ILogger<BlazecoindRpcService>? logger = null)
     {
         _rpcUrl = configuration["Blazecoind:RpcUrl"] ?? "http://127.0.0.1:55413";
         _walletContext = walletContext;
         _logger = logger;
-        _switchNotice = switchNotice;
+        _switchNotice = switchNotice ?? throw new ArgumentNullException(nameof(switchNotice));
+        // The same rule the Send page, auto-payout and the Console bind their wallet through
+        // (IWalletBinding) - built here from the two collaborators this class already holds; it
+        // keeps no state of its own.
+        _binding = new WalletBinding(walletContext, _switchNotice);
 
         // The "blazecoind" named client (configured in MauiProgram) owns the
         // infinite client-level timeout + basic-auth header. We still cap each
@@ -115,6 +124,25 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
         "gettransaction", "listlabels", "getaddressesbylabel", "getaddressinfo", "listdescriptors",
     };
 
+    /// <summary>
+    /// The wallet RPCs that may follow the active wallet while a switch the app made itself is
+    /// still unacknowledged: the reads that keep the window alive, and <c>walletlock</c> — locking
+    /// can lose nothing on any wallet, and refusing it left a wallet unlocked. Everything else
+    /// waits for the user (<see cref="IWalletBinding.BindActiveForWrite"/>).
+    /// <para>A list of its own (audit 2026-11-09). This question used to be answered from
+    /// <see cref="HealableWalletReads"/>, which answers a different one — "may this call be
+    /// repeated against ANOTHER wallet after -18?" — so <c>walletlock</c>, which must never be
+    /// repeated elsewhere, could not be let through here, and adding a call to one list changed
+    /// the other. Every healable read is also listed here: a heal is what raises the notice, and
+    /// the page that healed has to keep reading.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> AllowedWhileSwitchUnacknowledged = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "getwalletinfo", "getbalance", "getbalances", "listunspent", "listtransactions",
+        "gettransaction", "listlabels", "getaddressesbylabel", "getaddressinfo", "listdescriptors",
+        "walletlock",
+    };
+
     /// <summary>Routes a wallet-scoped RPC through <c>/wallet/&lt;active&gt;</c>.
     /// Core demands this once more than one wallet is loaded (error -19);
     /// when no wallet is active it falls back to the base URL, preserving the
@@ -132,14 +160,25 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     /// with a caller-chosen timeout for whole-history reads.</summary>
     private async Task<T?> CallWalletRpcWithTimeoutAsync<T>(string method, TimeSpan timeout, params object[] parameters)
     {
-        var wallet = _walletContext.Active;
+        // Two separate questions (audit 2026-11-09): may this call be repeated on another wallet
+        // after -18, and may it follow the active wallet while a switch is unacknowledged.
+        var healable = HealableWalletReads.Contains(method);
+        // Nothing but the calls on that second list follows the active wallet while the user has
+        // not acknowledged that it was changed for them (bug-bounty report 2026-11-09: the Console,
+        // a new address, a label, a passphrase and signing all followed the context, so in the
+        // moment after a read re-pointed the app the next write ran against a wallet the user had
+        // not been shown yet). Everything else takes its wallet the way the Send page does —
+        // through the binding, which refuses while the notice is up.
+        var wallet = AllowedWhileSwitchUnacknowledged.Contains(method)
+            ? _walletContext.Active ?? string.Empty
+            : _binding.BindActiveForWrite();
         try
         {
             return await CallRpcAtAsync<T>(WalletUrlFor(wallet), method, timeout, parameters);
         }
         catch (RpcException ex) when (ex.Code == -18)
         {
-            if (!HealableWalletReads.Contains(method)) throw new WalletNotLoadedException(wallet);
+            if (!healable) throw new WalletNotLoadedException(wallet);
             if (!await TryReassignActiveWalletAsync(wallet)) throw;
             return await CallRpcAtAsync<T>(WalletUrl(), method, timeout, parameters);
         }
@@ -197,9 +236,11 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
         var fallback = loaded.Contains("Primary") ? "Primary" : loaded[0];
         _logger?.LogWarning("Active wallet \"{Active}\" is not loaded on the daemon; switching to \"{Fallback}\".",
             active, fallback);
+        // The figures on screen are about to be another wallet's — say so where the user will see
+        // it. Raised BEFORE the context moves: anything that sees the new wallet then also sees
+        // the notice, which is what holds writes back until the user has acknowledged it.
+        _switchNotice.Record(active, fallback);
         _walletContext.SetActive(fallback);
-        // The figures on screen are now another wallet's — say so where the user will see it.
-        _switchNotice?.Record(active, fallback);
         return true;
     }
 
@@ -322,15 +363,34 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
         }
     }
 
-    /// <summary>Generic RPC passthrough for the Console page. Returns the raw
-    /// JSON result pretty-printed (or the bare value for string results). RPC
-    /// errors surface as RpcException, exactly like the typed calls above.</summary>
-    public async Task<string> ExecuteCommandAsync(string method, params object[] parameters)
+    /// <summary>
+    /// A command typed into the Console, run against EXACTLY the wallet the Console showed beside
+    /// its prompt ("" = no wallet chosen: the node's own endpoint). The Console is the raw tool,
+    /// so it never re-points the app and nothing is retried elsewhere: an unloaded wallet is an
+    /// error. Refused while a wallet switch is unacknowledged, and when the wallet shown is no
+    /// longer the active one — until 2026-11-09 the Console showed no wallet at all and followed
+    /// the active one, so a <c>getbalance</c> could move the app to another wallet and the next
+    /// <c>sendtoaddress</c> paid from it (bug-bounty report 2026-11-09).
+    /// </summary>
+    public async Task<string> ExecuteConsoleCommandAsync(string wallet, string method, object[] parameters)
     {
-        // Through the active wallet's path (2026-10-08): the root URL answers -19 "Wallet file not specified"
-        // for any wallet RPC once more than one wallet is loaded, and the daemon serves node-level RPCs on a
-        // wallet path just the same — so this is strictly more capable than the root.
-        var result = await CallWalletRpcAsync<JsonElement>(method, parameters);
+        // The same two questions every bound write answers (IWalletBinding, audit 2026-11-09):
+        // nothing is bound while a switch is unacknowledged, and the wallet the Console showed
+        // must still be the active one.
+        _binding.BindActiveForWrite();
+        if (!_binding.IsStillActive(wallet, out var active)) throw new ConsoleWalletChangedException(wallet, active);
+        // The raw JSON result pretty-printed (or the bare value for a string result).
+        return FormatResult(await CallPinnedWalletRpcAsync<JsonElement>(wallet, method, parameters));
+    }
+
+    /// <summary>A node-level command (<c>stop</c>, <c>getnetworkinfo</c>) on the node's own
+    /// endpoint. No wallet is involved, so no wallet state can hold it up — the app must always
+    /// be able to stop the daemon it started.</summary>
+    public async Task<string> ExecuteNodeCommandAsync(string method, params object[] parameters)
+        => FormatResult(await CallRpcAtAsync<JsonElement>(_rpcUrl, method, parameters));
+
+    private static string FormatResult(JsonElement result)
+    {
         if (result.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
             return "(no result)";
         return result.ValueKind == JsonValueKind.String
@@ -663,7 +723,7 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
         return result;
     }
 
-    // ---- Sweep destinations (ISweepDestinationRpc — see Services/Quantum) ----
+    // ---- Minting in the active wallet (IAddressMintRpc — see Services/Quantum) ----
     // 2026-09-28: a large move into a new wallet landed on LEGACY B… addresses because
     // every address the GUI mints is legacy (GetNewAddressAsync below). This path asks for "pq"
     // explicitly and refuses anything that does not come back as a mainnet BQ… address.
@@ -701,13 +761,16 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     public async Task<string?> GetNewLegacyAddressAsync(string label, CancellationToken ct = default)
         => await GetNewAddressAsync(label);
 
-    public async Task<bool?> CanMintPostQuantumAsync(CancellationToken ct = default)
+    public Task<bool?> CanMintPostQuantumAsync(CancellationToken ct = default)
+        => HasPostQuantumKeysCoreAsync(() => CallWalletRpcAsync<JsonElement>("listdescriptors"));
+
+    private static async Task<bool?> HasPostQuantumKeysCoreAsync(Func<Task<JsonElement>> listDescriptors)
     {
         try
         {
             // Public descriptors only (no private keys, no unlock needed). A wallet made on 2.1.0+, or
             // given PQ chains by importdescriptors, lists an ACTIVE external pqkh(...) descriptor.
-            var r = await CallWalletRpcAsync<JsonElement>("listdescriptors");
+            var r = await listDescriptors();
             if (r.ValueKind != JsonValueKind.Object || !r.TryGetProperty("descriptors", out var list) || list.ValueKind != JsonValueKind.Array)
                 return null;
             foreach (var d in list.EnumerateArray())
@@ -728,8 +791,22 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
         catch (TimeoutException) { return null; }
     }
 
-    public Task<bool?> IsMineAsync(string address, CancellationToken ct = default)
-        => IsMineCoreAsync(() => CallWalletRpcAsync<JsonElement>("getaddressinfo", address));
+    // ---- A flow bound to one wallet (IBoundWalletRpc — the Quantum sweep, the vintage send) ----
+    // The same calls as above against EXACTLY the wallet the flow was bound to, never the active
+    // one (audit 2026-11-09: a sweep's destination and a vintage send's change were minted in
+    // whichever wallet was active at that moment). An unloaded wallet is an error, not a detour.
+
+    public Task<Quantum.PqAddressResult> MintPostQuantumAddressAsync(string wallet, string label, CancellationToken ct = default)
+        => MintPostQuantumAsync(() => CallPinnedWalletRpcAsync<string>(wallet, "getnewaddress", label, "pq"));
+
+    public async Task<string?> MintLegacyAddressAsync(string wallet, string label, CancellationToken ct = default)
+        => await CallPinnedWalletRpcAsync<string>(wallet, "getnewaddress", label, "legacy");
+
+    public Task<bool?> HasPostQuantumKeysAsync(string wallet, CancellationToken ct = default)
+        => HasPostQuantumKeysCoreAsync(() => CallPinnedWalletRpcAsync<JsonElement>(wallet, "listdescriptors"));
+
+    public Task<bool?> OwnsAddressAsync(string wallet, string address, CancellationToken ct = default)
+        => IsMineCoreAsync(() => CallPinnedWalletRpcAsync<JsonElement>(wallet, "getaddressinfo", address));
 
     private static async Task<bool?> IsMineCoreAsync(Func<Task<JsonElement>> call)
     {
@@ -851,24 +928,6 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     // inputs and may re-order outputs, and under FIFO either of those silently sends
     // different satoshis than the plan promised.
 
-    /// <summary>
-    /// A fresh change address for a vintage send — post-quantum whenever the wallet can make one,
-    /// the same rule <see cref="Send.SendChangePolicy"/> applies on the Send page. This path used
-    /// to mint a legacy address unconditionally (bug-bounty report 2026-11-06, fourth round), so
-    /// spending part of a BQ… coin from the Provenance page put the rest back behind an ECDSA key.
-    /// A wallet that can make post-quantum addresses and then fails to gets NO address (the page
-    /// says so) rather than a quiet legacy one.
-    /// </summary>
-    public async Task<string?> GetChangeAddressAsync(CancellationToken ct = default)
-    {
-        if (await CanMintPostQuantumAsync(ct) == true)
-        {
-            var pq = await GetNewPostQuantumAddressAsync("vintage change", ct);
-            return pq.IsOk ? pq.Address : null;
-        }
-        return await GetNewAddressAsync("vintage change");
-    }
-
     public async Task<string?> CreateRawTransactionAsync(
         IReadOnlyList<(string TxId, int Vout)> inputs,
         IReadOnlyList<(string Address, long Satoshis)> outputs,
@@ -886,9 +945,11 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
         return await CallRpcMethodAsync<string>("createrawtransaction", ins, outs);
     }
 
-    public async Task<string?> SignRawTransactionAsync(string rawHex, CancellationToken ct = default)
+    /// <summary>Signed by EXACTLY <paramref name="wallet"/> — the wallet the plan was made on — or
+    /// not at all (audit 2026-11-09: it was signed by whichever wallet was active at that moment).</summary>
+    public async Task<string?> SignRawTransactionAsync(string wallet, string rawHex, CancellationToken ct = default)
     {
-        var signed = await CallWalletRpcAsync<JsonElement>("signrawtransactionwithwallet", rawHex);
+        var signed = await CallPinnedWalletRpcAsync<JsonElement>(wallet, "signrawtransactionwithwallet", rawHex);
         if (signed.ValueKind != JsonValueKind.Object) return null;
         if (signed.TryGetProperty("complete", out var complete) && !complete.GetBoolean()) return null;
         return signed.TryGetProperty("hex", out var hex) ? hex.GetString() : null;
@@ -1090,8 +1151,11 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     public async Task<decimal?> EstimateFeeAsync(Send.SendRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // The estimate is for the wallet the request names — the one the send will leave — exactly
+        // as SendAsync is (audit 2026-11-09: it never read request.Wallet and priced the ACTIVE
+        // wallet's coins, so the fee on the review could belong to a different wallet).
         if (request.ChangeType is null)
-            return await EstimateSendFeeAsync(request.Address, request.Amount, request.SubtractFeeFromAmount);
+            return await EstimateSendFeeAsync(request.Wallet, request.Address, request.Amount, request.SubtractFeeFromAmount);
         try
         {
             var outputs = new Dictionary<string, decimal> { [request.Address] = request.Amount };
@@ -1099,14 +1163,23 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
             if (string.IsNullOrEmpty(raw)) return null;
             var options = new Dictionary<string, object> { ["change_type"] = request.ChangeType };
             if (request.SubtractFeeFromAmount) options["subtractFeeFromOutputs"] = new[] { 0 };
-            var funded = await CallWalletRpcAsync<FundRawResult>("fundrawtransaction", raw, options);
+            var funded = await FundDryRunAsync(request.Wallet, raw, options);
             return funded?.Fee;
         }
+        catch (WalletSwitchPendingException) { throw; }   // not "unknown": the page must say why (see EstimateSendFeeAsync)
         catch
         {
             return null;   // best-effort, like EstimateSendFeeAsync
         }
     }
+
+    /// <summary>The fee dry run (<c>fundrawtransaction</c>, nothing is broadcast) against exactly
+    /// <paramref name="wallet"/> when the request names one, else the active wallet — where it is
+    /// held while a wallet switch is unacknowledged, like every call that is not a plain read.</summary>
+    private Task<FundRawResult?> FundDryRunAsync(string? wallet, params object[] parameters) =>
+        wallet is null
+            ? CallWalletRpcAsync<FundRawResult>("fundrawtransaction", parameters)
+            : CallPinnedWalletRpcAsync<FundRawResult>(wallet, "fundrawtransaction", parameters);
 
     /// <summary>Best-effort precheck so the Send page can reject a malformed/mistyped
     /// address with a clear message up front instead of a cryptic RPC error at send
@@ -1130,7 +1203,12 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
     /// unsigned raw tx paying <paramref name="amount"/> to <paramref name="address"/>,
     /// then fund it (input selection + fee calc) via fundrawtransaction. Returns the
     /// fee in BLZ, or null if it can't be estimated (caller shows a rate fallback).</summary>
-    public async Task<decimal?> EstimateSendFeeAsync(string address, decimal amount, bool subtractFeeFromAmount = false)
+    public Task<decimal?> EstimateSendFeeAsync(string address, decimal amount, bool subtractFeeFromAmount = false)
+        => EstimateSendFeeAsync(wallet: null, address, amount, subtractFeeFromAmount);
+
+    /// <summary><see cref="EstimateSendFeeAsync(string, decimal, bool)"/> against exactly
+    /// <paramref name="wallet"/> when one is named (null = the active wallet).</summary>
+    private async Task<decimal?> EstimateSendFeeAsync(string? wallet, string address, decimal amount, bool subtractFeeFromAmount)
     {
         try
         {
@@ -1141,10 +1219,14 @@ public class BlazecoindRpcService : IBlazecoindRpcService, Provenance.IAncestryR
             // subtractFeeFromOutputs (the fee comes out of output 0) — otherwise
             // fundrawtransaction can't add a fee on top and reports insufficient funds.
             var funded = subtractFeeFromAmount
-                ? await CallWalletRpcAsync<FundRawResult>("fundrawtransaction", raw, new { subtractFeeFromOutputs = new[] { 0 } })
-                : await CallWalletRpcAsync<FundRawResult>("fundrawtransaction", raw);
+                ? await FundDryRunAsync(wallet, raw, new { subtractFeeFromOutputs = new[] { 0 } })
+                : await FundDryRunAsync(wallet, raw);
             return funded?.Fee;
         }
+        // Held because a wallet switch is unacknowledged: that is not "the fee is unknown". It used
+        // to be swallowed with every other failure, so the review showed no fee and gave no reason
+        // (audit 2026-11-09).
+        catch (WalletSwitchPendingException) { throw; }
         catch
         {
             return null;   // best-effort — funding can fail (e.g. insufficient funds)

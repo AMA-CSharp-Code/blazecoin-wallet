@@ -27,7 +27,7 @@ internal enum SpendStanding
 /// <para>Nothing short of the whole chain proves a coin is unspent. A spend, though, is a mined
 /// transaction, and that can be proven the way a coin is. So each proven coin is put to a
 /// gateway OTHER than the one that listed it (<see cref="ISpendCrossCheck"/>), and a spend that
-/// gateway can show — checked by <see cref="LiteTxVerifier.VerifySpendAsync"/>, never believed —
+/// gateway can show — checked by <see cref="LiteTxVerifier.JudgeSpendAsync"/>, never believed —
 /// takes the coin out. One honest gateway among those the wallet uses is enough.</para>
 /// <list type="bullet">
 /// <item><b>A coin is looked at before it first counts</b> (inside the read, within a time
@@ -36,13 +36,19 @@ internal enum SpendStanding
 /// <item><b>Only proof removes a coin.</b> A second gateway that merely leaves a coin out, or
 /// claims a spend it cannot show, removes nothing: after <see cref="MaxUnprovenClaims"/> tries
 /// the claim is set aside and the coin counts (and keeps being asked about).</item>
+/// <item><b>A claim nobody could judge decides nothing</b> (audit 2026-11-09). Evidence that was
+/// not fetched this round, or whose block could not be placed for want of headers, is neither a
+/// proof nor one of those tries: the coin stays out of the balance (or keeps the standing it had)
+/// and is asked about again, ahead of the coins that have had their turn.</item>
 /// <item><b>No second opinion is not a refusal.</b> With one gateway configured, or the others
 /// down, the coin counts as before — that case is no worse than it was, and is the stated limit.</item>
 /// </list>
 /// </summary>
 internal sealed class SpentCoinGuard
 {
-    private sealed record Entry(SpendStanding Standing, DateTime DueUtc, int UnprovenClaims);
+    /// <param name="EvidenceUtc">When evidence of a spend of this coin was last fetched and looked at
+    /// (whatever came of it); <see cref="DateTime.MinValue"/> = never.</param>
+    private sealed record Entry(SpendStanding Standing, DateTime DueUtc, int UnprovenClaims, DateTime EvidenceUtc = default);
 
     private readonly ISpendCrossCheck _crossCheck;
     private readonly LiteTxVerifier _verifier;
@@ -126,11 +132,19 @@ internal sealed class SpentCoinGuard
     /// where the user is waiting on exactly this coin.</summary>
     public async Task<SpendStanding> CheckNowAsync(LiteOutpoint coin, CancellationToken ct = default)
     {
-        var round = RunAsync([coin], new Waited(), _lifetime.Token, force: true);
+        await CheckNowAsync([coin], ct);
+        return StandingOf(coin.TxId, coin.Vout);
+    }
+
+    /// <summary>The same for several coins at once — one round, so one question per request's
+    /// worth of coins instead of one each. Read each coin's answer with <see cref="StandingOf"/>.</summary>
+    public async Task CheckNowAsync(IReadOnlyList<LiteOutpoint> coins, CancellationToken ct = default)
+    {
+        if (coins.Count == 0) return;
+        var round = RunAsync(coins, new Waited(), _lifetime.Token, force: true);
         var finished = await Task.WhenAny(round, Task.Delay(Timeout.Infinite, ct));
         if (finished != round) ct.ThrowIfCancellationRequested();
         await IgnoreAsync(round);
-        return StandingOf(coin.TxId, coin.Vout);
     }
 
     /// <summary>This wallet has just spent the coin. What was known about it is dropped, so if a
@@ -181,6 +195,10 @@ internal sealed class SpentCoinGuard
             var todo = coins
                 .GroupBy(c => Key(c.TxId, c.Vout), StringComparer.OrdinalIgnoreCase).Select(g => g.First())
                 .Where(c => force || !_entries.TryGetValue(Key(c.TxId, c.Vout), out var e) || e.DueUtc <= now)
+                // One question fetches evidence for only so many claims, in the order asked: the
+                // coins whose evidence has waited longest go first, so every claim gets its turn
+                // and a coin already proven spent does not keep taking one (audit 2026-11-09).
+                .OrderBy(c => _entries.TryGetValue(Key(c.TxId, c.Vout), out var e) ? e.EvidenceUtc : default)
                 .ToList();
 
             // A coin with no known source came through a client with no failover list: there is
@@ -201,13 +219,26 @@ internal sealed class SpentCoinGuard
                     continue;
                 }
 
+                var asked = chunk.ToDictionary(c => Key(c.TxId, c.Vout), StringComparer.OrdinalIgnoreCase);
                 var proven = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var failed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var waiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);       // evidence not fetched this round
+                var uncheckable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // fetched, but its block could not be placed
                 foreach (var claim in claims)
                 {
                     var key = Key(claim.TxId, claim.Vout);
-                    claimed.Add(key);
-                    if (!proven.Contains(key) && await _verifier.VerifySpendAsync(claim, lifetime)) proven.Add(key);
+                    if (proven.Contains(key) || !asked.TryGetValue(key, out var coin)) continue;
+                    // Evidence the cap left for a later round was not looked at: the claim is
+                    // neither proven nor failed, and the coin is not "no spend named" either.
+                    if (claim.EvidencePending) { waiting.Add(key); continue; }
+                    // The headers that place the spender's block come, like the evidence, from a
+                    // server other than the one that listed the coin — the party being doubted.
+                    switch (await _verifier.JudgeSpendAsync(claim, [coin.Source!], lifetime))
+                    {
+                        case SpendProof.Proven: proven.Add(key); break;
+                        case SpendProof.CannotCheck: uncheckable.Add(key); break;
+                        default: failed.Add(key); break;
+                    }
                 }
 
                 now = Clock();
@@ -215,9 +246,13 @@ internal sealed class SpentCoinGuard
                 {
                     var key = Key(coin.TxId, coin.Vout);
                     if (proven.Contains(key))
-                        changed |= Settle(coin, SpendStanding.Spent, now + RecheckInterval, now);
-                    else if (claimed.Contains(key))
+                        changed |= Settle(coin, SpendStanding.Spent, now + RecheckInterval, now, evidenceSeen: true);
+                    else if (failed.Contains(key))
                         changed |= SettleUnprovenClaim(coin, now);
+                    else if (uncheckable.Contains(key))
+                        changed |= SettleUnjudgedClaim(coin, now, evidenceSeen: true);
+                    else if (waiting.Contains(key))
+                        changed |= SettleUnjudgedClaim(coin, now, evidenceSeen: false);
                     else
                         changed |= Settle(coin, SpendStanding.Clear, now + RecheckInterval, now);
                 }
@@ -246,13 +281,29 @@ internal sealed class SpentCoinGuard
         var key = Key(coin.TxId, coin.Vout);
         _entries.TryGetValue(key, out var prior);
         if (prior != null && prior.Standing != SpendStanding.Unknown)
-            return Set(key, prior with { DueUtc = now + RetryInterval });
+            return Set(key, prior with { DueUtc = now + RetryInterval, EvidenceUtc = now });
 
         var claims = (prior?.UnprovenClaims ?? 0) + 1;
-        return Set(key, new Entry(claims >= MaxUnprovenClaims ? SpendStanding.Clear : SpendStanding.Unknown, now + RetryInterval, claims));
+        return Set(key, new Entry(claims >= MaxUnprovenClaims ? SpendStanding.Clear : SpendStanding.Unknown, now + RetryInterval, claims, now));
     }
 
-    private bool Settle(LiteOutpoint coin, SpendStanding standing, DateTime due, DateTime now)
+    /// <summary>A second gateway says the coin was spent and its evidence was NOT judged this round
+    /// (audit 2026-11-09): it was not fetched (the per-question cap), or it was and its block could
+    /// not be placed because the headers were not to be had. Nothing was learned, so nothing is
+    /// decided: a coin already judged keeps its standing, a new one stays out of the balance, and —
+    /// unlike evidence that was checked and failed — the round does not count towards
+    /// <see cref="MaxUnprovenClaims"/>. Asked about again after <see cref="RetryInterval"/>.</summary>
+    private bool SettleUnjudgedClaim(LiteOutpoint coin, DateTime now, bool evidenceSeen)
+    {
+        var key = Key(coin.TxId, coin.Vout);
+        _entries.TryGetValue(key, out var prior);
+        var seen = evidenceSeen ? now : prior?.EvidenceUtc ?? default;
+        return prior != null && prior.Standing != SpendStanding.Unknown
+            ? Set(key, prior with { DueUtc = now + RetryInterval, EvidenceUtc = seen })
+            : Set(key, new Entry(SpendStanding.Unknown, now + RetryInterval, prior?.UnprovenClaims ?? 0, seen));
+    }
+
+    private bool Settle(LiteOutpoint coin, SpendStanding standing, DateTime due, DateTime now, bool evidenceSeen = false)
     {
         var key = Key(coin.TxId, coin.Vout);
         // A coin this wallet spent a little while ago is asked about often, whatever was answered.
@@ -261,7 +312,8 @@ internal sealed class SpentCoinGuard
             if (until > now) due = now + RetryInterval < due ? now + RetryInterval : due;
             else _watched.TryRemove(key, out _);
         }
-        return Set(key, new Entry(standing, due, 0));
+        return Set(key, new Entry(standing, due, 0,
+            evidenceSeen ? now : _entries.TryGetValue(key, out var prior) ? prior.EvidenceUtc : default));
     }
 
     private bool Set(string key, Entry entry)

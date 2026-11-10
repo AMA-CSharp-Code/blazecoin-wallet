@@ -56,6 +56,9 @@ public static class MauiProgram
 		builder.Services.AddSingleton<IPinLock, PreferencesPinLock>();
 		// Real device biometric (before AddLiteWallet so it wins over NullBiometricAuth).
 		builder.Services.AddSingleton<IBiometricAuth, DroidBiometricAuth>();
+		// FLAG_SECURE while a recovery phrase or private key is on screen (before AddLiteWallet so it
+		// wins over NullScreenCaptureGuard) - bug-bounty report 2026-11-09.
+		builder.Services.AddSingleton<IScreenCaptureGuard, DroidScreenCaptureGuard>();
 
 		// Re-lock the app when it's backgrounded, so returning requires the PIN/biometric
 		// again (not just at cold launch). The layout observes AppLockSession.StateChanged.

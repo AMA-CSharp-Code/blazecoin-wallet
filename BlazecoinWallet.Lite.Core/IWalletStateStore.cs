@@ -20,25 +20,25 @@ public interface IWalletStateStore
 
     /// <summary>How many INTERNAL-chain change addresses have been used (BIP44 change chain);
     /// 0 = none yet. Persisting this stops a change address from being reused; losing it is
-    /// still safe — a restore gap-scans the change chain to recover the position. Default
-    /// no-op so a store that predates the change chain keeps compiling.</summary>
-    Task<int> GetChangeAddressCountAsync() => Task.FromResult(0);
-    Task SetChangeAddressCountAsync(int count) => Task.CompletedTask;
+    /// still safe — a restore gap-scans the change chain to recover the position.</summary>
+    Task<int> GetChangeAddressCountAsync();
+    Task SetChangeAddressCountAsync(int count);
 
     /// <summary>The furthest header-chain checkpoint verified by proof-of-work ("height:hash:bits");
     /// null = never synced, so the wallet re-anchors from the shipped checkpoint. Losing it is
     /// safe (re-sync from the anchor) and it never overrides the shipped anchor if it's behind.
-    /// Default no-op so a store that predates header sync keeps compiling.</summary>
-    Task<string?> GetVerifiedCheckpointAsync() => Task.FromResult<string?>(null);
-    Task SetVerifiedCheckpointAsync(string value) => Task.CompletedTask;
+    /// Written and read under the wallet's seal (<see cref="SealedValue"/>, audit 2026-11-09): a
+    /// value here that the wallet did not seal is ignored, like a missing one.</summary>
+    Task<string?> GetVerifiedCheckpointAsync();
+    Task SetVerifiedCheckpointAsync(string value);
 
     /// <summary>Header anchors the wallet has verified ABOVE the shipped table
     /// ("height:hash,height:hash…", one per 1,000 blocks — about 190 bytes a day). Lets a merkle
     /// proof's block be linked to a nearby trusted hash after a restart. Losing it is safe (a
-    /// proof then links to the verified tip instead, and the anchors are re-learned). Default
-    /// no-op so a store that predates anchors keeps compiling.</summary>
-    Task<string?> GetHeaderAnchorsAsync() => Task.FromResult<string?>(null);
-    Task SetHeaderAnchorsAsync(string value) => Task.CompletedTask;
+    /// proof then links to the verified tip instead, and the anchors are re-learned). Sealed like
+    /// the checkpoint.</summary>
+    Task<string?> GetHeaderAnchorsAsync();
+    Task SetHeaderAnchorsAsync(string value);
 
     /// <summary>Whether the recovery-phrase backup has been PROVEN — the quiz passed, or the
     /// wallet was restored from a typed phrase (possession is proof). False drives the Home
@@ -50,38 +50,57 @@ public interface IWalletStateStore
     /// been proven" with no quiz ever run (bug-bounty report 2026-11-06). Every released build
     /// writes the flag when a wallet is created (false) or restored (true), so the only wallets
     /// this changes are ones with no record, and all it costs them is being asked to verify.</para></summary>
-    Task<bool> GetBackupVerifiedAsync() => Task.FromResult(false);
-    Task SetBackupVerifiedAsync(bool verified) => Task.CompletedTask;
+    Task<bool> GetBackupVerifiedAsync();
+    Task SetBackupVerifiedAsync(bool verified);
 
     /// <summary>How many POST-QUANTUM (BQ…) receive addresses have been revealed (PQ_SIGNATURES.md
     /// §6 chain, index 0..count-1); 0 = none. Losing it is safe — a restore gap-scans the PQ
-    /// chain once the fork is active. Default no-op so a store that predates the PQ chain
-    /// keeps compiling (it then forgets reveals across restarts, which only costs a rescan).</summary>
-    Task<int> GetPqAddressCountAsync() => Task.FromResult(0);
-    Task SetPqAddressCountAsync(int count) => Task.CompletedTask;
+    /// chain once the fork is active.</summary>
+    Task<int> GetPqAddressCountAsync();
+    Task SetPqAddressCountAsync(int count);
 
     /// <summary>The coins this wallet has PROVEN on the chain ("txid:vout:address:sats;…"), so a
     /// restart does not re-verify every coin before the balance can be shown (bug-bounty report
     /// 2026-11-06: only proven coins count). Non-secret; losing it is safe — the coins are simply
-    /// verified again, and a spend re-verifies its inputs regardless. Default no-op so a store
-    /// that predates it keeps compiling.</summary>
-    Task<string?> GetVerifiedCoinsAsync() => Task.FromResult<string?>(null);
-    Task SetVerifiedCoinsAsync(string value) => Task.CompletedTask;
+    /// verified again, and a spend re-verifies its inputs regardless.</summary>
+    Task<string?> GetVerifiedCoinsAsync();
+    Task SetVerifiedCoinsAsync(string value);
 
     /// <summary>Wipes stored state (wallet reset).</summary>
     Task ClearAsync();
 }
 
+/// <summary>
+/// What a store answers when it has NO RECORD of a value — the one place every implementation
+/// takes it from (audit 2026-11-09). The interface used to carry these as default members, so a
+/// store could compile without a member and silently DISCARD its writes; and each head store
+/// spelled the "no record" readings out for itself. Every value's absence is the safe reading.
+/// </summary>
+public static class WalletStateDefaults
+{
+    /// <summary>No count stored: none revealed or used — the position is rediscovered from the chain.</summary>
+    public const int AddressCount = 0;
+
+    /// <summary>No record of the backup flag: NOT verified (bug-bounty report 2026-11-06).</summary>
+    public const bool BackupVerified = false;
+
+    /// <summary>A stored count as text (a store that keeps strings); anything unreadable is no record.</summary>
+    public static int Count(string? stored) => int.TryParse(stored, out var n) ? n : AddressCount;
+
+    /// <summary>The stored backup flag as text; anything unreadable is no record.</summary>
+    public static bool Verified(string? stored) => bool.TryParse(stored, out var v) ? v : BackupVerified;
+}
+
 /// <summary>Default volatile store — fine for tests and the throwaway dev host.</summary>
 public sealed class InMemoryWalletStateStore : IWalletStateStore
 {
-    private int _revealed;
-    private int _change;
-    private int _pq;
+    private int _revealed = WalletStateDefaults.AddressCount;
+    private int _change = WalletStateDefaults.AddressCount;
+    private int _pq = WalletStateDefaults.AddressCount;
     private string? _checkpoint;
     private string? _anchors;
     private string? _verifiedCoins;
-    private bool _backupVerified;          // no record = not verified, like every persistent store
+    private bool _backupVerified = WalletStateDefaults.BackupVerified;   // no record = not verified, like every persistent store
     public Task<int> GetRevealedAddressCountAsync() => Task.FromResult(_revealed);
     public Task SetRevealedAddressCountAsync(int count) { _revealed = count; return Task.CompletedTask; }
     public Task<int> GetChangeAddressCountAsync() => Task.FromResult(_change);

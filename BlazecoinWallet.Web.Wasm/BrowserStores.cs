@@ -46,12 +46,12 @@ internal static partial class BrowserKv
 public sealed class BrowserWalletStateStore : IWalletStateStore
 {
     public Task<int> GetRevealedAddressCountAsync()
-        => Task.FromResult(int.TryParse(BrowserKv.GetOrNull("revealed_address_count"), out var n) ? n : 0);
+        => Task.FromResult(WalletStateDefaults.Count(BrowserKv.GetOrNull("revealed_address_count")));
     public Task SetRevealedAddressCountAsync(int count)
     { BrowserKv.Set("revealed_address_count", count.ToString()); return Task.CompletedTask; }
 
     public Task<int> GetChangeAddressCountAsync()
-        => Task.FromResult(int.TryParse(BrowserKv.GetOrNull("change_address_count"), out var n) ? n : 0);
+        => Task.FromResult(WalletStateDefaults.Count(BrowserKv.GetOrNull("change_address_count")));
     public Task SetChangeAddressCountAsync(int count)
     { BrowserKv.Set("change_address_count", count.ToString()); return Task.CompletedTask; }
 
@@ -66,12 +66,12 @@ public sealed class BrowserWalletStateStore : IWalletStateStore
     { BrowserKv.Set("header_anchors", value); return Task.CompletedTask; }
 
     public Task<bool> GetBackupVerifiedAsync()
-        => Task.FromResult(bool.TryParse(BrowserKv.GetOrNull("backup_verified"), out var v) && v);   // no record = not verified (bug-bounty report 2026-11-06)
+        => Task.FromResult(WalletStateDefaults.Verified(BrowserKv.GetOrNull("backup_verified")));   // no record = not verified: the one place (audit 2026-11-09)
     public Task SetBackupVerifiedAsync(bool verified)
     { BrowserKv.Set("backup_verified", verified.ToString()); return Task.CompletedTask; }
 
     public Task<int> GetPqAddressCountAsync()
-        => Task.FromResult(int.TryParse(BrowserKv.GetOrNull("pq_address_count"), out var n) ? n : 0);
+        => Task.FromResult(WalletStateDefaults.Count(BrowserKv.GetOrNull("pq_address_count")));
     public Task SetPqAddressCountAsync(int count)
     { BrowserKv.Set("pq_address_count", count.ToString()); return Task.CompletedTask; }
 

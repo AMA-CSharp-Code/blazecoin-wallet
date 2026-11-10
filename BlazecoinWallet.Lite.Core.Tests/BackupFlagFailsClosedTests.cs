@@ -9,14 +9,6 @@ namespace BlazecoinWallet.Lite.Tests;
 /// </summary>
 public class BackupFlagFailsClosedTests
 {
-    /// <summary>A store written before the flag existed: it implements only what the interface forces.</summary>
-    private sealed class OldStore : IWalletStateStore
-    {
-        public Task<int> GetRevealedAddressCountAsync() => Task.FromResult(1);
-        public Task SetRevealedAddressCountAsync(int count) => Task.CompletedTask;
-        public Task ClearAsync() => Task.CompletedTask;
-    }
-
     private sealed class Vault : ISeedVault
     {
         public string? Words = MinedBlockFixture.Mnemonic;
@@ -42,7 +34,26 @@ public class BackupFlagFailsClosedTests
     public async Task No_record_of_the_flag_means_not_verified()
     {
         Assert.False(await new InMemoryWalletStateStore().GetBackupVerifiedAsync());
-        Assert.False(await ((IWalletStateStore)new OldStore()).GetBackupVerifiedAsync());   // the interface default
+        // The one reading every store takes it from (audit 2026-11-09).
+        Assert.False(WalletStateDefaults.BackupVerified);
+        Assert.False(WalletStateDefaults.Verified(null));
+        Assert.False(WalletStateDefaults.Verified("not a flag"));
+        Assert.True(WalletStateDefaults.Verified("True"));
+        Assert.Equal(0, WalletStateDefaults.AddressCount);
+        Assert.Equal(0, WalletStateDefaults.Count(null));
+        Assert.Equal(7, WalletStateDefaults.Count("7"));
+    }
+
+    /// <summary>A store used to be able to leave a member out and get a default that silently
+    /// DISCARDED its writes (and a fork-status stub got the gateway's claimed height as its
+    /// "verified" tip). Nothing on either interface has a default any more (audit 2026-11-09).</summary>
+    [Theory]
+    [InlineData(typeof(IWalletStateStore))]
+    [InlineData(typeof(Fork.IForkStatusService))]
+    public void No_member_of_the_store_or_the_fork_status_has_a_default_implementation(Type contract)
+    {
+        var members = contract.GetMethods().Where(m => !m.IsSpecialName || m.Name.StartsWith("get_") || m.Name.StartsWith("set_"));
+        Assert.All(members, m => Assert.True(m.IsAbstract, $"{contract.Name}.{m.Name} has a default implementation"));
     }
 
     [Fact]
@@ -69,11 +80,12 @@ public class BackupFlagFailsClosedTests
 
     /// <summary>The four persistent stores live in head projects this suite cannot load (MAUI
     /// Preferences, the browser, the dev host's files), so their one-line readers are pinned at
-    /// the source: none may fall back to "verified" when the value is absent.</summary>
+    /// the source: none may fall back to "verified" when the value is absent. The three shipped
+    /// heads take the reading from <see cref="WalletStateDefaults"/>; the dev host spells its own.</summary>
     [Theory]
-    [InlineData("BlazecoinWallet.App.Droid/PreferencesWalletStateStore.cs", @"Get\(BackupVerifiedKey,\s*false\)")]
-    [InlineData("BlazecoinWallet.App.iOS/PreferencesWalletStateStore.cs", @"Get\(BackupVerifiedKey,\s*false\)")]
-    [InlineData("BlazecoinWallet.Web.Wasm/BrowserStores.cs", @"bool\.TryParse\(BrowserKv\.GetOrNull\(""backup_verified""\), out var v\) && v")]
+    [InlineData("BlazecoinWallet.App.Droid/PreferencesWalletStateStore.cs", @"Get\(BackupVerifiedKey,\s*WalletStateDefaults\.BackupVerified\)")]
+    [InlineData("BlazecoinWallet.App.iOS/PreferencesWalletStateStore.cs", @"Get\(BackupVerifiedKey,\s*WalletStateDefaults\.BackupVerified\)")]
+    [InlineData("BlazecoinWallet.Web.Wasm/BrowserStores.cs", @"WalletStateDefaults\.Verified\(BrowserKv\.GetOrNull\(""backup_verified""\)\)")]
     [InlineData("BlazecoinWallet.Web.DevHost/DevFileWalletStateStore.cs", @"File\.Exists\(BackupVerifiedPath\) &&")]
     public void Every_heads_store_reads_an_absent_flag_as_not_verified(string relativePath, string failClosedPattern)
     {

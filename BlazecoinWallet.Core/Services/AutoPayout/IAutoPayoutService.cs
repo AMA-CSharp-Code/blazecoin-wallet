@@ -1,5 +1,17 @@
 namespace BlazecoinWallet.Core.Services.AutoPayout;
 
+/// <summary>The numeric auto-payout settings the page steps and (for the four amounts) types into.
+/// These were the strings "threshold", "reserve", "batch", "cap" and "cooldown" until the audit of 2026-11-09.</summary>
+public enum AutoPayoutField
+{
+    Threshold,
+    Reserve,
+    BatchSize,
+    DailyCap,
+    /// <summary>Whole minutes — stepped, never typed as an amount.</summary>
+    Cooldown,
+}
+
 /// <summary>The auto-payout engine, extracted from Send.razor so the
 /// money-moving logic (threshold/cooldown/daily-cap evaluation, batching,
 /// dry-run vs live execution, durable accounting and crash recovery) lives in a
@@ -15,6 +27,24 @@ namespace BlazecoinWallet.Core.Services.AutoPayout;
 /// read-only to callers and mutated only inside the engine.</summary>
 public interface IAutoPayoutService
 {
+    // ----- The four amounts as the user types them (audit 2026-11-09) -----
+    // They are text fields read by one strict grammar (TypedAmount). What was typed and could not
+    // be read used to live in the page, in a dictionary keyed by strings, and "Start is off until
+    // it is fixed" existed only as a disabled attribute on the button.
+
+    /// <summary>What the field shows: the text as typed while it is unreadable, else the setting's value.</summary>
+    string AmountText(AutoPayoutField field);
+
+    /// <summary>The user typed this. Readable text sets the setting; text that is not an amount is
+    /// kept to show back, flagged (<see cref="IsUnreadable"/>), and the setting keeps its value.</summary>
+    void SetAmountText(AutoPayoutField field, string? text);
+
+    /// <summary>True while <paramref name="field"/> holds text that is not an amount.</summary>
+    bool IsUnreadable(AutoPayoutField field);
+
+    /// <summary>True while any amount holds text that is not an amount. <see cref="StartAsync"/> refuses then.</summary>
+    bool HasUnreadableAmount { get; }
+
     // ----- Settings (two-way bound in the UI; persisted via SaveSettingsAsync) -----
     decimal? Threshold { get; set; }
     string Address { get; set; }
@@ -35,6 +65,10 @@ public interface IAutoPayoutService
     bool Enabled { get; }
     decimal Spendable { get; }
     string Reason { get; }
+    /// <summary>Whether the page draws <see cref="Reason"/>: while the engine is on — and also when a
+    /// press of Start was REFUSED, which leaves the engine off (audit 2026-11-09: the refusal went
+    /// to the log only, and the line under the button stayed blank).</summary>
+    bool ShowReason { get; }
     IReadOnlyList<string> Log { get; }
     /// <summary>True while a LIVE batch loop is broadcasting — the manual Send
     /// form checks this for mutual exclusion over the same UTXOs.</summary>
@@ -64,9 +98,9 @@ public interface IAutoPayoutService
     /// <summary>Disarm the watcher.</summary>
     Task StopAsync();
 
-    /// <summary>Bump a numeric setting from the UI spinner arrows and save.
-    /// field ∈ {threshold, reserve, batch, cap, cooldown}.</summary>
-    Task StepAsync(string field, int dir);
+    /// <summary>Bump a numeric setting from the UI spinner arrows and save. The arrows set a real
+    /// number, so they also clear text in that field that could not be read.</summary>
+    Task StepAsync(AutoPayoutField field, int dir);
 
     /// <summary>Read the current spendable balance into <see cref="Spendable"/>.</summary>
     Task RefreshSpendableAsync();

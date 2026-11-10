@@ -184,7 +184,7 @@ public class HeaderChainTests
     public async Task Sync_advances_the_verified_tip_and_persists_it()
     {
         var store = new InMemoryWalletStateStore();
-        var sync = new HeaderChainSync(new FixtureHeaderReader(), store, BlazecoinNetwork.Instance, Checkpoint);
+        var sync = new HeaderChainSync(new FixtureHeaderReader(), store, BlazecoinNetwork.Instance, Checkpoint) { StateKeys = HeaderStateKeys.Keys };
 
         Assert.True(sync.Available);
         Assert.Equal(HeaderChainFixture.CheckpointHeight, sync.VerifiedTipHeight);
@@ -192,7 +192,8 @@ public class HeaderChainTests
         await sync.SyncAsync();
 
         Assert.Equal(HeaderChainFixture.TipHeight, sync.VerifiedTipHeight);
-        var persisted = HeaderCheckpoint.TryParse(await store.GetVerifiedCheckpointAsync());
+        // Persisted under this wallet's seal (audit 2026-11-09) — never as a bare line.
+        var persisted = HeaderCheckpoint.TryParse(HeaderStateKeys.OpenTip(await store.GetVerifiedCheckpointAsync()));
         Assert.NotNull(persisted);
         Assert.Equal(HeaderChainFixture.TipHeight, persisted!.Height);
     }
@@ -219,16 +220,17 @@ public class HeaderChainTests
         // A persisted tip AHEAD of the shipped anchor is resumed from (no re-verifying old work).
         var ahead = new HeaderCheckpoint(HeaderChainFixture.TipHeight, HeaderChainFixture.CheckpointHash, HeaderChainFixture.CheckpointBits);
         var store = new InMemoryWalletStateStore();
-        await store.SetVerifiedCheckpointAsync(ahead.Serialize());
-        var sync = new HeaderChainSync(new FixtureHeaderReader(), store, BlazecoinNetwork.Instance, Checkpoint);
+        await store.SetVerifiedCheckpointAsync(HeaderStateKeys.SealedTip(ahead.Serialize()));
+        var sync = new HeaderChainSync(new FixtureHeaderReader(), store, BlazecoinNetwork.Instance, Checkpoint) { StateKeys = HeaderStateKeys.Keys };
         await sync.SyncAsync();
         Assert.Equal(HeaderChainFixture.TipHeight, sync.VerifiedTipHeight);
+        Assert.Equal(ahead.Hash, sync.VerifiedHashAt(HeaderChainFixture.TipHeight));   // the stored record itself, not a re-sync to the same height
 
         // A persisted tip BEHIND the shipped anchor is ignored — verification never regresses.
         var behind = new HeaderCheckpoint(1_000_000, HeaderChainFixture.CheckpointHash, HeaderChainFixture.CheckpointBits);
         var store2 = new InMemoryWalletStateStore();
-        await store2.SetVerifiedCheckpointAsync(behind.Serialize());
-        var sync2 = new HeaderChainSync(new FixtureHeaderReader(count: 0), store2, BlazecoinNetwork.Instance, Checkpoint);
+        await store2.SetVerifiedCheckpointAsync(HeaderStateKeys.SealedTip(behind.Serialize()));
+        var sync2 = new HeaderChainSync(new FixtureHeaderReader(count: 0), store2, BlazecoinNetwork.Instance, Checkpoint) { StateKeys = HeaderStateKeys.Keys };
         await sync2.SyncAsync();
         Assert.Equal(HeaderChainFixture.CheckpointHeight, sync2.VerifiedTipHeight);
     }

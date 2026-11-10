@@ -17,6 +17,8 @@ public enum SweepSendStatus
     NotSentDaemonBusy,
     /// <summary>The send call timed out or the connection broke: the batch MAY have gone out. Never retried.</summary>
     Unknown,
+    /// <summary>The active wallet is no longer the one the sweep was planned on: the batch was not signed and not sent.</summary>
+    WalletChanged,
 }
 
 /// <summary>The outcome of one broadcast: what was sent, and where and why it stopped.</summary>
@@ -47,6 +49,10 @@ public sealed record SweepBroadcastResult(
             SweepSendStatus.BuildFailed => $"Batch {FailedBatch} of {TotalBatches}: the node couldn't build the transaction{why}; it was not sent.{already} Rescan before trying again.",
             SweepSendStatus.SignFailed => $"Batch {FailedBatch} of {TotalBatches}: signing failed or was incomplete — is the wallet unlocked?{why} It was not sent.{already} Rescan before trying again.",
             SweepSendStatus.Rejected => $"Batch {FailedBatch} of {TotalBatches}: the node refused the transaction{why}; it was not sent.{already} Rescan before trying again.",
+            // The Send page's words when nothing went out; between two batches, what did and did not.
+            SweepSendStatus.WalletChanged => SentTxIds.Count == 0
+                ? Detail + WalletBinding.NothingSent
+                : $"Batch {FailedBatch} of {TotalBatches} was not sent. {Detail}{already} Rescan before trying again.",
             SweepSendStatus.NotSentDaemonBusy => $"Batch {FailedBatch} of {TotalBatches}: the node was too busy to take it; it was not sent.{already} Rescan, then try again in a minute.",
             _ => $"Batch {FailedBatch} of {TotalBatches}: stopped.{already}",
         };
@@ -56,23 +62,35 @@ public sealed record SweepBroadcastResult(
 /// <summary>Builds, signs and broadcasts a sweep plan batch by batch.</summary>
 public interface ISweepBroadcaster
 {
-    Task<SweepBroadcastResult> BroadcastAsync(SweepPlan plan, CancellationToken ct = default);
+    /// <param name="wallet">The wallet the sweep was bound to when it was planned ("" = the node's
+    /// default wallet endpoint). Every batch is signed by exactly that wallet, and none is signed
+    /// or sent once it is no longer the active one (audit 2026-11-09).</param>
+    Task<SweepBroadcastResult> BroadcastAsync(SweepPlan plan, string wallet, CancellationToken ct = default);
 }
 
 /// <summary>
 /// Raw-transaction path (explicit inputs, explicit single output) over <see cref="IVintageSendRpc"/>.
 /// Stops at the first batch that does not go out, and NEVER calls send twice for one batch: a
 /// timeout or broken connection during <c>sendrawtransaction</c> is reported as UNKNOWN.
+/// <para>Bound to one wallet (audit 2026-11-09): each batch used to be signed by whichever wallet
+/// was active at that moment. Where that wallet shared keys with the one the coins were scanned in
+/// (a migrated or restored copy) the sweep went out to an address the other wallet had minted.</para>
 /// </summary>
 public sealed class SweepBroadcaster : ISweepBroadcaster
 {
     private readonly IVintageSendRpc _rpc;
+    private readonly IWalletBinding _binding;
 
-    public SweepBroadcaster(IVintageSendRpc rpc) => _rpc = rpc ?? throw new ArgumentNullException(nameof(rpc));
+    public SweepBroadcaster(IVintageSendRpc rpc, IWalletBinding binding)
+    {
+        _rpc = rpc ?? throw new ArgumentNullException(nameof(rpc));
+        _binding = binding ?? throw new ArgumentNullException(nameof(binding));
+    }
 
-    public async Task<SweepBroadcastResult> BroadcastAsync(SweepPlan plan, CancellationToken ct = default)
+    public async Task<SweepBroadcastResult> BroadcastAsync(SweepPlan plan, string wallet, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(wallet);
         var sent = new List<string>();
         var total = plan.Transactions.Count;
         SweepBroadcastResult Stop(SweepSendStatus s, int batch, string? detail) => new(s, sent, total, batch, detail);
@@ -83,6 +101,10 @@ public sealed class SweepBroadcaster : ISweepBroadcaster
         {
             var tx = plan.Transactions[i];
             var batch = i + 1;
+
+            // Before anything is built or signed for this batch: still the wallet the plan was made on?
+            if (!_binding.IsStillActive(wallet, out var activeNow))
+                return Stop(SweepSendStatus.WalletChanged, batch, WalletBinding.MovedSentence(wallet, activeNow));
 
             string? raw;
             try
@@ -95,7 +117,7 @@ public sealed class SweepBroadcaster : ISweepBroadcaster
             if (string.IsNullOrEmpty(raw)) return Stop(SweepSendStatus.BuildFailed, batch, null);
 
             string? signed;
-            try { signed = await _rpc.SignRawTransactionAsync(raw, ct); }
+            try { signed = await _rpc.SignRawTransactionAsync(wallet, raw, ct); }
             catch (Exception ex) when (ex is not OperationCanceledException) { return Stop(SweepSendStatus.SignFailed, batch, ex.Message); }
             if (string.IsNullOrEmpty(signed)) return Stop(SweepSendStatus.SignFailed, batch, null);
 

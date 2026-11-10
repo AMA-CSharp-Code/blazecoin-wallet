@@ -5,8 +5,10 @@
 @inject NavigationManager Nav
 @inject IQrScanner Scanner
 @inject IUnitSettings Units
-@inject IExplorerSettings Explorer
 @using BlazecoinWallet.Lite.Data
+
+@* A phrase or a private key is shown or typed here: keep the window out of screen capture. *@
+<SecretScreen />
 
 @* Legacy key sweep: paste (or scan) a 2014-era WIF private key, see what it holds, and
    move EVERYTHING into this wallet in one on-device-signed transaction. The imported key
@@ -81,19 +83,16 @@
     }
     @if (_sweptTxId != null)
     {
-        <div class="lite-success">
-            Recovered! Your old coins are on their way — transaction<br />
-            @{ var txUrl = LiteExplorer.TxUrl(Explorer.BaseUrl, _sweptTxId); }
-            @if (txUrl != null)
-            {
-                <a href="@txUrl" target="_blank" rel="noopener" class="lite-link"><strong>@_sweptTxId</strong></a>
-            }
-            else
-            {
-                <strong>@_sweptTxId</strong>
-            }
-            <br />They'll show on Home after one confirmation (~30 seconds).
-        </div>
+        <SendReceipt Unconfirmed="_sweptUnconfirmed" TxId="@_sweptTxId">
+            <UnconfirmedLead>Sent, but <strong>not confirmed yet</strong> — transaction</UnconfirmedLead>
+            <ConfirmedLead>Recovered! Your old coins are on their way — transaction</ConfirmedLead>
+            <ChildContent>
+                @if (!_sweptUnconfirmed)
+                {
+                    <br /><text>They'll show on Home after one confirmation (~30 seconds).</text>
+                }
+            </ChildContent>
+        </SendReceipt>
     }
 </div>
 
@@ -104,6 +103,7 @@
     private bool _busy;
     private string? _error;
     private string? _sweptTxId;
+    private bool _sweptUnconfirmed;   // the receipt rests on one gateway's word alone
     private string _sym => LiteUnits.Symbol(Units.Unit);
 
     protected override async Task OnInitializedAsync()
@@ -153,6 +153,7 @@
             if (result.Success)
             {
                 _sweptTxId = result.TxId;
+                _sweptUnconfirmed = result.Unconfirmed;
                 Reset(keepSuccess: true);
             }
             else
@@ -176,7 +177,7 @@
         _wif = string.Empty; // drop the key from the field the moment it's no longer needed
         _check = null;
         _error = null;
-        if (!keepSuccess) _sweptTxId = null;
+        if (!keepSuccess) { _sweptTxId = null; _sweptUnconfirmed = false; }
     }
 
     private string AmountText(long sats) => LiteUnits.Format(sats, Units.Unit);

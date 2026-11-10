@@ -9,6 +9,7 @@
 @inject IBiometricAuth Biometric
 @inject AppLockSession Lock
 @inject IWalletLocker Locker
+@inject AttemptLimiter Attempts
 @inject HeaderChainSync HeaderSync
 @inject IForkStatusService Fork
 @inject NavigationManager Nav
@@ -300,35 +301,24 @@ else
     private void Dismiss(IncomingPayment payment) => _toasts.Remove(payment);
 
     // Attempt throttling (audit round-3 C2): PBKDF2 blunts offline brute force but online
-    // guessing on a 4-digit PIN would otherwise be unbounded — 5 misses buys a 30 s wait.
-    private int _pinFailures;
-    private DateTime _pinLockedUntil = DateTime.MinValue;
-
+    // guessing on a 4-digit PIN would otherwise be unbounded — 5 misses buys a 30 s wait. The
+    // count is the one the phrase's second look shares (AttemptLimiter, audit 2026-11-09).
     private void TryPin()
     {
-        if (DateTime.UtcNow < _pinLockedUntil)
+        if (Attempts.Wait is { } wait)
         {
-            _lockError = $"Too many attempts — wait {(int)(_pinLockedUntil - DateTime.UtcNow).TotalSeconds + 1}s.";
+            _lockError = AttemptLimiter.WaitMessage(wait);
             return;
         }
         if (Pin.Verify(_pinEntry))
         {
             Lock.Unlock();
-            _pinEntry = string.Empty; _lockError = null; _pinFailures = 0;
+            _pinEntry = string.Empty; _lockError = null; Attempts.Reset();
         }
         else
         {
             _pinEntry = string.Empty;
-            if (++_pinFailures >= 5)
-            {
-                _pinFailures = 0;
-                _pinLockedUntil = DateTime.UtcNow.AddSeconds(30);
-                _lockError = "Too many attempts — locked for 30 seconds.";
-            }
-            else
-            {
-                _lockError = "Wrong PIN.";
-            }
+            _lockError = Attempts.Miss() ? AttemptLimiter.TrippedMessage : "Wrong PIN.";
         }
     }
 

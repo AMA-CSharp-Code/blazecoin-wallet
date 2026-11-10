@@ -91,13 +91,13 @@ public class ExplorerVintageSendTests
     public void Plan_sends_whole_outputs_as_one_output_with_the_model_caveat_and_no_pedigree_heights()
     {
         var h = ExplorerVintageSend.Holdings(ExplorerVintageSend.Join(new[] { Answer }, Local), "2014");
-        var r = ExplorerVintageSend.PlanWholeCoins(h, V2014, coinCount: 2, minPurity: 0.9, recipient: "Bdest", feeSatoshis: 0);
+        var r = ExplorerVintageSend.PlanWholeCoins(h, V2014, coinCount: 2, minPurity: 0.9, recipient: TestAddr.Dest, feeSatoshis: 0);
 
         Assert.Null(r.Problem);
         var plan = r.Plan!;
         Assert.Equal(new[] { ("t1", 0), ("t2", 0) }, plan.Inputs.Select(i => (i.TxId, i.Vout)));
         var o = Assert.Single(plan.Outputs);
-        Assert.Equal(("Bdest", 2_000L, OutputRole.Vintage), (o.Address, o.Satoshis, o.Role));
+        Assert.Equal((TestAddr.Dest, 2_000L, OutputRole.Vintage), (o.Address, o.Satoshis, o.Role));
         Assert.True(plan.Balances);
         Assert.Empty(plan.TargetHeights);
         Assert.Contains(plan.Warnings, w => w.Contains("PROPORTIONAL") && w.Contains("1,920 of 2,000"));
@@ -110,25 +110,25 @@ public class ExplorerVintageSendTests
     {
         var h = ExplorerVintageSend.Holdings(ExplorerVintageSend.Join(new[] { Answer }, Local), "2014");
         Assert.Contains("No output is at least",
-            ExplorerVintageSend.PlanWholeCoins(h.Where(x => x.TxId != "t1").ToList(), V2014, 1, 1.0, "Bdest", 0).Problem);
-        Assert.Contains("fewer than the 3", ExplorerVintageSend.PlanWholeCoins(h, V2014, 3, 0.9, "Bdest", 0).Problem);
-        Assert.Contains("exactly 999", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, "Bdest", 0, coinValueSatoshis: 999).Problem);
+            ExplorerVintageSend.PlanWholeCoins(h.Where(x => x.TxId != "t1").ToList(), V2014, 1, 1.0, TestAddr.Dest, 0).Problem);
+        Assert.Contains("fewer than the 3", ExplorerVintageSend.PlanWholeCoins(h, V2014, 3, 0.9, TestAddr.Dest, 0).Problem);
+        Assert.Contains("exactly 999", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, TestAddr.Dest, 0, coinValueSatoshis: 999).Problem);
     }
 
     [Fact]
     public void Plan_refuses_a_fee_that_eats_the_output_and_a_dusty_result()
     {
         var h = ExplorerVintageSend.Holdings(ExplorerVintageSend.Join(new[] { Answer }, Local), "2014");
-        Assert.Contains("consume the whole output", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, "Bdest", 1_000).Problem);
-        Assert.Contains("dust limit", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, "Bdest", 999).Problem);
+        Assert.Contains("consume the whole output", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, TestAddr.Dest, 1_000).Problem);
+        Assert.Contains("dust limit", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, TestAddr.Dest, 999).Problem);
         Assert.Contains("recipient", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, " ", 0).Problem);
         // A blz1… (SegWit) recipient is refused too - the coins would be unspendable (bug-bounty report 2026-11-06, ninth round).
         Assert.Contains("SegWit", ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.9, "blz1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 0).Problem);
-        Assert.Contains("at least one", ExplorerVintageSend.PlanWholeCoins(h, V2014, 0, 0.9, "Bdest", 0).Problem);
+        Assert.Contains("at least one", ExplorerVintageSend.PlanWholeCoins(h, V2014, 0, 0.9, TestAddr.Dest, 0).Problem);
         // The same 2,000 satoshis that reach a legacy address are dust for a post-quantum one: its limit
         // is 11,475 on node 2.1.2 (bug-bounty report 2026-11-06, seventh round).
         const string bq = "BQGeaQmsowAjL1ZG8q1AfVH4NgBvtJKJSsjnnKEf62BMjekdU82n";
-        Assert.Null(ExplorerVintageSend.PlanWholeCoins(h, V2014, 2, 0.9, "Bdest", 0).Problem);
+        Assert.Null(ExplorerVintageSend.PlanWholeCoins(h, V2014, 2, 0.9, TestAddr.Dest, 0).Problem);
         Assert.Contains("11,475-satoshi dust limit", ExplorerVintageSend.PlanWholeCoins(h, V2014, 2, 0.9, bq, 0).Problem);
     }
 
@@ -136,7 +136,7 @@ public class ExplorerVintageSendTests
     public void A_named_size_picks_that_coin_and_a_fee_warns_about_the_shortfall()
     {
         var h = ExplorerVintageSend.Holdings(ExplorerVintageSend.Join(new[] { Answer }, Local), "2014");
-        var r = ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.3, "Bdest", 10, coinValueSatoshis: 2_000);
+        var r = ExplorerVintageSend.PlanWholeCoins(h, V2014, 1, 0.3, TestAddr.Dest, 10, coinValueSatoshis: 2_000);
         Assert.Null(r.Problem);
         Assert.Equal("t3", r.Plan!.Inputs.Single().TxId);
         Assert.Equal(1_990, r.Plan.SendAmount);

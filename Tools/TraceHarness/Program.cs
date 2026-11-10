@@ -25,7 +25,10 @@ var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<str
     ["Blazecoind:RpcUrl"] = $"http://127.0.0.1:{port}"
 }).Build();
 
-var rpc = new BlazecoindRpcService(config, new Ctx(wallet), sp.GetRequiredService<IHttpClientFactory>());
+// The service needs a switch notice (audit 2026-11-09: it was optional, and without one a write
+// followed whatever wallet a read had moved to). This tool only reads, and shows no notice, so a
+// real one that nothing dismisses is right: if a read ever re-points it, every write stays held.
+var rpc = new BlazecoindRpcService(config, new Ctx(wallet), sp.GetRequiredService<IHttpClientFactory>(), new WalletSwitchNotice());
 IAncestryRpc ancestry = rpc;
 
 var utxos = await ancestry.ListUnspentAsync();

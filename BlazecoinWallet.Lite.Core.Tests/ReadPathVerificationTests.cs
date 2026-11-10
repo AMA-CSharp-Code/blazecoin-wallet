@@ -136,12 +136,25 @@ public partial class ReadPathVerificationTests
         var indexer = new IndexerDataService(
             new HttpClient(gateway) { BaseAddress = new Uri("https://gw.test/") }, NullLogger<IndexerDataService>.Instance);
         store ??= new InMemoryWalletStateStore();
-        var service = new LiteWalletService(new MemoryVault(), indexer, verifier: new LiteTxVerifier(indexer), stateStore: store);
-        var wallet = new Wallet(service, gateway, store);
-        service.Checks!.Pace = TimeSpan.Zero;
-        service.Checks.Clock = () => wallet.Now;
+        Wallet? wallet = null;
+        var service = GatewayWallet(indexer, store, () => wallet!.Now, guardOnClock: false);
+        wallet = new Wallet(service, gateway, store);
         await service.RestoreWalletAsync(F.Mnemonic);
         return wallet;
+    }
+
+    /// <summary>The gateway-mode wallet service over one client, as the composition root wires it
+    /// (the client is also who a second opinion on spends and address use is asked of) — with the
+    /// read-path queue and the spent-coin guard built HERE and handed in, unpaced and on the
+    /// test's clock, instead of being reached for inside the service afterwards.</summary>
+    private static LiteWalletService GatewayWallet(IndexerDataService indexer, IWalletStateStore store, Func<DateTime> clock,
+        bool guardOnClock = true)
+    {
+        var verifier = new LiteTxVerifier(indexer);
+        var checks = new ChainCheckQueue { Pace = TimeSpan.Zero, Clock = clock };
+        var spends = new SpentCoinGuard(indexer, verifier);
+        if (guardOnClock) spends.Clock = clock;
+        return new LiteWalletService(new MemoryVault(), indexer, indexer, null, null, verifier, store, null, indexer, checks, spends);
     }
 
     private static async Task PollAsync(IncomingPaymentWatcher watcher) => await watcher.PollOnceAsync();

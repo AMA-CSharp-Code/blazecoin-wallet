@@ -46,7 +46,7 @@ public class BlazecoindRpcServiceTests
         var ctx = Substitute.For<IWalletContext>();
         ctx.Active.Returns(activeWallet);
 
-        return (new BlazecoindRpcService(config, ctx, factory), handler);
+        return (new BlazecoindRpcService(config, ctx, factory, new WalletSwitchNotice()), handler);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class BlazecoindRpcServiceTests
         config["Blazecoind:RpcUrl"].Returns("http://127.0.0.1:55417");
         var ctx = Substitute.For<IWalletContext>();
         ctx.Active.Returns("mining-wallet");
-        var svc = new BlazecoindRpcService(config, ctx, factory);
+        var svc = new BlazecoindRpcService(config, ctx, factory, new WalletSwitchNotice());
 
         var ids = await svc.ListSpendingTxIdsAsync(100_000);
 
@@ -260,7 +260,7 @@ public class BlazecoindRpcServiceTests
         factory.CreateClient(Arg.Any<string>()).Returns(_ => new HttpClient(handler));
         var config = Substitute.For<IConfiguration>();
         config["Blazecoind:RpcUrl"].Returns(rpcUrl);
-        return new BlazecoindRpcService(config, ctx, factory);
+        return new BlazecoindRpcService(config, ctx, factory, new WalletSwitchNotice());
     }
 
     private const string Minus18 =
@@ -365,7 +365,7 @@ public class BlazecoindRpcServiceTests
         config["Blazecoind:RpcUrl"].Returns("http://127.0.0.1:55417");
         var ctx = Substitute.For<IWalletContext>();
         ctx.Active.Returns(active);
-        return new BlazecoindRpcService(config, ctx, factory);
+        return new BlazecoindRpcService(config, ctx, factory, new WalletSwitchNotice());
     }
 
     [Fact]
@@ -432,7 +432,7 @@ public class BlazecoindRpcServiceTests
     public async Task IsMine_reads_getaddressinfo(string body, bool? expected)
     {
         var (svc, _) = Make(HttpStatusCode.OK, body, activeWallet: "pq-savings");
-        Assert.Equal(expected, await svc.IsMineAsync("x"));
+        Assert.Equal(expected, await svc.OwnsAddressAsync("pq-savings", "x"));
     }
 
     // ── Post-quantum wallet creation (IPostQuantumWalletRpc): every call names its wallet ──
@@ -537,6 +537,6 @@ public class BlazecoindRpcServiceTests
     public async Task IsMine_is_null_when_the_daemon_errors()
     {
         var (svc, _) = Make(HttpStatusCode.InternalServerError, RpcError(-5, "Invalid address"));
-        Assert.Null(await svc.IsMineAsync("junk"));
+        Assert.Null(await svc.OwnsAddressAsync("pq-savings", "junk"));
     }
 }

@@ -101,7 +101,7 @@ public sealed class DaemonProcessManager : IDaemonProcessManager
         // 1. Graceful via RPC — flushes LevelDB cleanly. IMPORTANT: 'stop' is REJECTED
         //    while the daemon is loading the block index (RPC error -28); it only takes
         //    once the node is warmed.
-        try { await _node.ExecuteCommandAsync("stop"); }
+        try { await _node.ExecuteNodeCommandAsync("stop"); }
         catch (Exception ex) { _log?.LogWarning(ex, "RPC stop failed/rejected (likely -28 warmup)."); }
         if (await WaitForExitAsync(TimeSpan.FromSeconds(12))) return;
 
@@ -259,7 +259,7 @@ public sealed class DaemonProcessManager : IDaemonProcessManager
     {
         try
         {
-            var info = await _node.ExecuteCommandAsync("getnetworkinfo");
+            var info = await _node.ExecuteNodeCommandAsync("getnetworkinfo");
             return info.Contains("Blazecoin", StringComparison.OrdinalIgnoreCase);
         }
         catch (RpcException ex) when (ex.Code == -28)

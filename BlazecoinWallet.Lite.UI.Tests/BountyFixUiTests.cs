@@ -75,8 +75,9 @@ public class BountyFixUiTests : LiteUiTestBase
     private LiteWalletService WireUnprovable(FakeReader reader)
     {
         Wire(new LoadedVault(), reader, new FakeRelay());
-        var service = new LiteWalletService(new LoadedVault(), reader, new FakeRelay(), verifier: new LiteTxVerifier(reader));
-        service.Checks!.Pace = TimeSpan.Zero;
+        // The unpaced queue is handed in, not reached for inside the service (audit 2026-11-09).
+        var service = new LiteWalletService(new LoadedVault(), reader, new FakeRelay(), null, null, new LiteTxVerifier(reader),
+            null, null, null, new ChainCheckQueue { Pace = TimeSpan.Zero }, null);
         Services.AddSingleton(service);   // after Wire — the last registration wins
         return service;
     }
@@ -141,8 +142,9 @@ public class BountyFixUiTests : LiteUiTestBase
         // which was spent since. It used to be the balance (10 BLZ here). A second gateway proves the spend.
         var source = new ResurrectingSource();
         Wire(new LoadedVault(), source, new FakeRelay());
-        var service = new LiteWalletService(new LoadedVault(), source, new FakeRelay(), verifier: new LiteTxVerifier(source));
-        service.Checks!.Pace = TimeSpan.Zero;
+        var verifier = new LiteTxVerifier(source);
+        var service = new LiteWalletService(new LoadedVault(), source, new FakeRelay(), null, null, verifier,
+            null, null, null, new ChainCheckQueue { Pace = TimeSpan.Zero }, new SpentCoinGuard(source, verifier));
         Services.AddSingleton(service);   // after Wire — the last registration wins
         var cut = RenderComponent<Home>();
 

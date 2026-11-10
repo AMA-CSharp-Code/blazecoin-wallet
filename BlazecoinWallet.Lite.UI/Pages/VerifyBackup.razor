@@ -2,6 +2,10 @@
 @layout LiteLayout
 @inject LiteWalletService Wallet
 @inject NavigationManager Nav
+@inject ISecretRevealGate RevealGate
+
+@* A phrase or a private key is shown or typed here: keep the window out of screen capture. *@
+<SecretScreen />
 
 @* The deferred backup ceremony: reachable from the Home warning chip and Settings.
    Shows the stored phrase on demand and re-runs the two-word quiz; passing proves the
@@ -23,15 +27,34 @@
             into this wallet if the phone is lost — write it down, then prove the copy below.
         </p>
 
-        <button class="lite-btn lite-btn-ghost" @onclick="() => _showWords = !_showWords">
-            @(_showWords ? "Hide my recovery phrase" : "Show my recovery phrase")
+        <button class="lite-btn lite-btn-ghost" @onclick="ToggleWordsAsync">
+            @(_revealed != null ? "Hide my recovery phrase" : "Show my recovery phrase")
         </button>
-        @if (_showWords)
+        @* The second look (bug-bounty report 2026-11-09): an unlocked wallet in someone else's
+           hands must not give up the phrase for one click. Asked every time, where the wallet
+           has a password or a PIN to ask for — and the words reach this page only through the
+           gate, once the answer is right (audit 2026-11-09). *@
+        @if (_asking != RevealChallenge.None)
+        {
+            <div style="margin-top:12px">
+                <label class="lite-sub">
+                    @(_asking == RevealChallenge.Password
+                        ? "Enter your wallet password to show the phrase"
+                        : "Enter your PIN to show the phrase")
+                </label>
+                <input class="lite-input lite-reveal-answer" type="password" autocomplete="off"
+                       inputmode="@(_asking == RevealChallenge.Pin ? "numeric" : "text")"
+                       @bind="_answer" @bind:event="oninput" />
+                <button class="lite-btn" @onclick="ConfirmRevealAsync">Show the phrase</button>
+                @if (_askError != null) { <div class="lite-error">@_askError</div> }
+            </div>
+        }
+        @if (_revealed != null)
         {
             <div class="lite-mnemonic" style="margin-top:12px">
-                @for (var i = 0; i < _words.Length; i++)
+                @for (var i = 0; i < _revealed.Length; i++)
                 {
-                    <span class="lite-word"><b>@(i + 1)</b>@_words[i]</span>
+                    <span class="lite-word"><b>@(i + 1)</b>@_revealed[i]</span>
                 }
             </div>
         }
@@ -51,11 +74,45 @@
 
 @code {
     private bool _verified;
-    private bool _showWords;
-    private string[] _words = [];
+    // The words, while they are shown — given by the gate, never fetched by this page.
+    private string[]? _revealed;
     private int[] _quizIndices = [];
     private Dictionary<int, string> _quizAnswers = new();
     private string? _error;
+
+    // The second look before the phrase is shown.
+    private RevealChallenge _asking = RevealChallenge.None;
+    private string _answer = string.Empty;
+    private string? _askError;
+
+    private async Task ToggleWordsAsync()
+    {
+        _answer = string.Empty;
+        _askError = null;
+        if (_revealed != null) { _revealed = null; return; }
+        if (_asking != RevealChallenge.None) { _asking = RevealChallenge.None; return; }   // a second tap closes the question
+
+        var challenge = await RevealGate.ChallengeAsync();
+        if (challenge == RevealChallenge.None) await ConfirmRevealAsync();      // no password and no PIN: nothing to ask
+        else _asking = challenge;
+    }
+
+    private async Task ConfirmRevealAsync()
+    {
+        var answer = _answer;
+        _answer = string.Empty;
+        var outcome = await RevealGate.RevealAsync(answer);
+        if (outcome.Phrase != null)
+        {
+            _asking = RevealChallenge.None;
+            _askError = null;
+            _revealed = outcome.Phrase.Split(' ');
+            return;
+        }
+        // Guessing: the gate has locked the wallet (where this head can); the question goes too.
+        if (outcome.WalletLocked) _asking = RevealChallenge.None;
+        _askError = outcome.Error;
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -67,25 +124,22 @@
         _verified = await Wallet.IsBackupVerifiedAsync();
         if (_verified) return;
 
-        _words = (await Wallet.RevealMnemonicAsync()).Split(' ');
-        // Two distinct random words, same shape as the Setup ceremony's quiz.
-        var count = Math.Min(2, _words.Length);
-        _quizIndices = Enumerable.Range(0, _words.Length)
+        // Two distinct random word positions, same shape as the Setup ceremony's quiz. Only how
+        // many words there are is needed here; the words stay with the wallet service.
+        var wordCount = await Wallet.RecoveryWordCountAsync();
+        var count = Math.Min(2, wordCount);
+        _quizIndices = Enumerable.Range(0, wordCount)
             .OrderBy(_ => Random.Shared.Next()).Take(count).OrderBy(i => i).ToArray();
         _quizAnswers = _quizIndices.ToDictionary(i => i, _ => string.Empty);
     }
 
     private async Task VerifyAsync()
     {
-        foreach (var idx in _quizIndices)
+        if (!await Wallet.VerifyBackupWordsAsync(_quizAnswers))
         {
-            if (!string.Equals(_quizAnswers[idx].Trim(), _words[idx], StringComparison.OrdinalIgnoreCase))
-            {
-                _error = "One or more words don't match — check your written copy.";
-                return;
-            }
+            _error = "One or more words don't match — check your written copy.";
+            return;
         }
-        await Wallet.MarkBackupVerifiedAsync();
         _error = null;
         _verified = true;
     }
