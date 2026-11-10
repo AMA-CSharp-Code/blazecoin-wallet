@@ -28,7 +28,7 @@
   #define WebView2Bootstrapper "redist\MicrosoftEdgeWebView2Setup.exe"
 #endif
 #ifndef AppVersion
-  #define AppVersion "2.0.20"
+  #define AppVersion "2.0.21"
 #endif
 
 [Setup]

@@ -63,7 +63,9 @@
             </div>
 
             <div class="console-input">
-                <span class="prompt">@WalletLabel ›</span>
+                @* Bare prompt: the wallet is named in the strip above (and in each history line), so it
+                   does not ride inside the yellow blinking prompt (looked like flashing "Primary", 2026-11-10). *@
+                <span class="prompt">›</span>
                 <input @bind="_command" @bind:event="oninput" @onkeydown="OnKeyDown"
                        placeholder="Enter command…" disabled="@_busy" />
                 <button class="btn btn-primary" @onclick="Run" disabled="@_busy">Run</button>
