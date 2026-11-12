@@ -57,10 +57,10 @@ public static class QuantumSweepPlanner
     public const int DefaultMaxInputsPerTx = 400;
     public const long DustThresholdSatoshis = DustPolicy.LegacyFloorSatoshis;
 
-    // Legacy P2PKH sizing: 148 bytes per input (compressed key), 34 per output, 10 overhead.
-    private const int BytesPerInput = 148, BytesPerOutput = 34, BytesOverhead = 10;
-    /// <summary>A P2PQH output: 8 value + 1 length + 34-byte scriptPubKey (<c>0x20 &lt;pqkh:32&gt; OP_CHECKPQSIG</c>, PQ_SIGNATURES.md §5).</summary>
-    public const int BytesPerPqOutput = 43;
+    // The sizes live in TransactionSizes (shared with the consolidation planner since 2026-11-12).
+    private const int BytesPerInput = TransactionSizes.LegacyInput, BytesPerOutput = TransactionSizes.LegacyOutput, BytesOverhead = TransactionSizes.Overhead;
+    /// <summary>A P2PQH output (<see cref="TransactionSizes.PostQuantumOutput"/>).</summary>
+    public const int BytesPerPqOutput = TransactionSizes.PostQuantumOutput;
 
     public static int EstimateBytes(int inputs, int outputs = 1) => BytesOverhead + BytesPerInput * inputs + BytesPerOutput * outputs;
 

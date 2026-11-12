@@ -300,6 +300,9 @@ public static class MauiProgram
 			builder.Services.AddSingleton<Core.Services.Quantum.IBackupFileInspector, Core.Services.Quantum.BackupFileInspector>();
 			builder.Services.AddTransient<Core.Services.Quantum.IPostQuantumWalletCreator, Core.Services.Quantum.PostQuantumWalletCreator>();
 			builder.Services.AddTransient<Core.Services.Quantum.QuantumSweepSession>();
+			// The Send page's Consolidate card: coins read from, and merged inside, one named wallet.
+			builder.Services.AddSingleton<Core.Services.Consolidation.IConsolidationRpc>(sp => sp.GetRequiredService<BlazecoindRpcService>());
+			builder.Services.AddTransient<Core.Services.Consolidation.ConsolidationSession>();
 		// One shared chain/sync poller so the footer and the dashboard
 		// Blockchain card always show the same numbers (single sample).
 		builder.Services.AddSingleton<ISyncStateService, SyncStateService>();

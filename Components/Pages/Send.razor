@@ -9,6 +9,7 @@
 @inject BlazecoinWallet.Core.Services.Send.ISendRpc SendRpc
 @inject BlazecoinWallet.Core.Services.Send.SendChangePolicy ChangePolicy
 @inject IAutoPayoutService Ap
+@inject BlazecoinWallet.Core.Services.Consolidation.ConsolidationSession Cons
 @inject IWalletBinding Binding
 @inject IAddressBookStore AddrBook
 @inject ISettingsService Settings
@@ -389,10 +390,183 @@
             }
         </div>
     </div>
+
+    @* ----- Consolidate: merge many small coins into a few. The rules live in ConsolidationSession
+       (Core, unit-tested); this is only its view. Added 2026-11-12 (asked for by a miner on Discord). ----- *@
+    <div class="send-content card cons-card">
+        <div class="status-header"><span>Consolidate Coins</span></div>
+        <div class="card-body">
+            <p class="cons-text">
+                A wallet that receives many small payments, such as mining payouts, ends up holding thousands of small
+                coins, and a payment that needs too many of them at once is refused. Consolidating merges them into a
+                few large coins at a new address in this same wallet. Your balance stays the same, less a small network fee.
+            </p>
+            @if (Ap.Enabled)
+            {
+                <p class="cons-warn">Stop Auto Payout first: both would try to spend the same coins.</p>
+            }
+            <div class="form-actions">
+                <button type="button" class="btn btn-primary" @onclick="ConsCountAsync" disabled="@ConsLocked">
+                    @(Cons.IsWorking && Cons.Picture is null ? "Counting…" : "Count my coins")
+                </button>
+            </div>
+
+            @if (Cons.Picture is { } pic)
+            {
+                <div class="cons-grid">
+                    <span class="k">Wallet</span><span class="v">@(string.IsNullOrEmpty(Cons.Wallet) ? "(node default)" : Cons.Wallet)</span>
+                    <span class="k">Coins</span><span class="v">@pic.Coins.ToString("N0") (@pic.LegacyCoins.ToString("N0") legacy, @pic.PostQuantumCoins.ToString("N0") post-quantum)</span>
+                    <span class="k">Total</span><span class="v">@ConsBlz(pic.Satoshis)</span>
+                    <span class="k">Largest coin</span><span class="v">@ConsBlz(pic.LargestSatoshis)</span>
+                    @if (pic.ConfirmingCoins > 0)
+                    {
+                        <span class="k">Still confirming</span><span class="v">@pic.ConfirmingCoins.ToString("N0") (@ConsBlz(pic.ConfirmingSatoshis))</span>
+                    }
+                </div>
+                @if (pic.ConfirmingNotice is { } confirming)
+                {
+                    <p class="cons-warn">⚠ @confirming</p>
+                }
+                @if (pic.Coins < 2)
+                {
+                    <p class="cons-ok">There is nothing to consolidate.</p>
+                }
+                else
+                {
+                    <p class="@(pic.TransactionsToSpendEverything > 1 ? "cons-warn" : "cons-ok")">
+                        @(pic.TransactionsToSpendEverything > 1
+                            ? $"Spending everything would need at least {pic.TransactionsToSpendEverything:N0} transactions, so large payments from this wallet can be refused. Consolidating fixes that."
+                            : "These coins already fit in one transaction, so payments are not being refused. You can still merge them.")
+                    </p>
+                    <div class="form-group">
+                        <label for="consMax">Only merge coins smaller than (BLZ, optional)</label>
+                        <input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" id="consMax"
+                               class="form-control @(_consMax.IsInvalid ? "is-invalid" : "")" @bind="ConsMaxInput" placeholder="empty = every coin" disabled="@ConsLocked" />
+                        @if (_consMax.IsInvalid)
+                        {
+                            <small class="amount-unreadable">@TypedAmount.InvalidMessage</small>
+                        }
+                        <small class="ap-hint">
+                            Merging blends the history of the coins. If you collect vintage coins, send those out from the
+                            Provenance page first: once merged, a vintage coin is no longer a separate piece.
+                            If this wallet is encrypted, unlock it on the Security page before you broadcast.
+                        </small>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-primary" @onclick="ConsPlanAsync" disabled="@(ConsLocked || _consMax.IsInvalid)">
+                            @(Cons.IsWorking ? "Planning…" : "Plan")
+                        </button>
+                    </div>
+                }
+            }
+
+            @if ((_consPageProblem ?? Cons.Problem) is { } consProblem)
+            {
+                <p class="cons-error">@consProblem</p>
+            }
+
+            @if (Cons.Plan is { } consPlan && Cons.Effect is { } effect)
+            {
+                <p class="cons-ok">
+                    @effect.From.ToString("N0") coins become @effect.To.ToString("N0"), in @consPlan.Transactions.Count.ToString("N0")
+                    transaction@(consPlan.Transactions.Count == 1 ? "" : "s").
+                </p>
+                <div class="cons-grid">
+                    <span class="k">Moves</span><span class="v">@ConsBlz(consPlan.OutputSatoshis)</span>
+                    <span class="k">To</span><span class="v cons-mono">@Cons.Destination</span>
+                    <span class="k">Address kind</span><span class="v">@(Cons.RequiresBackupAck ? "new post-quantum (BQ…) address in this wallet" : "new legacy (B…) address in this wallet")</span>
+                    <span class="k">Network fee</span><span class="v">@ConsBlz(consPlan.FeeSatoshis)</span>
+                </div>
+                @foreach (var w in Cons.Warnings)
+                {
+                    <p class="cons-warn">⚠ @w</p>
+                }
+                <label class="cons-ack">
+                    <input type="checkbox" @bind="_consAckIrreversible" disabled="@ConsLocked" />
+                    I understand this moves real coins on-chain and cannot be undone.
+                </label>
+                @if (Cons.RequiresBackupAck)
+                {
+                    <label class="cons-ack">
+                        <input type="checkbox" @bind="_consAckBackup" disabled="@ConsLocked" />
+                        I have a backup of this wallet made AFTER its post-quantum keys were created. Older backups cannot recover these coins.
+                    </label>
+                }
+                <div class="form-actions">
+                    <button type="button" class="btn btn-primary" @onclick="ConsBroadcastAsync"
+                            disabled="@(ConsLocked || !Cons.CanBroadcast(_consAckIrreversible, _consAckBackup))">
+                        Broadcast
+                    </button>
+                </div>
+            }
+            else if (Cons.IsSending)
+            {
+                <p class="cons-ok">Sending… do not close the wallet.</p>
+            }
+
+            @if (Cons.LastBroadcast is { } consSent)
+            {
+                <div class="@(consSent.Succeeded ? "cons-sent" : "cons-error")">
+                    @Cons.Outcome
+                    @foreach (var t in consSent.SentTxIds)
+                    {
+                        <div class="cons-mono">@t</div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
     }
 </div>
 
 @code {
+    // ============================ Consolidate ============================
+    // State and rules: ConsolidationSession (Core). Here: the size-limit text and the two ticks.
+    private readonly TypedAmount _consMax = new();
+    private string ConsMaxInput { get => _consMax.Text; set { _consMax.SetText(value); ConsResetAcks(); Cons.Discard(); } }
+    private bool _consAckIrreversible;
+    private bool _consAckBackup;
+    private string? _consPageProblem;
+
+    /// <summary>Nothing on the card can be pressed while it works, while a manual send is going out,
+    /// or while Auto Payout is armed (both would reach for the same coins).</summary>
+    private bool ConsLocked => Cons.IsWorking || Cons.IsSending || _sending || Ap.Enabled;
+
+    private string ConsBlz(long sats) => AmountFormat.Format(sats / 100_000_000m, _amtUnit, _amtDecimals);
+
+    private void ConsResetAcks() { _consAckIrreversible = false; _consAckBackup = false; _consPageProblem = null; }
+
+    private async Task ConsCountAsync()
+    {
+        if (ConsLocked) return;
+        ConsResetAcks();
+        var task = Cons.CountAsync();
+        StateHasChanged();
+        await task;
+    }
+
+    private async Task ConsPlanAsync()
+    {
+        if (ConsLocked || _consMax.IsInvalid) return;
+        ConsResetAcks();
+        var task = Cons.PlanAsync(
+            BlazecoinWallet.Core.Services.Consolidation.ConsolidationPlanner.DefaultFeeRateSatPerKb,
+            BlazecoinWallet.Core.Services.Consolidation.ConsolidationPlanner.CeilingFromBlz(_consMax.Value));
+        StateHasChanged();
+        await task;
+    }
+
+    /// <summary>One broadcast of the current plan; the session clears the plan first, so it can never go out twice.</summary>
+    private async Task ConsBroadcastAsync()
+    {
+        if (ConsLocked) return;
+        var task = Cons.BroadcastAsync(_consAckIrreversible, _consAckBackup);
+        StateHasChanged();          // show "Sending" while the batches go out
+        try { await task; }
+        catch (Exception ex) { _consPageProblem = $"Send failed: {ex.Message}. Count the coins again before doing anything else."; }
+        finally { _consAckIrreversible = false; _consAckBackup = false; StateHasChanged(); }
+    }
+
     // ============================ Manual send ============================
     private string _recipientAddress = "";
     private string _label = "";

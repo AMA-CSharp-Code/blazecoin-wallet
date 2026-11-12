@@ -33,10 +33,25 @@ public sealed class TransactionExportService : ITransactionExportService
     private static string BuildCsv(ExportTable table)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(string.Join(",", table.Headers.Select(CsvEscape)));
+        sb.AppendLine(string.Join(",", table.Headers.Select(h => CsvEscape(AsPlainText(h)))));
         foreach (var row in table.Rows)
-            sb.AppendLine(string.Join(",", row.Select(c => CsvEscape(CellString(c)))));
+            sb.AppendLine(string.Join(",", row.Select(c => CsvEscape(c is string text ? AsPlainText(text) : CellString(c)))));
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// A spreadsheet reads a CSV cell that starts with <c>=</c>, <c>+</c>, <c>-</c>, <c>@</c>, a tab
+    /// or a carriage return as a FORMULA. A label reaches the address book from a scanned payment
+    /// QR, so that text is not the user's own: an exported label of <c>=HYPERLINK(...)</c> opened as
+    /// a live link (hardening note 2026-11-12, round fourteen; OWASP "CSV Injection"). Such text gets
+    /// a leading apostrophe, which a spreadsheet shows as plain text. A plain number ("-0.001",
+    /// "+2") cannot be a formula and is left as it is; typed numbers never come through here.
+    /// </summary>
+    private static string AsPlainText(string s)
+    {
+        if (s.Length == 0 || s[0] is not ('=' or '+' or '-' or '@' or '\t' or '\r')) return s;
+        if (decimal.TryParse(s, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out _)) return s;
+        return "'" + s;
     }
 
     private static string CsvEscape(string s) =>

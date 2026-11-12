@@ -1,5 +1,4 @@
 @page "/console"
-@using System.Text.Json
 @using BlazecoinWallet.Core.Services
 @inject IConsoleRpc ConsoleRpc
 @inject IJSRuntime JS
@@ -136,9 +135,9 @@
 
         try
         {
-            var tokens = Tokenize(cmd);
-            var method = tokens[0];
-            var args = tokens.Skip(1).Select(ParseToken).ToArray();
+            // Quotes, lists and empty arguments: RpcCommandLine (Core). A line it cannot read is shown
+            // as an error and nothing is sent.
+            var (method, args) = RpcCommandLine.Parse(cmd);
             var result = await ConsoleRpc.ExecuteConsoleCommandAsync(wallet, method, args);
             _history.Add(new Line(result, false, false));
         }
@@ -155,32 +154,5 @@
             _busy = false;
             StateHasChanged();
         }
-    }
-
-    /// <summary>Whitespace split that honours "double quotes" for multi-word args.</summary>
-    private static List<string> Tokenize(string s)
-    {
-        var list = new List<string>();
-        var sb = new System.Text.StringBuilder();
-        var inQuote = false;
-        foreach (var c in s)
-        {
-            if (c == '"') inQuote = !inQuote;
-            else if (char.IsWhiteSpace(c) && !inQuote)
-            {
-                if (sb.Length > 0) { list.Add(sb.ToString()); sb.Clear(); }
-            }
-            else sb.Append(c);
-        }
-        if (sb.Length > 0) list.Add(sb.ToString());
-        return list;
-    }
-
-    /// <summary>Numbers / bools / JSON arrays+objects are passed typed; anything
-    /// that isn't valid JSON is sent as a plain string.</summary>
-    private static object ParseToken(string t)
-    {
-        try { return JsonSerializer.Deserialize<JsonElement>(t); }
-        catch { return t; }
     }
 }

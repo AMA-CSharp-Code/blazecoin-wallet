@@ -26,11 +26,18 @@ public static partial class ForkAnnouncement
 {
     /// <summary>
     /// The project's fork-announcement public keys (compressed secp256k1, hex), pinned in the
-    /// build. EMPTY until the project creates its announcement key — until then no announcement
-    /// can be authenticated, so no gateway can stop sends, and a real fork is announced as a
-    /// warning only. Pin the key (and sign the announcement) in the release that precedes a fork.
+    /// build. An announcement signed by EITHER key is authentic. Two keys, created 2026-11-12:
+    /// the first is the one used; the second is a spare kept apart from it, so losing the first
+    /// does not leave the project unable to stop sends in builds already installed.
+    /// <para>The private keys are held offline by the project and are in no repository. Sign
+    /// with <c>Tools/ForkAnnouncementSigner</c>. A build only trusts the keys it shipped with:
+    /// changing this list changes nothing for wallets already installed.</para>
     /// </summary>
-    public static IReadOnlyList<string> PinnedKeys { get; } = [];
+    public static IReadOnlyList<string> PinnedKeys { get; } =
+    [
+        "028231e51223f74606b9545305bad166d498c358f46c9e9bd204146e87eae55efb",   // key 1, primary
+        "03d81f8b4006c1f897ba1af3ae6c381cc432daddd8ead8036a21237c8c69e992b7",   // key 2, spare
+    ];
 
     [GeneratedRegex(@"\A[A-Za-z0-9_-]{1,32}\z")]
     private static partial Regex NameShape();

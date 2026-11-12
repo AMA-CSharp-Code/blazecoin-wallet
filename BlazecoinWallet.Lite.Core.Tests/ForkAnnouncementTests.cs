@@ -256,11 +256,49 @@ public class ForkAnnouncementTests
     public void Name_is_a_plain_token_or_nothing(string? text, string? expected)
         => Assert.Equal(expected, ForkAnnouncement.CleanName(text));
 
+    // ── the keys this build ships ──
+
     [Fact]
-    public void This_build_pins_no_announcement_key_yet_so_no_gateway_can_stop_sends()
+    public void This_build_pins_two_distinct_announcement_keys()
     {
-        // The day the project creates its announcement key, pin it and change this test: until
-        // then an authentic announcement cannot exist, and the Stopped state cannot be reached.
-        Assert.Empty(ForkAnnouncement.PinnedKeys);
+        // A primary and a spare (2026-11-12). Each must be a real compressed secp256k1 point:
+        // IsSigned swallows a malformed key, so a typo here would silently pin nothing.
+        Assert.Equal(2, ForkAnnouncement.PinnedKeys.Count);
+        Assert.Equal(2, ForkAnnouncement.PinnedKeys.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        foreach (var hex in ForkAnnouncement.PinnedKeys)
+        {
+            Assert.Equal(66, hex.Length);
+            Assert.Equal(hex, hex.ToLowerInvariant());
+            var key = new PubKey(hex);
+            Assert.True(key.IsCompressed);
+            Assert.Equal(hex, key.ToHex());
+        }
+    }
+
+    [Fact]
+    public async Task With_the_shipped_keys_a_stranger_s_signature_still_cannot_stop_sends()
+    {
+        // No key list is passed: the service uses the keys pinned in the build. A well-formed
+        // signature by any other key is worth exactly as much as no signature.
+        var sig = ForkAnnouncement.Sign(new Key(), "nextfork", ForkAnnouncement.ShippedCheckpointHeight + 100_000, "9.9.9");
+        var svc = await ReadAsync(Status("nextfork", ForkAnnouncement.ShippedCheckpointHeight + 100_000, "9.9.9",
+            tip: ForkAnnouncement.ShippedCheckpointHeight + 200_000, signature: sig));
+
+        Assert.Equal(ForkBannerState.Warning, svc.State);
+        Assert.False(svc.Current!.Authenticated);
+    }
+
+    [Fact]
+    public void Either_of_two_pinned_keys_authenticates_an_announcement()
+    {
+        // The spare must work on its own: that is the whole reason it is pinned.
+        var first = new Key();
+        var spare = new Key();
+        IReadOnlyList<string> both = [first.PubKey.ToHex(), spare.PubKey.ToHex()];
+
+        Assert.True(ForkAnnouncement.IsSigned("nextfork", 4_500_000, "2.1.0",
+            ForkAnnouncement.Sign(first, "nextfork", 4_500_000, "2.1.0"), both));
+        Assert.True(ForkAnnouncement.IsSigned("nextfork", 4_500_000, "2.1.0",
+            ForkAnnouncement.Sign(spare, "nextfork", 4_500_000, "2.1.0"), both));
     }
 }

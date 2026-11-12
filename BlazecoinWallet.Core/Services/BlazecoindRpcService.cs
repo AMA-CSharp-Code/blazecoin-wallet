@@ -52,7 +52,7 @@ public class DaemonBusyException : HttpRequestException
     { }
 }
 
-public class BlazecoindRpcService : IBlazecoindRpcService, IConsoleRpc, Provenance.IAncestryRpc, Provenance.IVintageSendRpc, Quantum.IExposureRpc, Quantum.IAddressMintRpc, IBoundWalletRpc, Quantum.IPostQuantumWalletRpc, Send.ISendRpc, IMessageSigningRpc
+public class BlazecoindRpcService : IBlazecoindRpcService, IConsoleRpc, Provenance.IAncestryRpc, Provenance.IVintageSendRpc, Quantum.IExposureRpc, Quantum.IAddressMintRpc, IBoundWalletRpc, Consolidation.IConsolidationRpc, Quantum.IPostQuantumWalletRpc, Send.ISendRpc, IMessageSigningRpc
 {
     private readonly HttpClient _httpClient;
     private readonly string _rpcUrl;
@@ -412,17 +412,30 @@ public class BlazecoindRpcService : IBlazecoindRpcService, IConsoleRpc, Provenan
     public async Task<IReadOnlyList<Provenance.UnspentOutput>> ListUnspentAsync(CancellationToken ct = default)
     {
         var rows = await CallWalletRpcAsync<List<JsonElement>>("listunspent");
-        var list = new List<Provenance.UnspentOutput>(rows?.Count ?? 0);
-        foreach (var r in rows ?? new List<JsonElement>())
-        {
-            list.Add(new Provenance.UnspentOutput(
-                r.GetProperty("txid").GetString() ?? string.Empty,
-                r.GetProperty("vout").GetInt32(),
-                ToSats(r.GetProperty("amount").GetDecimal()),
-                r.TryGetProperty("address", out var a) ? a.GetString() : null,
-                r.TryGetProperty("confirmations", out var c) ? c.GetInt32() : 0));
-        }
-        return list;
+        return (rows ?? new List<JsonElement>()).Select(ToUnspent).ToList();
+    }
+
+    /// <summary>One <c>listunspent</c> row, amount in satoshis - the one reader of that shape.</summary>
+    private static Provenance.UnspentOutput ToUnspent(JsonElement r) => new(
+        r.GetProperty("txid").GetString() ?? string.Empty,
+        r.GetProperty("vout").GetInt32(),
+        ToSats(r.GetProperty("amount").GetDecimal()),
+        r.TryGetProperty("address", out var a) ? a.GetString() : null,
+        r.TryGetProperty("confirmations", out var c) ? c.GetInt32() : 0);
+
+    /// <summary>
+    /// The Consolidate card's coins: <c>listunspent 0</c> in EXACTLY <paramref name="wallet"/>, less
+    /// anything the wallet cannot sign for (watch-only) or the node calls unsafe. The wallet's own
+    /// outputs that are still confirming come back with 0 confirmations (the node calls those safe).
+    /// </summary>
+    public async Task<IReadOnlyList<Provenance.UnspentOutput>> ListSpendableCoinsAsync(string wallet, CancellationToken ct = default)
+    {
+        var rows = await CallPinnedWalletRpcAsync<List<JsonElement>>(wallet, "listunspent", 0);
+        return (rows ?? new List<JsonElement>())
+            .Where(r => !(r.TryGetProperty("spendable", out var sp) && sp.ValueKind == JsonValueKind.False))
+            .Where(r => !(r.TryGetProperty("safe", out var sf) && sf.ValueKind == JsonValueKind.False))
+            .Select(ToUnspent)
+            .ToList();
     }
 
     /// <summary>

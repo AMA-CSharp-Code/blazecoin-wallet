@@ -34,10 +34,18 @@ public sealed record SweepBroadcastResult(
 
     /// <summary>The sentence the page shows. The UNKNOWN wording is the 2026-08-15 rule: a timed-out
     /// send is not a failed send, and retrying one is how coins get paid twice.</summary>
-    public string Describe()
+    public string Describe() => Describe("rescan");
+
+    /// <summary>
+    /// The same sentences for a page whose "look at the wallet again" action has another name
+    /// (<paramref name="recheck"/>, lower case: the Consolidate card says "count the coins again").
+    /// The wording stays HERE: a caller names its action and never rewrites the text (2026-11-12).
+    /// </summary>
+    public string Describe(string recheck)
     {
+        var Recheck = char.ToUpperInvariant(recheck[0]) + recheck[1..];
         if (Succeeded)
-            return $"Sent {SentTxIds.Count} transaction{(SentTxIds.Count == 1 ? "" : "s")}. Rescan to see the new picture.";
+            return $"Sent {SentTxIds.Count} transaction{(SentTxIds.Count == 1 ? "" : "s")}. {Recheck} to see the new picture.";
         var already = SentTxIds.Count > 0
             ? $" {SentTxIds.Count} earlier batch{(SentTxIds.Count == 1 ? " was" : "es were")} already sent."
             : "";
@@ -45,15 +53,15 @@ public sealed record SweepBroadcastResult(
         return Status switch
         {
             SweepSendStatus.Unknown =>
-                $"Batch {FailedBatch} of {TotalBatches}: result UNKNOWN{why} — it may have gone out. Do NOT retry: rescan, and look the coins up on the explorer first.{already}",
-            SweepSendStatus.BuildFailed => $"Batch {FailedBatch} of {TotalBatches}: the node couldn't build the transaction{why}; it was not sent.{already} Rescan before trying again.",
-            SweepSendStatus.SignFailed => $"Batch {FailedBatch} of {TotalBatches}: signing failed or was incomplete — is the wallet unlocked?{why} It was not sent.{already} Rescan before trying again.",
-            SweepSendStatus.Rejected => $"Batch {FailedBatch} of {TotalBatches}: the node refused the transaction{why}; it was not sent.{already} Rescan before trying again.",
+                $"Batch {FailedBatch} of {TotalBatches}: result UNKNOWN{why} — it may have gone out. Do NOT retry: {recheck}, and look the coins up on the explorer first.{already}",
+            SweepSendStatus.BuildFailed => $"Batch {FailedBatch} of {TotalBatches}: the node couldn't build the transaction{why}; it was not sent.{already} {Recheck} before trying again.",
+            SweepSendStatus.SignFailed => $"Batch {FailedBatch} of {TotalBatches}: signing failed or was incomplete — is the wallet unlocked?{why} It was not sent.{already} {Recheck} before trying again.",
+            SweepSendStatus.Rejected => $"Batch {FailedBatch} of {TotalBatches}: the node refused the transaction{why}; it was not sent.{already} {Recheck} before trying again.",
             // The Send page's words when nothing went out; between two batches, what did and did not.
             SweepSendStatus.WalletChanged => SentTxIds.Count == 0
                 ? Detail + WalletBinding.NothingSent
-                : $"Batch {FailedBatch} of {TotalBatches} was not sent. {Detail}{already} Rescan before trying again.",
-            SweepSendStatus.NotSentDaemonBusy => $"Batch {FailedBatch} of {TotalBatches}: the node was too busy to take it; it was not sent.{already} Rescan, then try again in a minute.",
+                : $"Batch {FailedBatch} of {TotalBatches} was not sent. {Detail}{already} {Recheck} before trying again.",
+            SweepSendStatus.NotSentDaemonBusy => $"Batch {FailedBatch} of {TotalBatches}: the node was too busy to take it; it was not sent.{already} {Recheck}, then try again in a minute.",
             _ => $"Batch {FailedBatch} of {TotalBatches}: stopped.{already}",
         };
     }

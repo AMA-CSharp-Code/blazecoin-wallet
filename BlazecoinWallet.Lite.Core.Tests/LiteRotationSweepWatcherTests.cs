@@ -37,8 +37,14 @@ public class LiteRotationSweepWatcherTests
         public bool SupportsHistory => true;
         public bool SupportsChainVerification => false; // no verifier in these unit tests
 
-        public Task<LiteAddressSummary?> GetAddressAsync(string address, CancellationToken ct = default)
-            => Task.FromResult(Summaries.TryGetValue(address, out var s) ? s : null);
+        /// <summary>While set, every address read waits for it: a slow gateway a test controls.</summary>
+        public TaskCompletionSource? HoldReads;
+
+        public async Task<LiteAddressSummary?> GetAddressAsync(string address, CancellationToken ct = default)
+        {
+            if (HoldReads is { } hold) await hold.Task;
+            return Summaries.TryGetValue(address, out var s) ? s : null;
+        }
 
         public Task<IReadOnlyList<LiteChainUtxo>> GetUtxosAsync(string address, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<LiteChainUtxo>>(Utxos.TryGetValue(address, out var u) ? u : []);
@@ -144,6 +150,33 @@ public class LiteRotationSweepWatcherTests
         var (blocked, error) = await service.RevealNextAddressAsync();
         Assert.False(blocked);
         Assert.Contains("unused", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Two_overlapping_reveals_cannot_both_pass_the_gap_check()
+    {
+        // Bug-bounty report 2026-11-12 (round fourteen): the Receive page blocks a double click, but a
+        // page left while its reveal is still waiting on a slow gateway is replaced by a new page with
+        // a fresh button. Both requests ran the gap check before either moved the counter: with 19
+        // unused slots revealed, both passed and the counter went to 21, so the page showed receive
+        // index 20 - one past what a restore from the phrase scans.
+        var (service, data) = await BuildUnlockedAsync();
+        for (var i = 0; i < LiteWalletService.GapLimit - 2; i++)
+            Assert.True((await service.RevealNextAddressAsync()).Ok);
+        Assert.Equal(LiteWalletService.GapLimit - 1, service.RevealedCount);
+
+        data.HoldReads = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = service.RevealNextAddressAsync();
+        var second = service.RevealNextAddressAsync();
+        data.HoldReads.SetResult();
+        var a = await first;
+        var b = await second;
+
+        Assert.Equal(LiteWalletService.GapLimit, service.RevealedCount);      // was 21
+        Assert.True(a.Ok);
+        Assert.False(b.Ok);
+        Assert.Contains("unused", b.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(Slot(LiteWalletService.GapLimit - 1), service.Address);  // index 19: a restore finds it
     }
 
     [Fact]

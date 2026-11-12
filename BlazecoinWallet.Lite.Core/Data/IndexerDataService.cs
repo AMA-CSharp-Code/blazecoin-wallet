@@ -58,20 +58,24 @@ public sealed class IndexerDataService : ILiteWalletData, IHeaderReader, IHeader
     public async Task<bool> IsAddressUsedByAnyGatewayAsync(string address, CancellationToken ct = default)
     {
         var path = $"indexer/api/address/{Uri.EscapeDataString(address)}";
-        Uri? answeredBy;
+        Uri? answeredBy = null;
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, path);
             using var res = await _http.SendAsync(request, ct);
-            request.Options.TryGetValue(GatewayRouting.AnsweredBy, out answeredBy);
+            if (request.Options.TryGetValue(GatewayRouting.AnsweredBy, out var who)) answeredBy = who;
             // 404 = never seen; an error = no evidence of use.
             if (res.IsSuccessStatusCode && await res.Content.ReadFromJsonAsync<AddressJson>(Json, ct) is { TxCount: > 0 }) return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Address usage fetch failed");
-            return false;
+            // A first answer that failed or could not be READ proves nothing either way, so it goes
+            // to the second gateway like an "unused" does. Until 2026-11-12 this returned "unused"
+            // on the spot: a gateway answering HTTP 200 with a body that was not JSON ended a
+            // restore's scan early, and the honest second gateway was never asked (bug-bounty
+            // report, round fourteen). The summary above always said an error gets a second ask.
+            _logger.LogWarning(ex, "Address usage fetch failed; asking another gateway");
         }
 
         var second = await AskAnotherGatewayAsync<AddressJson>(path, answeredBy == null ? null : [answeredBy], "the address usage question", ct);

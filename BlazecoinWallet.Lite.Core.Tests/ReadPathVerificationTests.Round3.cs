@@ -153,6 +153,8 @@ public partial class ReadPathVerificationTests
         public readonly HashSet<string> UsedOnA = new(StringComparer.Ordinal);
         public readonly HashSet<string> UsedOnB = new(StringComparer.Ordinal);
         public bool BIsDown;
+        /// <summary>A answers "never seen" with HTTP 200 and a body that is not JSON (round fourteen).</summary>
+        public bool AGarblesUnused;
         public int CallsToA, CallsToB;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -166,6 +168,8 @@ public partial class ReadPathVerificationTests
             if (path.EndsWith("/utxos")) return Task.FromResult(Reply(HttpStatusCode.OK, "[]"));
             if (path.Contains("/address/") && (isA ? UsedOnA : UsedOnB).Contains(parts[^1]))
                 return Task.FromResult(Reply(HttpStatusCode.OK, """{"balance":0,"totalReceived":1,"totalSent":1,"txCount":2}"""));
+            if (isA && AGarblesUnused && path.Contains("/address/"))
+                return Task.FromResult(Reply(HttpStatusCode.OK, "<html>502 Bad Gateway</html>"));
             return Task.FromResult(Reply(HttpStatusCode.NotFound, """{"error":"not found"}"""));
         }
 
@@ -203,6 +207,26 @@ public partial class ReadPathVerificationTests
 
         Assert.Equal(31, service.RevealedCount);                // was 16: gateway A's word ended the scan
         Assert.True(fleet.CallsToB > 0);
+    }
+
+    [Fact]
+    public async Task A_first_answer_that_cannot_be_read_still_goes_to_the_second_gateway()
+    {
+        // Bug-bounty report 2026-11-12 (round fourteen): a first gateway that answered HTTP 200 with a
+        // body that was not JSON threw in the read, and the catch returned "unused" without asking
+        // anyone else. The transport saw a success, so failover did not step in either. Restore
+        // stopped at 16 addresses where the honest second gateway knew slot 30 was used.
+        var fleet = ReportThreeFleet();
+        fleet.AGarblesUnused = true;
+        var (service, indexer) = Over(fleet, "https://a.test/", "https://b.test/");
+
+        await service.RestoreWalletAsync(F.Mnemonic);
+
+        Assert.Equal(31, service.RevealedCount);                // was 16
+        Assert.True(fleet.CallsToB > 0);
+        var hd = LiteHdWallet.Restore(F.Mnemonic);
+        Assert.True(await indexer.IsAddressUsedByAnyGatewayAsync(hd.GetReceiveAddress(30)));
+        Assert.False(await indexer.IsAddressUsedByAnyGatewayAsync(hd.GetReceiveAddress(40)));   // unreadable + B's "no" = unused
     }
 
     [Fact]

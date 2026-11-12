@@ -55,6 +55,32 @@ internal sealed class AddressRotation
 
     private readonly Data.IAddressUsageCrossCheck? _usageCrossCheck;
 
+    /// <summary>
+    /// One reveal at a time, on either chain. The gap check reads the network and the counter
+    /// moves after it, so two reveals that overlapped both passed the check on the same count
+    /// and both moved it: with 19 unused slots the counter went to 21 and the wallet showed an
+    /// address one past what a restore scans (bug-bounty report 2026-11-12). A page's own
+    /// "busy" flag is not enough - a page left mid-reveal is replaced by a new one. The second
+    /// caller now waits, then runs its check against the count the first one left.
+    /// <para>The look-ahead moves the same counts, so it takes the gate for each move (not for its
+    /// network reads): a count is compared and moved in one step, whoever moves it.</para>
+    /// </summary>
+    private readonly SemaphoreSlim _revealGate = new(1, 1);
+
+    /// <summary>Moves a count FORWARD to <paramref name="target"/> under the gate, if it is still
+    /// behind it. False when something else already moved it at least that far.</summary>
+    private async Task<bool> MoveForwardAsync(Func<int> current, Func<int, Task> move, int target)
+    {
+        await _revealGate.WaitAsync();
+        try
+        {
+            if (target <= current()) return false;
+            await move(target);
+            return true;
+        }
+        finally { _revealGate.Release(); }
+    }
+
     /// <summary>How many receive addresses are revealed (always ≥ 1 once initialized).</summary>
     public int RevealedCount => Math.Max(1, _revealedCount);
 
@@ -102,6 +128,13 @@ internal sealed class AddressRotation
     /// reveal is always allowed. The activation gate lives in the service, not here.</summary>
     public async Task<(bool Ok, string? Error)> RevealNextPqAsync(LiteHdWallet wallet, CancellationToken ct = default)
     {
+        await _revealGate.WaitAsync(ct);
+        try { return await RevealNextPqCoreAsync(wallet, ct); }
+        finally { _revealGate.Release(); }
+    }
+
+    private async Task<(bool Ok, string? Error)> RevealNextPqCoreAsync(LiteHdWallet wallet, CancellationToken ct)
+    {
         if (_pqCount >= MaxRevealed)
             return (false, $"You've reached the maximum of {MaxRevealed} post-quantum addresses for one wallet. Use an existing address, or restore into a fresh wallet if you truly need more.");
 
@@ -129,12 +162,17 @@ internal sealed class AddressRotation
     /// </summary>
     public async Task<string> EnsurePqAddressAsync(LiteHdWallet wallet)
     {
-        if (_pqCount == 0)
+        await _revealGate.WaitAsync();
+        try
         {
-            _pqCount = 1;
-            await _state.SetPqAddressCountAsync(_pqCount);
+            if (_pqCount == 0)
+            {
+                _pqCount = 1;
+                await _state.SetPqAddressCountAsync(_pqCount);
+            }
+            return wallet.GetPqAddress(_pqCount - 1);
         }
-        return wallet.GetPqAddress(_pqCount - 1);
+        finally { _revealGate.Release(); }
     }
 
     /// <summary>A brand-new wallet starts at receive slot 0 with no change addresses used
@@ -199,30 +237,18 @@ internal sealed class AddressRotation
         var moved = false;
 
         var receive = await LookAheadAsync(i => wallet.GetReceiveAddress(i), RevealedCount, MaxRevealed, ct);
-        if (receive > RevealedCount)
-        {
-            _revealedCount = receive;
-            await _state.SetRevealedAddressCountAsync(_revealedCount);
-            moved = true;
-        }
+        moved |= await MoveForwardAsync(() => RevealedCount,
+            async n => { _revealedCount = n; await _state.SetRevealedAddressCountAsync(n); }, receive);
 
         var change = await LookAheadAsync(i => wallet.GetChangeAddress(i), _changeCount, MaxScanIndex, ct);
-        if (change > _changeCount)
-        {
-            _changeCount = change;
-            await _state.SetChangeAddressCountAsync(_changeCount);
-            moved = true;
-        }
+        moved |= await MoveForwardAsync(() => _changeCount,
+            async n => { _changeCount = n; await _state.SetChangeAddressCountAsync(n); }, change);
 
         if (includePq)
         {
             var pq = await LookAheadAsync(i => wallet.GetPqAddress(i), _pqCount, MaxRevealed, ct);
-            if (pq > _pqCount)
-            {
-                _pqCount = pq;
-                await _state.SetPqAddressCountAsync(_pqCount);
-                moved = true;
-            }
+            moved |= await MoveForwardAsync(() => _pqCount,
+                async n => { _pqCount = n; await _state.SetPqAddressCountAsync(n); }, pq);
         }
         return moved;
     }
@@ -262,6 +288,13 @@ internal sealed class AddressRotation
     /// restore would stop scanning before it and any coins sent there would look lost.
     /// </summary>
     public async Task<(bool Ok, string? Error)> RevealNextAsync(LiteHdWallet wallet, CancellationToken ct = default)
+    {
+        await _revealGate.WaitAsync(ct);
+        try { return await RevealNextCoreAsync(wallet, ct); }
+        finally { _revealGate.Release(); }
+    }
+
+    private async Task<(bool Ok, string? Error)> RevealNextCoreAsync(LiteHdWallet wallet, CancellationToken ct)
     {
         if (RevealedCount >= MaxRevealed)
             return (false, $"You've reached the maximum of {MaxRevealed} addresses for one wallet. Use an existing address, or restore into a fresh wallet if you truly need more.");
