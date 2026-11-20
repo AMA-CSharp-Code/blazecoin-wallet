@@ -118,6 +118,13 @@ public sealed class ChangeAddressSource
         bool? can;
         try { can = await _wallets.HasPostQuantumKeysAsync(wallet, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { can = null; }
+        // Could not check (the daemon was busy, or the call failed): NO address, like a failed
+        // mint. This flow mints the address itself, nothing has been sent yet and the page asks the
+        // user to try again, so there is no payment to protect by falling back; a quiet legacy
+        // address here would put the change of a BQ coin behind an ECDSA key on a passing error
+        // (bug-bounty report 2026-11-18). The Send page's rule is unchanged: it shows its
+        // "couldn't check" sentence at review and leaves the node's default.
+        if (can is null) return null;
         if (PostQuantumPreference.ForChange(can) == BlazecoinAddressKind.PostQuantum)
         {
             var pq = await _wallets.MintPostQuantumAddressAsync(wallet, label, ct);

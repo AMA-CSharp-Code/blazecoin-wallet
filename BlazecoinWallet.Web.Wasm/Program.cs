@@ -39,6 +39,7 @@ builder.Services.AddSingleton<ILabelStore, BrowserLabelStore>();
 builder.Services.AddSingleton<IAddressBook, BrowserAddressBook>();
 builder.Services.AddSingleton<IWatchList, BrowserWatchList>();
 builder.Services.AddSingleton<IPinLock, BrowserPinLock>();
+builder.Services.AddSingleton<IAttemptLimiterState, BrowserAttemptLimiterState>();   // the guessing count survives a reload
 builder.Services.AddSingleton<IUnitSettings, BrowserUnitSettings>();
 builder.Services.AddSingleton<IExplorerSettings, BrowserExplorerSettings>();
 builder.Services.AddSingleton<ISkinSettings, BrowserSkinSettings>();

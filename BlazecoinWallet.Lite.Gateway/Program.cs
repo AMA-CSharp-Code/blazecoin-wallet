@@ -5,6 +5,7 @@ using BlazecoinWallet.Core.Services.Provenance;
 using BlazecoinWallet.Lite.Gateway;
 using BlazecoinWallet.Lite.Gateway.Ancestry;
 using BlazecoinWallet.Lite.Gateway.Index;
+using BlazecoinWallet.Lite.Gateway.Peers;
 using BlazecoinWallet.Lite.Gateway.Rpc;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
@@ -58,6 +59,14 @@ builder.Services.AddHostedService<ChainWalkerService>();
 // ── Server-side Provenance (the /ancestry endpoint) ─────────────────────────────────────
 builder.Services.AddSingleton<AncestryReadCache>();
 builder.Services.AddSingleton<TraceGate>();
+
+// ── Public peer listing (/api/node/peers) ───────────────────────────────────────────────
+// What THIS relay's daemon is connected to, listening nodes only (see Peers/PublicPeers.cs for
+// the privacy rule). The website's Indexer merges the two relays' listings with its own node's
+// peers for the Network map, so a node that only ever dialled the relays still shows (2026-11-13).
+builder.Services.AddSingleton<PublicPeerState>();
+builder.Services.AddSingleton<IReachabilityProbe, TcpReachabilityProbe>();
+builder.Services.AddHostedService<PublicPeerObserver>();
 
 // ── Rate limits ─────────────────────────────────────────────────────────────────────────
 // Every wallet-facing route is anonymous by design, so per-IP throttling is the only lever.
@@ -151,6 +160,27 @@ app.MapGet("/api/status", (WalkerStatus status, MempoolOverlay mempool, IConfigu
     => Results.Ok(StatusPayload(status, mempool, config)));
 app.MapGet("/indexer/api/status", (WalkerStatus status, MempoolOverlay mempool, IConfiguration config)
     => Results.Ok(StatusPayload(status, mempool, config)));
+
+// The listening peers this relay sees. `ready` is false until the first refresh (about 20 s after
+// start); a reader treats that as "no data from this observer", not as an empty network. Both
+// prefixes, like /status. Anonymous and read-only; the per-IP read limit applies.
+static object PeersPayload(PublicPeerState state, IConfiguration config)
+{
+    var s = state.Current;
+    return new
+    {
+        observer = config.GetValue<string?>("Peers:ObserverName", null) ?? Environment.MachineName,
+        ready = s != null,
+        timestamp = s?.TimestampUtc,
+        connections = s?.Connections ?? 0,
+        hiddenInbound = s?.HiddenInbound ?? 0,
+        peers = s?.Peers ?? [],
+    };
+}
+app.MapGet("/api/node/peers", (PublicPeerState state, IConfiguration config)
+    => Results.Ok(PeersPayload(state, config))).RequireRateLimiting("reads");
+app.MapGet("/indexer/api/node/peers", (PublicPeerState state, IConfiguration config)
+    => Results.Ok(PeersPayload(state, config))).RequireRateLimiting("reads");
 
 app.Run();
 

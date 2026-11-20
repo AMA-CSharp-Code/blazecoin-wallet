@@ -111,6 +111,20 @@ public sealed class FakeDaemonRpc : DaemonRpcClient
         return Task.FromResult(SendResultTxId);
     }
 
+    /// <summary>The scripted daemon's P2P connections, for the public peer listing.</summary>
+    public readonly List<RpcPeerInfo> Peers = [];
+
+    public override Task<List<RpcPeerInfo>> GetPeerInfoAsync(CancellationToken ct = default)
+    {
+        Gate();
+        return Task.FromResult(Peers.ToList());
+    }
+
+    public static RpcPeerInfo Peer(string addr, bool inbound, string subver = "/Blazecoin:2.1.3/", long syncedBlocks = 4_423_965) =>
+        new(Id: addr.GetHashCode(), Addr: addr, Inbound: inbound, Version: 70016, SubVer: subver, Services: "0000000000000409",
+            ConnTime: 1_794_570_000, PingTime: 0.031, MinPing: 0.029, StartingHeight: 4_423_000,
+            SyncedHeaders: syncedBlocks, SyncedBlocks: syncedBlocks, BytesSent: 1_000, BytesRecv: 2_000);
+
     /// <summary>Serves any tx in the scripted chain with its block's hash/time, mirroring
     /// a txindex daemon; mempool txs come back with no blockhash.</summary>
     public override async Task<RpcRawTransaction> GetRawTransactionVerboseAsync(string txId, CancellationToken ct = default)

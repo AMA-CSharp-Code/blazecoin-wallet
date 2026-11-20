@@ -33,6 +33,7 @@ public class SettingsPageTests : TestContext
         Services.AddSingleton<IExplorerSettings>(_explorer);
         Services.AddSingleton<ISkinSettings>(_skin);
         Services.AddSingleton<IPinLock, InMemoryPinLock>();
+        Services.AddSingleton<AttemptLimiter>();   // the PIN card clears the guessing count when the PIN changes
         Services.AddSingleton<IAutoLockSettings>(_autoLock);
         // No-feed header sync (Available == false) — the Chain Verification card stays hidden.
         Services.AddSingleton(new BlazecoinWallet.Lite.Data.HeaderChainSync());

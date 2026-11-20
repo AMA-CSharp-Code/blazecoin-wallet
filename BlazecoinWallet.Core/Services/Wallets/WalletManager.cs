@@ -6,11 +6,15 @@ public sealed class WalletManager : IWalletManager
 {
     private readonly IWalletRpc _rpc;
     private readonly IWalletContext _ctx;
+    private readonly IWalletSwitchNotice? _switchNotice;
 
-    public WalletManager(IWalletRpc rpc, IWalletContext ctx)
+    /// <param name="switchNotice">Told when unloading or removing the active wallet moves the window
+    /// to another one (bug-bounty report 2026-11-20). Null only where nothing shows a notice.</param>
+    public WalletManager(IWalletRpc rpc, IWalletContext ctx, IWalletSwitchNotice? switchNotice = null)
     {
         _rpc = rpc;
         _ctx = ctx;
+        _switchNotice = switchNotice;
     }
 
     // The auto-loaded default wallet (conf `wallet=Primary`). Removing it would
@@ -53,7 +57,7 @@ public sealed class WalletManager : IWalletManager
 
         if (wasActive)
         {
-            await ReassignActiveAsync();
+            await ReassignActiveAsync(name);
             return WalletOpResult.ActiveReassigned;
         }
         return WalletOpResult.Completed;
@@ -79,7 +83,7 @@ public sealed class WalletManager : IWalletManager
 
         if (wasActive)
         {
-            await ReassignActiveAsync();
+            await ReassignActiveAsync(name);
             return WalletOpResult.ActiveReassigned;
         }
         return WalletOpResult.Completed;
@@ -87,10 +91,18 @@ public sealed class WalletManager : IWalletManager
 
     /// <summary>After the active wallet goes away, point the context at another
     /// loaded wallet (or null if none remain).</summary>
-    private async Task ReassignActiveAsync()
+    /// <remarks>The user asked for the wallet to go, not for the window to move to another one:
+    /// which wallet it lands on is the app's choice, so it is announced like the switch a failed
+    /// read makes, and nothing that changes a wallet runs until the notice is acknowledged
+    /// (bug-bounty report 2026-11-20: this path raised no notice, so a new passphrase or a fresh
+    /// address could go to the wallet the window had moved to). Raised BEFORE the context moves,
+    /// as there: whatever sees the new wallet also sees the notice.</remarks>
+    private async Task ReassignActiveAsync(string from)
     {
         var loaded = await _rpc.ListWalletsAsync();
-        _ctx.SetActive(loaded.FirstOrDefault());
+        var next = loaded.FirstOrDefault();
+        if (!string.IsNullOrEmpty(next)) _switchNotice?.Record(from, next);
+        _ctx.SetActive(next);
     }
 
     // Resolve <V2 datadir>\<walletName> and delete it. The datadir is the daemon's own

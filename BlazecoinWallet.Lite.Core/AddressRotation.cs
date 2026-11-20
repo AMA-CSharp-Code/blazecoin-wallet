@@ -190,16 +190,24 @@ internal sealed class AddressRotation
     /// <summary>Routine unlock: trust the stored position; default to slot 0 when nothing
     /// is stored (every pre-rotation wallet) — chain rediscovery is the RESTORE flow's job,
     /// a routine unlock must not fire 20 network calls.</summary>
+    /// <remarks>A stored count above what this wallet can ever reach is brought back inside it and
+    /// written back (bug-bounty report 2026-11-20: a restore against a gateway that called every
+    /// address "used" stored 1,000, and every unlock after it loaded 1,000 again). No network read:
+    /// the receive and post-quantum chains stop at <see cref="MaxRevealed"/>, the change chain at
+    /// the scan's own ceiling.</remarks>
     public async Task LoadAsync()
     {
-        _revealedCount = await _state.GetRevealedAddressCountAsync();
-        if (_revealedCount < 1)
-        {
-            _revealedCount = 1;
-            await _state.SetRevealedAddressCountAsync(1);
-        }
-        _changeCount = Math.Max(0, await _state.GetChangeAddressCountAsync());
-        _pqCount = Math.Max(0, await _state.GetPqAddressCountAsync());
+        var revealed = await _state.GetRevealedAddressCountAsync();
+        _revealedCount = Math.Clamp(revealed, 1, MaxRevealed);
+        if (_revealedCount != revealed) await _state.SetRevealedAddressCountAsync(_revealedCount);
+
+        var change = await _state.GetChangeAddressCountAsync();
+        _changeCount = Math.Clamp(change, 0, MaxScanIndex);
+        if (change > MaxScanIndex) await _state.SetChangeAddressCountAsync(_changeCount);
+
+        var pq = await _state.GetPqAddressCountAsync();
+        _pqCount = Math.Clamp(pq, 0, MaxRevealed);
+        if (pq > MaxRevealed) await _state.SetPqAddressCountAsync(_pqCount);
     }
 
     /// <summary>BIP44 discovery on restore: walk the external chain until
@@ -208,19 +216,30 @@ internal sealed class AddressRotation
     /// <param name="discoverPq">Also gap-scan the post-quantum chain. The service passes
     /// true only once the fork has an activation height — before that no BQ address can
     /// have been revealed by this wallet, so the 20 extra reads would be wasted.</param>
+    /// <remarks>
+    /// What a restore STORES is bounded like what a reveal stores (bug-bounty report 2026-11-20:
+    /// the scan ran to index 1,000 on a gateway's bare "used" and stored that, five times
+    /// <see cref="MaxRevealed"/>; every balance read after it asked about 1,000 addresses and ran
+    /// into the gateway's own rate limit, and the count stayed there across unlocks).
+    /// The receive and post-quantum chains stop at <see cref="MaxRevealed"/>: this wallet never
+    /// reveals past it, so nothing of its own can be beyond. The change chain can pass it in an
+    /// old, busy wallet, so its scan still runs to the ceiling, but past <see cref="MaxRevealed"/>
+    /// only a coin the wallet can PROVE moves the count: a gateway's word alone keeps the scan
+    /// going (it costs that one restore some reads) and stores nothing.
+    /// </remarks>
     public async Task DiscoverFromChainAsync(LiteHdWallet wallet, CancellationToken ct = default, bool discoverPq = false)
     {
-        _revealedCount = Math.Max(1, 1 + await ScanChainAsync(i => wallet.GetReceiveAddress(i), ct));
+        _revealedCount = Math.Max(1, 1 + await ScanChainAsync(i => wallet.GetReceiveAddress(i), MaxRevealed, MaxRevealed, ct));
         await _state.SetRevealedAddressCountAsync(_revealedCount);
 
         // The internal change chain must be rediscovered too, or change coins from before the
         // restore would be unspendable (their keys unresolved) and their addresses reusable.
         // lastUsed = -1 (none) → count 0.
-        _changeCount = 1 + await ScanChainAsync(i => wallet.GetChangeAddress(i), ct);
+        _changeCount = 1 + await ScanChainAsync(i => wallet.GetChangeAddress(i), MaxRevealed, MaxScanIndex, ct);
         await _state.SetChangeAddressCountAsync(_changeCount);
 
         // The post-quantum chain: same gap rule; none revealed → 0.
-        _pqCount = discoverPq ? 1 + await ScanChainAsync(i => wallet.GetPqAddress(i), ct) : 0;
+        _pqCount = discoverPq ? 1 + await ScanChainAsync(i => wallet.GetPqAddress(i), MaxRevealed, MaxRevealed, ct) : 0;
         await _state.SetPqAddressCountAsync(_pqCount);
     }
 
@@ -269,15 +288,22 @@ internal sealed class AddressRotation
     }
 
     /// <summary>Gap-scan a derivation chain; returns the index of the last USED address, or
-    /// -1 if none. Stops after <see cref="GapLimit"/> consecutive unused.</summary>
-    private async Task<int> ScanChainAsync(Func<int, string> address, CancellationToken ct)
+    /// -1 if none. Stops after <see cref="GapLimit"/> consecutive unused, or at
+    /// <paramref name="ceiling"/>.</summary>
+    /// <param name="trustedBelow">Below this index a source's "used" is taken at its word (the
+    /// liberal rule: a false "used" there costs at most this many addresses). From it on, "used"
+    /// still keeps the scan going, but the address only counts when the wallet can prove a coin
+    /// on it (on a personal node its own word is the proof).</param>
+    private async Task<int> ScanChainAsync(Func<int, string> address, int trustedBelow, int ceiling, CancellationToken ct)
     {
         var lastUsed = -1;
         var consecutiveUnused = 0;
-        for (var i = 0; i < MaxScanIndex && consecutiveUnused < GapLimit; i++)
+        for (var i = 0; i < ceiling && consecutiveUnused < GapLimit; i++)
         {
-            if (await IsAddressUsedAsync(address(i), ct)) { lastUsed = i; consecutiveUnused = 0; }
-            else consecutiveUnused++;
+            var a = address(i);
+            if (!await IsAddressUsedAsync(a, ct)) { consecutiveUnused++; continue; }
+            consecutiveUnused = 0;
+            if (i < trustedBelow || _verifier == null || await IsAddressVerifiablyUsedAsync(a, ct)) lastUsed = i;
         }
         return lastUsed;
     }
@@ -325,7 +351,8 @@ internal sealed class AddressRotation
     }
 
     /// <summary>Discovery-grade "used": the source reports on-chain activity. Liberal in one
-    /// direction by design — a false "used" only makes restore scan further. The other direction
+    /// direction by design — a false "used" only makes restore scan further, and what the scan may
+    /// STORE on that word alone stops at <see cref="MaxRevealed"/> (see <see cref="ScanChainAsync"/>). The other direction
     /// is the dangerous one (a false "unused" ends the scan early), so a source that can ask more
     /// than one gateway is asked to: the address is used if ANY of them says so.</summary>
     private async Task<bool> IsAddressUsedAsync(string address, CancellationToken ct)

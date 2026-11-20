@@ -87,7 +87,7 @@ public sealed class SecretRevealGate(IPinLock pin, IWalletPassword? password = n
                 // Guessing: lock the wallet, as leaving it idle would, where this head can.
                 var locked = locker is { CanLock: true };
                 if (locked) await locker!.LockAsync();
-                return new(null, AttemptLimiter.TrippedMessage, locked);
+                return new(null, _attempts.TripMessage, locked);
             }
             return new(null, challenge == RevealChallenge.Password ? "That password is not right." : "That PIN is not right.");
         }

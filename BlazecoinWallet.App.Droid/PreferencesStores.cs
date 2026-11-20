@@ -111,3 +111,24 @@ public sealed class PreferencesPinLock : IPinLock
         Preferences.Default.Remove(HashKey);
     }
 }
+
+/// <summary>The guessing limit's count, kept across restarts (bug-bounty report 2026-11-18):
+/// closing and reopening the app must not buy fresh tries at the PIN. One string,
+/// "misses|trips|locked-until ticks"; anything unreadable is the empty state.</summary>
+public sealed class PreferencesAttemptLimiterState : IAttemptLimiterState
+{
+    private const string Key = "attempt_limiter";
+
+    public AttemptState Load()
+    {
+        var parts = Preferences.Default.Get(Key, "").Split('|');
+        return parts.Length == 3 && int.TryParse(parts[0], out var misses) && int.TryParse(parts[1], out var trips)
+               && long.TryParse(parts[2], out var ticks) && misses >= 0 && trips >= 0
+               && ticks >= DateTime.MinValue.Ticks && ticks <= DateTime.MaxValue.Ticks
+            ? new AttemptState(misses, trips, new DateTime(ticks, DateTimeKind.Utc))
+            : AttemptState.None;
+    }
+
+    public void Save(AttemptState state) =>
+        Preferences.Default.Set(Key, $"{state.Misses}|{state.Trips}|{state.LockedUntilUtc.Ticks}");
+}

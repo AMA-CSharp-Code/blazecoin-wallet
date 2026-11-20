@@ -48,7 +48,12 @@ public sealed class PersonalNodeDataService : ILiteWalletData
         var utxos = await GetUtxosAsync(address, ct);
         if (utxos.Count == 0) return null;
         var balance = utxos.Sum(u => u.Amount);
-        return new LiteAddressSummary(balance, TotalReceived: 0, TotalSent: 0, TxCount: 0);
+        // TxCount is what restore discovery reads ("has this address been used?"). A bare daemon
+        // cannot count spent history, but coins sitting on the address ARE activity: report the
+        // transactions that funded them. It was a constant 0, so a restore in personal-node mode
+        // found nothing past the first address (bug-bounty report 2026-11-18).
+        var fundingTxs = utxos.Select(u => u.TxId).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        return new LiteAddressSummary(balance, TotalReceived: 0, TotalSent: 0, TxCount: fundingTxs);
     }
 
     public async Task<IReadOnlyList<LiteChainUtxo>> GetUtxosAsync(string address, CancellationToken ct = default)

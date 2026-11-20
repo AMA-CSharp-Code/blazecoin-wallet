@@ -201,6 +201,28 @@ public sealed class BrowserPinLock : IPinLock
     }
 }
 
+/// <summary>The guessing limit's count, kept across restarts (bug-bounty report 2026-11-18):
+/// closing and reopening the app must not buy fresh tries at the PIN. One string,
+/// "misses|trips|locked-until ticks"; anything unreadable is the empty state.</summary>
+[SupportedOSPlatform("browser")]
+public sealed class BrowserAttemptLimiterState : IAttemptLimiterState
+{
+    private const string Key = "attempt_limiter";
+
+    public AttemptState Load()
+    {
+        var parts = BrowserKv.Get(Key, "").Split('|');
+        return parts.Length == 3 && int.TryParse(parts[0], out var misses) && int.TryParse(parts[1], out var trips)
+               && long.TryParse(parts[2], out var ticks) && misses >= 0 && trips >= 0
+               && ticks >= DateTime.MinValue.Ticks && ticks <= DateTime.MaxValue.Ticks
+            ? new AttemptState(misses, trips, new DateTime(ticks, DateTimeKind.Utc))
+            : AttemptState.None;
+    }
+
+    public void Save(AttemptState state) =>
+        BrowserKv.Set(Key, $"{state.Misses}|{state.Trips}|{state.LockedUntilUtc.Ticks}");
+}
+
 /// <summary>Display units (display-only).</summary>
 [SupportedOSPlatform("browser")]
 public sealed class BrowserUnitSettings : IUnitSettings

@@ -294,14 +294,17 @@ public class WalletBoundFlowTests
     }
 
     [Fact]
-    public async Task When_the_wallet_cannot_be_checked_change_is_legacy_never_a_guess_at_post_quantum()
+    public async Task When_the_wallet_cannot_be_checked_there_is_no_change_address_neither_a_guess_at_post_quantum_nor_a_quiet_legacy_one()
     {
+        // Until 2026-11-18 this gave a legacy address ("never a guess at post-quantum"). The flow
+        // mints its own change address before anything is sent, so "could not check" now stops it
+        // (the page asks to try again) rather than put a BQ coin's change behind an ECDSA key.
         var r = On("Savings", "Savings");
         r.Daemon.Before = call => { if (call.Method == "listdescriptors") throw new HttpRequestException("down"); };
 
         var change = await new ChangeAddressSource(r.Rpc).NewAsync("Savings", "x");
 
-        Assert.Equal("Blegacy-of-Savings", change);
-        Assert.Contains("\"legacy\"", r.Daemon.Of("getnewaddress").Single().Body);
+        Assert.Null(change);
+        Assert.Empty(r.Daemon.Of("getnewaddress"));
     }
 }

@@ -318,7 +318,7 @@ else
         else
         {
             _pinEntry = string.Empty;
-            _lockError = Attempts.Miss() ? AttemptLimiter.TrippedMessage : "Wrong PIN.";
+            _lockError = Attempts.Miss() ? Attempts.TripMessage : "Wrong PIN.";
         }
     }
 

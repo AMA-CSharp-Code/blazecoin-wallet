@@ -1,4 +1,5 @@
 @inject IPinLock Pin
+@inject AttemptLimiter Attempts
 
 @* The app-lock PIN card, extracted from Settings (audit round-3 F3) so the Settings page
    stops being a god-page — each self-contained card owns its own state as a component. *@
@@ -36,6 +37,7 @@
         if (_newPin.Length < 4) { _ok = false; _message = "Use at least 4 digits."; return; }
         if (_newPin != _confirmPin) { _ok = false; _message = "The PINs don't match."; return; }
         Pin.Set(_newPin);
+        Attempts.Reset();   // a new PIN starts with a clean guessing count (the count is stored now)
         _newPin = _confirmPin = string.Empty;
         _changing = false;
         _ok = true; _message = "PIN set — it'll be asked for on next launch.";
@@ -44,6 +46,7 @@
     private void ClearPin()
     {
         Pin.Clear();
+        Attempts.Reset();
         _ok = true; _message = "PIN removed.";
     }
 }

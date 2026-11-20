@@ -54,6 +54,8 @@ public static class MauiProgram
 		builder.Services.AddSingleton<IAddressBook, PreferencesAddressBook>();
 		builder.Services.AddSingleton<IWatchList, PreferencesWatchList>();
 		builder.Services.AddSingleton<IPinLock, PreferencesPinLock>();
+		// The PIN guessing count survives a restart (before AddLiteWallet builds the limiter).
+		builder.Services.AddSingleton<IAttemptLimiterState, PreferencesAttemptLimiterState>();
 		// Real device biometric (before AddLiteWallet so it wins over NullBiometricAuth).
 		builder.Services.AddSingleton<IBiometricAuth, IosBiometricAuth>();
 

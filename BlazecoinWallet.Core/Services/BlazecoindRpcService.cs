@@ -703,16 +703,33 @@ public class BlazecoindRpcService : IBlazecoindRpcService, IConsoleRpc, Provenan
         // Paging with count/skip was quadratic — every page walks all the newer rows again — so a
         // 65,702-transaction mining wallet sat at "listing" for about five minutes. One pass takes
         // seconds; HistoryReadTimeout covers a busy daemon.
-        ct.ThrowIfCancellationRequested();
-        var rows = await CallWalletRpcWithTimeoutAsync<List<JsonElement>>(
-            "listtransactions", HistoryReadTimeout, "*", Math.Max(1, maxTransactions), 0);
+        //
+        // maxTransactions is the size of ONE read, not a ceiling on the history: a read that comes
+        // back full is followed by the next one (skip), until one comes back short. It used to stop
+        // after the first read, so in a wallet with more than 100,000 history rows (receives count
+        // too: a mining wallet gets there on coinbase rows alone) the older sends were never looked
+        // at and the exposure scanner called their addresses UNEXPOSED (bug-bounty report
+        // 2026-11-18). A later read that FAILS throws: half a history must not pass for a whole one.
+        var page = Math.Max(1, maxTransactions);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var ids = new List<string>();
-        foreach (var row in rows ?? new List<JsonElement>())
+        for (var skip = 0; ; skip += page)
         {
-            if (row.TryGetProperty("category", out var cat) && cat.GetString() == "send" &&
-                row.TryGetProperty("txid", out var t) && t.GetString() is { Length: > 0 } id && seen.Add(id))
-                ids.Add(id);
+            ct.ThrowIfCancellationRequested();
+            var rows = await CallWalletRpcWithTimeoutAsync<List<JsonElement>>(
+                "listtransactions", HistoryReadTimeout, "*", page, skip);
+            if (rows is null)
+            {
+                if (skip == 0) break;   // as before: an unreadable first read is an empty history to the caller
+                throw new InvalidOperationException("The wallet's history could not be read to the end; the result would be incomplete.");
+            }
+            foreach (var row in rows)
+            {
+                if (row.TryGetProperty("category", out var cat) && cat.GetString() == "send" &&
+                    row.TryGetProperty("txid", out var t) && t.GetString() is { Length: > 0 } id && seen.Add(id))
+                    ids.Add(id);
+            }
+            if (rows.Count < page) break;
         }
         return ids;
     }

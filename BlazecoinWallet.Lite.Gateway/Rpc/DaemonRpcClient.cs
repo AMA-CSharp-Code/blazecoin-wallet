@@ -112,6 +112,13 @@ public class DaemonRpcClient
     public virtual Task<string> SendRawTransactionAsync(string hex, CancellationToken ct = default) =>
         SendAsync<string>(ct, "sendrawtransaction", hex);
 
+    // ── The node's own connections (the public peer listing) ────────────────────────────
+    /// <summary>getpeerinfo: every current P2P connection of the local daemon. Read by the
+    /// peer observer (2026-11-13) so the website's Network map can see what THIS relay sees,
+    /// not only what the home Indexer node happens to dial.</summary>
+    public virtual Task<List<RpcPeerInfo>> GetPeerInfoAsync(CancellationToken ct = default) =>
+        SendAsync<List<RpcPeerInfo>>(ct, "getpeerinfo");
+
     // ── The ancestry reads (server-side Provenance) ─────────────────────────────────────
     /// <summary>Verbose getrawtransaction including which block holds it (needs txindex=1
     /// for anything outside the mempool — both VPS nodes run it, pre-seeded by the deploy
@@ -311,6 +318,25 @@ public sealed record RpcVout(
     /// <summary>Value in satoshis — getblock serves BLZ decimals.</summary>
     public long Satoshis => (long)Math.Round(Value * 100_000_000m);
 }
+
+/// <summary>One getpeerinfo entry — only the fields the public peer listing carries. Core
+/// omits <c>pingtime</c>/<c>minping</c> until the first pong, hence nullable; <c>synced_headers</c>
+/// and <c>synced_blocks</c> are -1 for a peer that has not announced a tip.</summary>
+public sealed record RpcPeerInfo(
+    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("addr")] string Addr,
+    [property: JsonPropertyName("inbound")] bool Inbound,
+    [property: JsonPropertyName("version")] int Version,
+    [property: JsonPropertyName("subver")] string? SubVer,
+    [property: JsonPropertyName("services")] string? Services,
+    [property: JsonPropertyName("conntime")] long ConnTime,
+    [property: JsonPropertyName("pingtime")] double? PingTime,
+    [property: JsonPropertyName("minping")] double? MinPing,
+    [property: JsonPropertyName("startingheight")] long StartingHeight,
+    [property: JsonPropertyName("synced_headers")] long SyncedHeaders,
+    [property: JsonPropertyName("synced_blocks")] long SyncedBlocks,
+    [property: JsonPropertyName("bytessent")] long BytesSent,
+    [property: JsonPropertyName("bytesrecv")] long BytesRecv);
 
 /// <summary>Core 28 serves a SINGULAR `address` (the legacy `addresses[]` is gone) — the
 /// exact asymmetry that bit the full indexer post-cutover. Keep the fallback anyway; it
